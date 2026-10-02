@@ -7,6 +7,8 @@
 - [ ] thinking messages (white) in scrollback would benefit from a timestamp of when they happen, e.g. message (1m3s) <-- when they occurred.
 - [ ] ability to paste a paragraph
 - [ ] shift+enter should insert a line return in the chatbox, it does not (yet!) - fix.
+- [ ] when working, page up/down temporarly jumps and then gets smashed back down.
+- [ ] related: the wheelmouse should scroll the scrollback, it does not. add this. Scrolling up should go through the history.
 
 ## Medium
 
