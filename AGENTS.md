@@ -47,6 +47,17 @@ How to work in this repo: fast loop, small steps, together.
 11. `SPEC.md` + `SPEC-tui.md` are the source of truth: update the relevant
     spec, help text, and `config.toml` comments when behavior changes.
 
+## Git
+
+- When asked for a worktree: branch off fresh `main`
+  (`git fetch origin`, `git worktree add ../<name> -b <branch> origin/main`).
+- Keep history linear — rebase the worktree branch onto `main`
+  (`git fetch origin && git rebase origin/main`), never merge `main`
+  into it back-and-forth.
+- Merge back with rebase + fast-forward
+  (`git checkout main && git merge --ff-only <branch>`), then
+  `git worktree remove ../<name>` and delete the branch.
+
 ## Never
 
 - No `user:`/`assistant:` role prefixes in the transcript.
