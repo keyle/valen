@@ -54,6 +54,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `max_context_tokens` | int | `200000` | Fail-fast budget per round (est. runes/4): over-budget history aborts the turn with guidance instead of a doomed send |
 | `temperature` | float | unset | Pointer semantics: unset omits the field, `0.0` sends zero |
 | `compaction` | table | `auto=true, keep_tokens=15000, buffer=10%` | Summary-mode, send-side only (disk JSONL stays lossless): `auto` compacts before send when over budget and retries once after a too-long 400; `keep_tokens` recent tail kept verbatim beside the summary; `buffer` headroom below `max_context_tokens`; `model` cheap summarizer override (empty = session model with minimal thinking) |
+| `[input]` | table | `blink=true, height=3` | Chatbox chrome (TUI only): block-cursor blink plus input box height in lines |
 | `tools` | string[] | empty | Subset of `shell`, `web_search`, `web_fetch`, `read`, `write`, `edit`, `glob`, `grep`, `AskUserQuestion`. `AskUserQuestion` is also registered automatically when absent, so model-driven questions work in every frontend |
 | `mcp` | table[] | empty | Each entry needs `name` + `cmd`; optional `args`, `env` |
 

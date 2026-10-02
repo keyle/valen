@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -326,13 +327,18 @@ func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session 
 	ta.Placeholder = "Type a message…  (shift+enter newline · /help)"
 	ta.ShowLineNumbers = false
 	ta.SetWidth(78)
-	ta.SetHeight(3)
+	ta.SetHeight(inputHeight(cfg))
 	ta.CharLimit = 0
 	// No partial background: the default CursorLine background only shades
 	// the active line, leaving the rest of the box unshaded. Clear it so the
 	// whole input shares one flat background.
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
+	// Steady block cursor when [input] blink=false: static mode renders the
+	// block without starting the blink timer (Init skips textarea.Blink too).
+	if !inputBlink(cfg) {
+		ta.Cursor.SetMode(cursor.CursorStatic)
+	}
 	ta.Focus()
 
 	vp := viewport.New(80, 20)
@@ -357,7 +363,11 @@ func seedHistory(cfg Config) []openai.ChatCompletionMessage {
 }
 
 func (m *tuiModel) Init() tea.Cmd {
-	cmds := []tea.Cmd{textarea.Blink, m.spinner.Tick}
+	var cmds []tea.Cmd
+	if inputBlink(m.cfg) {
+		cmds = append(cmds, textarea.Blink)
+	}
+	cmds = append(cmds, m.spinner.Tick)
 	if c := m.fetchUsageCmd(); c != nil {
 		cmds = append(cmds, c, usageTick())
 	}
@@ -1214,7 +1224,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.ready = true
-		vpH := msg.Height - 9
+		// Chrome around the transcript: header, status, footer, the input
+		// border plus a line of slack (6) beside the configured box lines.
+		vpH := msg.Height - 6 - inputHeight(m.cfg)
 		if vpH < 5 {
 			vpH = 5
 		}
@@ -2425,7 +2437,10 @@ Unset thinking means the provider default. ctrl+t cycles the list low→high
 and wraps to low; unknown models learn valid levels from the provider 400
 and cache them on disk.
 
-Thinking is shown by default (ctrl+y hides). Tools render inline; ctrl+u shows full output.`) + "\n"
+Thinking is shown by default (ctrl+y hides). Tools render inline; ctrl+u shows full output.
+
+Chatbox chrome lives in config.toml [input]: blink=false parks the block
+cursor steady (no blink), height=N sets the box lines (default 3, blinking on).`) + "\n"
 }
 
 func (m *tuiModel) renderDetail() string {

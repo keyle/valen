@@ -105,6 +105,10 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   turn; yellow past 80%, pink at 100% or rate-limited, with a `↻` reset hint
   on hot windows. Hidden when `{base_url}/usage` is unavailable (non-Go keys).
 - Autoscroll follows new turns; PgUp/PgDn scrolls the viewport.
+- Chatbox chrome is configurable via `[input]` in `config.toml`: `blink`
+  (default `true`; `false` parks the block cursor steady with no blink
+  timer) and `height` (default `3` box lines; the transcript viewport
+  shrinks to fit).
 
 ## State machine
 
