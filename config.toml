@@ -10,7 +10,7 @@ base_url = "https://opencode.ai/zen/go/v1"
 api_key_env = "OPENCODE_GO_API_KEY"
 # session_id = "ses-stable-id"   # optional, generated per run when omitted
 # system = "You are a terse assistant."
-# max_rounds = 8
+# max_rounds = unlimited by default, or an int like 8.
 # temperature = 0.2               # omit entirely for provider defaults
 
 tools = ["web_search", "web_fetch", "shell"]
