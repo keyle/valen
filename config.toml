@@ -1,0 +1,23 @@
+# mods harness config. See SPEC.md for the full schema.
+
+model = "qwen3.8-flash"
+# thinking = "high"            # optional reasoning level; omit for provider default.
+                               # Effort models (glm, deepseek, longcat, hy, …): high, max.
+                               # Toggle models (kimi, mimo, qwen, …): none, high.
+                               # Switch live with /model (ctrl+p) and /effort — saved back here.
+base_url = "https://opencode.ai/zen/go/v1"
+api_key_env = "OPENCODE_GO_API_KEY"
+# session_id = "ses-stable-id"   # optional, generated per run when omitted
+# system = "You are a terse assistant."
+# max_rounds = 8
+# temperature = 0.2               # omit entirely for provider defaults
+
+tools = ["web_search", "web_fetch", "shell"]
+# AskUserQuestion is always registered, so models can ask clarifying questions
+# in TUI and headless runs.
+
+# [[mcp]]
+# name = "fs"
+# cmd = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+# env = { NODE_ENV = "production" }
