@@ -6,7 +6,7 @@ How to work in this repo: fast loop, small steps, together.
 
 1. Keep the feedback loop quick enough that we work together. Prefer many small iterations over one big drop.
 2. Think deeply, verify cheaply: keep reasoning effort high, but confirm with the smallest possible check before widening.
-3. While iterating, run only targeted tests: `go test -run 'TestName|TestOther' .`.
+3. While iterating, run ONLY targeted tests: `go test -run 'TestName|TestOther' .`.
    Run the full suite only when something looks off, when touching shared code
    (`runTurn`, config loading, registry), or as a final gate before handing back.
 4. Final gate before handing back: `gofmt -l .` clean, `go vet ./...` green,
