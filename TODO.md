@@ -1,5 +1,19 @@
 # TODO — fullscreen loop UI (SPEC-tui.md)
 
+## Minor, UX
+
+- [ ] remove the white thick bar on the left of the chatbox
+- [ ] the content of the chat scrollback is not all aligned. Some have a space in front, or two.
+- [ ] thinking messages (white) in scrollback would benefit from a timestamp of when they happen, e.g. message (1m3s) <-- when they occurred.
+- [ ] ability to paste a paragraph
+- [ ] shift+enter should insert a line return in the chatbox, it does not (yet!) - fix.
+
+## Medium
+
+- [ ] M.1 operations that take the model more than 30 seconds need to be investigated as either we're sending too large data in the window or something has gone wrong. How can we handle this? this is a bigger todo that may require soul searching so to speak.
+- [ ] M.2 are different sessions trully independent? I feel running more than 2 can lead to a major slowdown, maybe backend is doing it?
+- [ ] M.3 we need Plan mode! Something we don't have yet.
+
 ## Parity (6 tracks — each has a small openspec in `openspec/changes/<track>/`)
 
 Ordered by ROI per lightness cost. Each item ends in a verifiable result.

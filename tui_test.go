@@ -885,3 +885,13 @@ func TestLoadConfigInputTable(t *testing.T) {
 		t.Fatalf("defaults: blink=%v height=%d, want true 3", inputBlink(cfg2), inputHeight(cfg2))
 	}
 }
+
+func TestLoadConfigRejectsUnknownKeys(t *testing.T) {
+	// Bare blink/height belong under [input]; at top level they must fail
+	// loudly instead of decoding silently to defaults.
+	if _, err := loadConfig(writeConfig(t, "model = \"m\"\nblink = false\nheight = 2\n")); err == nil {
+		t.Fatal("expected error for top-level blink/height")
+	} else if !strings.Contains(err.Error(), "unknown key") {
+		t.Fatalf("err=%v, want unknown key", err)
+	}
+}

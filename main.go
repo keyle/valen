@@ -109,8 +109,16 @@ type MCPServer struct {
 
 func loadConfig(path string) (Config, error) {
 	var cfg Config
-	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+	md, err := toml.DecodeFile(path, &cfg)
+	if err != nil {
 		return cfg, fmt.Errorf("decode %s: %w", path, err)
+	}
+	if bad := md.Undecoded(); len(bad) > 0 {
+		names := make([]string, len(bad))
+		for i, k := range bad {
+			names[i] = k.String()
+		}
+		return cfg, fmt.Errorf("decode %s: unknown key(s): %s", path, strings.Join(names, ", "))
 	}
 	if cfg.Model == "" {
 		return cfg, errors.New("model is required")

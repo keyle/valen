@@ -35,6 +35,9 @@ system = "You are a professional programming service. You are an MCP-capable thi
 # [input]                         # chatbox chrome (TUI only): steady cursor + box height.
 # blink = true                    # block-cursor blink; set false for a steady cursor.
 # height = 3                      # input box height in lines; default 3.
+[input]
+blink = false
+height = 2
 
 tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "grep"]
 # AskUserQuestion is always registered, so models can ask clarifying questions

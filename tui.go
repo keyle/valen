@@ -23,16 +23,17 @@ import (
 
 // Monokai dark palette.
 var (
-	mkBg      = lipgloss.Color("#272822")
-	mkFg      = lipgloss.Color("#F8F8F2")
-	mkComment = lipgloss.Color("#75715E")
-	mkPink    = lipgloss.Color("#F92672")
-	mkGreen   = lipgloss.Color("#A6E22E")
-	mkYellow  = lipgloss.Color("#E6DB74")
-	mkOrange  = lipgloss.Color("#FD971F")
-	mkPurple  = lipgloss.Color("#AE81FF")
-	mkCyan    = lipgloss.Color("#66D9EF")
-	mkBorder  = lipgloss.Color("#49483E")
+	mkBg        = lipgloss.Color("#272822")
+	mkFg        = lipgloss.Color("#F8F8F2")
+	mkComment   = lipgloss.Color("#75715E")
+	mkPink      = lipgloss.Color("#F92672")
+	mkGreen     = lipgloss.Color("#A6E22E")
+	mkGreenDark = lipgloss.Color("#4F6F0F")
+	mkYellow    = lipgloss.Color("#E6DB74")
+	mkOrange    = lipgloss.Color("#FD971F")
+	mkPurple    = lipgloss.Color("#AE81FF")
+	mkCyan      = lipgloss.Color("#66D9EF")
+	mkBorder    = lipgloss.Color("#49483E")
 )
 
 var (
@@ -60,8 +61,13 @@ var (
 	noticeStyle     = lipgloss.NewStyle().Foreground(mkYellow)
 	errNoticeStyle  = lipgloss.NewStyle().Foreground(mkPink)
 	footerStyle     = lipgloss.NewStyle().Foreground(mkComment)
-	selectedStyle   = lipgloss.NewStyle().Foreground(mkBg).Background(mkGreen).Bold(true).Padding(0, 1)
-	emptyStyle      = lipgloss.NewStyle().Foreground(mkComment).Padding(1, 2)
+	// Question overlay selection: light text on a darker green — the old
+	// dark-on-bright-green block glared at small sizes.
+	selectedStyle = lipgloss.NewStyle().Foreground(mkFg).Background(mkGreenDark).Bold(true).Padding(0, 1)
+	// Confirmation hint: bold green like the ready status, so the waiting
+	// state is obvious at a glance.
+	confirmHintStyle = lipgloss.NewStyle().Foreground(mkGreen).Bold(true)
+	emptyStyle       = lipgloss.NewStyle().Foreground(mkComment).Padding(1, 2)
 )
 
 // monokaiGlamour is a glamour JSON style approximating Monokai Pro.
@@ -529,12 +535,12 @@ func (m *tuiModel) renderAsk() string {
 	cw := m.contentWidth()
 	if a.phase == "review" {
 		var b strings.Builder
-		b.WriteString(m.wrapPlain("Confirm your answers — enter submits · esc cancels") + "\n\n")
+		b.WriteString(m.wrapAskHint("Confirm your answers — enter submits · esc cancels") + "\n\n")
 		answers := m.askAnswers()
 		for i, q := range a.qs {
 			b.WriteString(m.wrapPlain(q.Question) + "\n" + m.wrapPlain("  → "+answers[i]) + "\n\n")
 		}
-		b.WriteString(m.wrapPlain("enter = submit · esc = cancel"))
+		b.WriteString(m.wrapAskHint("enter = submit · esc = cancel"))
 		return b.String()
 	}
 	q := a.qs[a.idx]
@@ -787,6 +793,16 @@ func (m *tuiModel) wrapPlain(s string) string {
 		return s
 	}
 	return lipgloss.NewStyle().Width(m.contentWidth()).Render(breakLongWords(s, m.contentWidth()))
+}
+
+// wrapAskHint renders the question-overlay waiting hints (confirmation
+// submit line) in bold green like the ready status, so it reads as waiting
+// on the user rather than idle helper text.
+func (m *tuiModel) wrapAskHint(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return s
+	}
+	return confirmHintStyle.Width(m.contentWidth()).Render(breakLongWords(s, m.contentWidth()))
 }
 
 // show switches overlay modes and keeps focus/viewport consistent.
