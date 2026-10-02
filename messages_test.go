@@ -43,6 +43,80 @@ func messagesTestConfig(baseURL string) Config {
 	return Config{Model: "minimax-m3", BaseURL: baseURL, SessionID: "ses-test", MaxRounds: 4}
 }
 
+// messagesTwoToolResp returns one assistant message with two tool_use blocks.
+func messagesTwoToolResp() []byte {
+	b, _ := json.Marshal(map[string]any{
+		"id": "msg_1", "type": "message", "role": "assistant", "model": "m",
+		"stop_reason": "tool_use",
+		"content": []any{
+			map[string]any{"type": "tool_use", "id": "call-1", "name": "shell", "input": map[string]any{"command": "echo hi"}},
+			map[string]any{"type": "tool_use", "id": "call-2", "name": "shell", "input": map[string]any{"command": "echo yo"}},
+		},
+		"usage": map[string]any{"input_tokens": 10, "output_tokens": 5},
+	})
+	return b
+}
+
+// TestMessagesParallelToolBatch proves a multi-call batch runs through the
+// shared parallel dispatcher and both results fold back as ordered
+// tool_result blocks in the next round's request.
+func TestMessagesParallelToolBatch(t *testing.T) {
+	var bodies []map[string]any
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		bodies = append(bodies, body)
+		var out []byte
+		if calls == 0 {
+			out = messagesTwoToolResp()
+		} else {
+			out = messagesTextResp("all done")
+		}
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(out)
+	}))
+	defer srv.Close()
+
+	registry := NewRegistry()
+	registry.LoadBuiltins([]string{"shell"})
+	cfg := messagesTestConfig(srv.URL)
+
+	var stdout, stderr bytes.Buffer
+	if err := chat(context.Background(), cfg, newClient(cfg, "key"), "key", srv.Client(), registry, "hi", &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "all done") {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+	if calls != 2 || len(bodies) != 2 {
+		t.Fatalf("calls=%d bodies=%d", calls, len(bodies))
+	}
+	msgs, _ := bodies[1]["messages"].([]any)
+	var ids, outputs []string
+	for _, m := range msgs {
+		mm, _ := m.(map[string]any)
+		content, _ := mm["content"].([]any)
+		for _, b := range content {
+			bb, _ := b.(map[string]any)
+			if bb["type"] != "tool_result" {
+				continue
+			}
+			id, _ := bb["tool_use_id"].(string)
+			ids = append(ids, id)
+			out, _ := bb["content"].(string)
+			outputs = append(outputs, out)
+		}
+	}
+	if strings.Join(ids, ",") != "call-1,call-2" {
+		t.Fatalf("tool_result order=%v", ids)
+	}
+	if len(outputs) != 2 || !strings.Contains(outputs[0], "hi") || !strings.Contains(outputs[1], "yo") {
+		t.Fatalf("tool_result outputs=%v", outputs)
+	}
+}
+
 func TestMessagesThinkingMapping(t *testing.T) {
 	if messagesThinking("") != nil {
 		t.Fatal("empty must omit")

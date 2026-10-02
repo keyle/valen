@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -230,8 +231,17 @@ func isTTY(f *os.File) bool {
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
+// sharedTransport is the single tuned connection pool for chat API calls and
+// web fetch/search. Keep-alive reuse avoids a fresh TCP+TLS handshake per
+// round; caps stay on the tool-output side, not here.
+var sharedTransport = &http.Transport{
+	MaxIdleConns:        100,
+	MaxIdleConnsPerHost: 20,
+	IdleConnTimeout:     90 * time.Second,
+}
+
 func newHTTPClient(cfg Config) *http.Client {
-	return &http.Client{Transport: &headerTransport{base: http.DefaultTransport, sessionID: cfg.SessionID}}
+	return &http.Client{Transport: &headerTransport{base: sharedTransport, sessionID: cfg.SessionID}}
 }
 
 func newClient(cfg Config, apiKey string) *openai.Client {
@@ -280,6 +290,86 @@ func runTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey stri
 	}
 }
 
+// maxParallelTools bounds concurrent tool execution in one round. Outputs
+// stay capped by truncate, so memory stays flat; the semaphore only caps how
+// many run at once.
+const maxParallelTools = 8
+
+// mcpMu serializes MCP tool calls: stdio JSON-RPC servers share one stdin
+// pipe, so concurrent writes could interleave requests. Builtins run fully
+// parallel; MCP calls share this mutex.
+var mcpMu sync.Mutex
+
+// isMCPTool reports namespaced MCP tools (<server>__<tool>).
+func isMCPTool(name string) bool { return strings.Contains(name, "__") }
+
+// runToolCalls executes one round's tool calls and returns the tool messages
+// in request order. Batches without AskUserQuestion run with bounded
+// parallelism; batches containing AskUserQuestion run sequentially so the
+// single interactive overlay/stdin stays deterministic. onEvent emissions
+// stay in request order for the TUI timeline.
+func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCall, onEvent func(Event)) []openai.ChatCompletionMessage {
+	if len(calls) == 0 {
+		return nil
+	}
+	for _, tc := range calls {
+		if tc.Function.Name == "AskUserQuestion" {
+			return runToolCallsSerial(ctx, registry, calls, onEvent)
+		}
+	}
+	if len(calls) == 1 {
+		return runToolCallsSerial(ctx, registry, calls, onEvent)
+	}
+	if onEvent != nil {
+		for _, tc := range calls {
+			onEvent(Event{Kind: "tool_start", Text: tc.Function.Name, Args: tc.Function.Arguments})
+		}
+	}
+	outs := make([]string, len(calls))
+	sem := make(chan struct{}, maxParallelTools)
+	var wg sync.WaitGroup
+	for i, tc := range calls {
+		wg.Add(1)
+		go func(i int, tc openai.ToolCall) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if isMCPTool(tc.Function.Name) {
+				mcpMu.Lock()
+				defer mcpMu.Unlock()
+			}
+			outs[i] = registry.Run(ctx, tc.Function.Name, tc.Function.Arguments)
+		}(i, tc)
+	}
+	wg.Wait()
+	if onEvent != nil {
+		for i, tc := range calls {
+			onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: outs[i]})
+		}
+	}
+	out := make([]openai.ChatCompletionMessage, 0, len(calls))
+	for i, tc := range calls {
+		out = append(out, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: tc.ID, Content: outs[i]})
+	}
+	return out
+}
+
+// runToolCallsSerial is the sequential fallback for interactive batches.
+func runToolCallsSerial(ctx context.Context, registry *Registry, calls []openai.ToolCall, onEvent func(Event)) []openai.ChatCompletionMessage {
+	out := make([]openai.ChatCompletionMessage, 0, len(calls))
+	for _, tc := range calls {
+		if onEvent != nil {
+			onEvent(Event{Kind: "tool_start", Text: tc.Function.Name, Args: tc.Function.Arguments})
+		}
+		res := registry.Run(ctx, tc.Function.Name, tc.Function.Arguments)
+		if onEvent != nil {
+			onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: res})
+		}
+		out = append(out, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: tc.ID, Content: res})
+	}
+	return out
+}
+
 // runChatTurn is the /chat/completions tool loop, streaming each round.
 func runChatTurn(ctx context.Context, cfg Config, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
 	var usage openai.Usage
@@ -309,16 +399,7 @@ func runChatTurn(ctx context.Context, cfg Config, apiKey string, hc *http.Client
 			return msg, usage, nil
 		}
 
-		for _, tc := range msg.ToolCalls {
-			if onEvent != nil {
-				onEvent(Event{Kind: "tool_start", Text: tc.Function.Name, Args: tc.Function.Arguments})
-			}
-			out := registry.Run(ctx, tc.Function.Name, tc.Function.Arguments)
-			if onEvent != nil {
-				onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: out})
-			}
-			*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: tc.ID, Content: out})
-		}
+		*history = append(*history, runToolCalls(ctx, registry, msg.ToolCalls, onEvent)...)
 	}
 	return openai.ChatCompletionMessage{}, usage, fmt.Errorf("stopped after %d rounds without a final answer", cfg.MaxRounds)
 }

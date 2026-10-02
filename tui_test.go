@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sashabaranov/go-openai"
 )
@@ -359,8 +360,114 @@ func TestTUIDefaultSystemHintsAgents(t *testing.T) {
 		t.Fatalf("default system should hint AGENTS.md, got %q", h[0].Content)
 	}
 	m := newTestModel(t, testConfig("https://unused"))
-	if !strings.Contains(m.renderChat(), "AGENTS.md") {
-		t.Fatalf("empty chat should hint AGENTS.md:\n%s", m.renderChat())
+	got := m.renderChat()
+	if strings.Contains(got, "AGENTS.md") || strings.Contains(got, "Ask anything") {
+		t.Fatalf("empty chat should be a simple label, got:\n%s", got)
+	}
+	if !strings.Contains(got, "No turns yet.") {
+		t.Fatalf("empty chat should show the simple label, got:\n%s", got)
+	}
+}
+
+// TestChatCacheIncrementalMatchesFull verifies the committed-turn cache:
+// appending turns extends the cached prefix (no full re-render) and key
+// changes (thinking toggle, width) rebuild identical output.
+func TestChatCacheIncrementalMatchesFull(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.viewport.Width = 80
+	mkTurn := func(prompt string) Turn {
+		return Turn{At: time.Now(), Prompt: prompt, Thinking: "plan", Reply: "reply " + prompt, Usage: Usage{Total: 1}}
+	}
+	m.session.Turns = []Turn{mkTurn("one"), mkTurn("two")}
+	_ = m.renderChat()
+	if m.chatCacheTurns != 2 {
+		t.Fatalf("cache should hold 2 turns, holds %d", m.chatCacheTurns)
+	}
+	m.session.Turns = append(m.session.Turns, mkTurn("three"))
+	extended := m.renderChat()
+	for _, want := range []string{"one", "two", "three"} {
+		if !strings.Contains(extended, want) {
+			t.Fatalf("extended chat missing %q", want)
+		}
+	}
+	// Toggling thinking rebuilds (cache key change) and round-trips exactly.
+	m.showThink = false
+	hidden := m.renderChat()
+	if strings.Contains(hidden, "plan") {
+		t.Fatalf("hidden thinking should collapse:\n%s", hidden)
+	}
+	m.showThink = true
+	reshown := m.renderChat()
+	if reshown != extended {
+		t.Fatalf("toggle round-trip should rebuild identical output")
+	}
+	m.viewport.Width = 100
+	wide := m.renderChat()
+	for _, want := range []string{"one", "two", "three"} {
+		if !strings.Contains(wide, want) {
+			t.Fatalf("wide chat missing %q", want)
+		}
+	}
+}
+
+func TestTUIPendingRunningToolsShowSpinnerAndCounts(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.viewport.Width = 80
+	m.busy = true
+	m.pendingPrompt = "do things"
+
+	_, _ = m.Update(toolEventMsg{kind: "tool_start", text: "web_search", args: `{"query":"go"}`})
+	if m.toolStatus != "⏺ web_search…" {
+		t.Fatalf("single running status=%q", m.toolStatus)
+	}
+	_, _ = m.Update(toolEventMsg{kind: "tool_start", text: "web_fetch", args: `{"url":"https://x"}`})
+	if m.toolStatus != "⏺ web_fetch… · 2 running" {
+		t.Fatalf("parallel running status=%q", m.toolStatus)
+	}
+
+	frame0 := m.spinner.View()
+	out := m.renderPending(80)
+	if !strings.Contains(out, frame0) || !strings.Contains(out, "running") {
+		t.Fatalf("open threads must show the spinner frame %q:\n%s", frame0, out)
+	}
+	if strings.Count(out, "· running") != 2 {
+		t.Fatalf("both open threads should be marked:\n%s", out)
+	}
+
+	// Spinner ticks advance the frame in the scrollback across consecutive
+	// ticks, not just once.
+	_, _ = m.Update(spinner.TickMsg{})
+	frame1 := m.spinner.View()
+	if frame1 == frame0 {
+		t.Fatal("spinner frame should advance on tick")
+	}
+	if out2 := m.renderPending(80); !strings.Contains(out2, frame1) {
+		t.Fatalf("scrolled frame should track the tick %q:\n%s", frame1, out2)
+	}
+	_, _ = m.Update(spinner.TickMsg{})
+	frame2 := m.spinner.View()
+	if frame2 == frame1 || frame2 == frame0 {
+		t.Fatal("spinner frame should keep advancing across ticks")
+	}
+	if out2b := m.renderPending(80); !strings.Contains(out2b, frame2) {
+		t.Fatalf("scrolled frame should track the second tick %q:\n%s", frame2, out2b)
+	}
+
+	_, _ = m.Update(toolEventMsg{kind: "tool_result", text: "web_search", output: "1. release notes"})
+	if m.toolStatus != "✓ web_search · 1 still running" {
+		t.Fatalf("partial completion status=%q", m.toolStatus)
+	}
+	out3 := m.renderPending(80)
+	if strings.Count(out3, "· running") != 1 {
+		t.Fatalf("finished thread must lose its spinner:\n%s", out3)
+	}
+	if !strings.Contains(out3, "1. release notes") {
+		t.Fatalf("finished thread keeps its preview:\n%s", out3)
+	}
+
+	_, _ = m.Update(toolEventMsg{kind: "tool_result", text: "web_fetch", output: "ok"})
+	if m.toolStatus != "✓ web_fetch" {
+		t.Fatalf("all-done status=%q", m.toolStatus)
 	}
 }
 

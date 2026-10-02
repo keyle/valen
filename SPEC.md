@@ -48,7 +48,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `base_url` | string | `https://opencode.ai/zen/go/v1` | API base; the transport path (`/chat/completions`, `/messages`, `/responses`) is appended per model |
 | `api_key_env` | string | `OPENCODE_GO_API_KEY` | Name of the env var holding the key, not the key itself |
 | `session_id` | string | `ses-<unixnano>` | Stable per conversation; sent as `x-opencode-session` |
-| `system` | string | built-in default | System prompt; empty uses the built-in default (helpful assistant, MCP-capable thinking agent with fast tool loopback, check AGENTS.md first). Set to override |
+| `system` | string | built-in default (mirrors `config.toml`) | System prompt; empty uses the built-in default (helpful assistant, MCP-capable thinking agent with fast tool loopback, check AGENTS.md first). The shipped `config.toml` sets it explicitly — edit there to override |
 | `max_rounds` | int | `8` | Hard stop on tool-loop iterations |
 | `temperature` | float | unset | Pointer semantics: unset omits the field, `0.0` sends zero |
 | `tools` | string[] | empty | Subset of `shell`, `web_search`, `web_fetch`, `read`, `write`, `edit`, `glob`, `grep`, `AskUserQuestion`. `AskUserQuestion` is also registered automatically when absent, so model-driven questions work in every frontend |
@@ -119,9 +119,17 @@ repeat up to max_rounds:
   resp = backend(messages, tools)   # chat | messages | responses per model
   messages += resp.message
   if no tool_calls: print content, print token tally, exit 0
-  for each tool_call: messages += tool result (truncated)
+  run tool_calls with bounded parallelism (max 8), append results in order
 error: "stopped after N rounds without a final answer"
 ```
+
+- Tool calls in one round run concurrently (semaphore 8) and their results
+  append to history in request order, so wall-clock is ~max(latencies), not
+  the sum. `tool_start` events emit in order, then `tool_result` in order.
+  Batches containing `AskUserQuestion` run sequentially instead: the single
+  interactive overlay/stdin cannot serve concurrent prompts. File-access
+  approval prompts serialize on the same mutex. MCP tool calls serialize on
+  a shared mutex (one stdin pipe per server); builtins run fully parallel.
 
 - Assistant text goes to stdout; `[tool name]` traces and the token tally go to
   stderr, so `mods "..." > out.md` stays clean.
@@ -169,8 +177,8 @@ Rules the registry enforces:
 | `read` | `path`, `offset`, `limit` | Line-windowed read (default 2000 lines); lines prefixed with their number for `edit` context |
 | `write` | `path`, `content` | Create/overwrite a file, creating parents; preserves the existing mode |
 | `edit` | `path`, `oldString`, `newString`, `replaceAll` | Exact-string replace; refuses ambiguous multi-matches unless `replaceAll` |
-| `glob` | `pattern`, `path` | Recursive file list supporting `*`/`?`/`[...]`/`**`; skips `.git` |
-| `grep` | `pattern`, `path`, `include` | Go regexp content search as `file:line: text`; skips `.git`/binaries/>1 MiB files, capped at 100 matches |
+| `glob` | `pattern`, `path` | Recursive file list supporting `*`/`?`/`[...]`/`**`; top-level subtrees walk in parallel, results sorted; skips `.git` |
+| `grep` | `pattern`, `path`, `include` | Go regexp content search as `file:line: text`, sorted by file then line; directory walk collects candidates while file reads/matches run on a bounded worker pool (8); skips `.git`/binaries/>1 MiB files, capped at 100 matches |
 | `AskUserQuestion` | `questions[]` | Presents each question with options plus type-your-own, confirms all answers, and returns `User has answered your questions: ...` |
 
 File tools and `shell` share one sandbox root: the startup directory,
@@ -186,7 +194,9 @@ rather than an HTML error page.
 ## MCP
 
 Each `[[mcp]]` entry spawns `cmd args...` over stdio with the parent environment
-plus `env` overrides, then `initialize` → `tools/list`. Tools are registered as
+plus `env` overrides, then `initialize` → `tools/list`. Server startups run in
+parallel; registration stays serial in config order so tool order is
+deterministic. Tools are registered as
 `<server>__<tool>`; names failing the tool-name rule abort that server only.
 
 - Handshake (start/initialize/list) is bounded at 30s; tool calls at 2m.

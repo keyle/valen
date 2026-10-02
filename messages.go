@@ -331,16 +331,7 @@ func runMessagesTurn(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 		if len(msg.ToolCalls) == 0 {
 			return msg, usage, nil
 		}
-		for _, tc := range msg.ToolCalls {
-			if onEvent != nil {
-				onEvent(Event{Kind: "tool_start", Text: tc.Function.Name, Args: tc.Function.Arguments})
-			}
-			out := registry.Run(ctx, tc.Function.Name, tc.Function.Arguments)
-			if onEvent != nil {
-				onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: out})
-			}
-			*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: tc.ID, Content: out})
-		}
+		*history = append(*history, runToolCalls(ctx, registry, msg.ToolCalls, onEvent)...)
 	}
 	return openai.ChatCompletionMessage{}, usage, fmt.Errorf("stopped after %d rounds without a final answer", cfg.MaxRounds)
 }

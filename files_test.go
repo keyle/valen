@@ -157,6 +157,42 @@ func TestGrepFindsPattern(t *testing.T) {
 	}
 }
 
+func TestGrepParallelMultiFileSortedAndCapped(t *testing.T) {
+	useTempRoot(t)
+	ctx := context.Background()
+	for _, f := range []string{"z/a.txt", "a/b.txt", "m/c.txt"} {
+		if _, err := WriteTool().Fn(ctx, `{"path":`+quoteJSON(f)+`,"content":"needle here\n"}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := GrepTool().Fn(ctx, `{"pattern":"needle"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("out=%q", out)
+	}
+	if !strings.HasPrefix(lines[0], "a/b.txt") || !strings.HasPrefix(lines[1], "m/c.txt") || !strings.HasPrefix(lines[2], "z/a.txt") {
+		t.Fatalf("matches should be sorted, got %q", out)
+	}
+	// Cap: 100 matches max with a truncation note.
+	big := strings.Repeat("needle\n", 150)
+	if _, err := WriteTool().Fn(ctx, `{"path":"big.txt","content":`+quoteJSON(big)+`}`); err != nil {
+		t.Fatal(err)
+	}
+	capped, err := GrepTool().Fn(ctx, `{"pattern":"needle","path":"big.txt"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(capped, "big.txt:"); got != 100 {
+		t.Fatalf("expected 100 capped matches, got %d", got)
+	}
+	if !strings.Contains(capped, "showing first 100 matches") {
+		t.Fatalf("missing truncation note: %q", capped)
+	}
+}
+
 func TestOutsideAccessAskAllowAndDeny(t *testing.T) {
 	useTempRoot(t)
 	outside := filepath.Join(t.TempDir(), "secret.txt")

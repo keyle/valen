@@ -11,6 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/sashabaranov/go-openai"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -270,5 +273,182 @@ func TestChatOmitsTemperatureWhenUnset(t *testing.T) {
 	}
 	if _, present := gotBody["temperature"]; present {
 		t.Fatalf("temperature should be omitted, got %v", gotBody["temperature"])
+	}
+}
+
+func sleepTool(name string, d time.Duration, out string) Tool {
+	return Tool{
+		Name:        name,
+		Description: "test sleeper",
+		Schema:      json.RawMessage(`{"type":"object"}`),
+		Fn: func(ctx context.Context, args string) (string, error) {
+			select {
+			case <-time.After(d):
+				return out, nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		},
+	}
+}
+
+func openaiToolCall(id, name string) openai.ToolCall {
+	return openai.ToolCall{
+		ID:   id,
+		Type: openai.ToolTypeFunction,
+		Function: openai.FunctionCall{
+			Name:      name,
+			Arguments: "{}",
+		},
+	}
+}
+
+// TestRequestEncodingStable locks the stable-prefix property: identical
+// history + registry must marshal to identical request bytes, so prompt-cache
+// affinity isn't broken by per-round churn (tool order, system join).
+func TestRequestEncodingStable(t *testing.T) {
+	r := NewRegistry()
+	r.LoadBuiltins([]string{"shell", "read", "grep"})
+	history := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: "sys"},
+		{Role: openai.ChatMessageRoleUser, Content: "hi"},
+		{Role: openai.ChatMessageRoleAssistant, Content: "ok", ToolCalls: []openai.ToolCall{openaiToolCall("1", "shell")}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "1", Content: "out"},
+	}
+	marshal := func() string {
+		req := openai.ChatCompletionRequest{Model: "m", Messages: history, Tools: r.OpenAITools()}
+		b, err := json.Marshal(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	a, b := marshal(), marshal()
+	if a != b {
+		t.Fatal("request encoding must be deterministic")
+	}
+	sys1, msgs1 := splitChatHistory(history)
+	sys2, msgs2 := splitChatHistory(history)
+	j1, _ := json.Marshal(map[string]any{"system": sys1, "messages": msgs1})
+	j2, _ := json.Marshal(map[string]any{"system": sys2, "messages": msgs2})
+	if string(j1) != string(j2) {
+		t.Fatal("messages history conversion must be deterministic")
+	}
+	_, input1 := splitResponsesInput(history)
+	_, input2 := splitResponsesInput(history)
+	k1, _ := json.Marshal(input1)
+	k2, _ := json.Marshal(input2)
+	if string(k1) != string(k2) {
+		t.Fatal("responses input conversion must be deterministic")
+	}
+}
+
+// TestRunToolCallsParallel verifies one round's independent calls overlap:
+// 3×200ms must finish well under the 600ms sequential sum, with history and
+// events in request order even when the first call is slowest.
+func TestRunToolCallsParallel(t *testing.T) {
+	r := NewRegistry()
+	for _, tc := range []struct {
+		name string
+		d    time.Duration
+		out  string
+	}{
+		{"tool_a", 300 * time.Millisecond, "A"},
+		{"tool_b", 200 * time.Millisecond, "B"},
+		{"tool_c", 200 * time.Millisecond, "C"},
+	} {
+		if err := r.Add(sleepTool(tc.name, tc.d, tc.out)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := []openai.ToolCall{
+		openaiToolCall("id-a", "tool_a"),
+		openaiToolCall("id-b", "tool_b"),
+		openaiToolCall("id-c", "tool_c"),
+	}
+	var events []Event
+	start := time.Now()
+	msgs := runToolCalls(context.Background(), r, calls, func(ev Event) { events = append(events, ev) })
+	elapsed := time.Since(start)
+
+	if elapsed >= 600*time.Millisecond {
+		t.Fatalf("expected parallel overlap, took %v (sequential sum is 700ms)", elapsed)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("messages=%d", len(msgs))
+	}
+	for i, want := range []struct{ id, content string }{
+		{"id-a", "A"}, {"id-b", "B"}, {"id-c", "C"},
+	} {
+		if msgs[i].ToolCallID != want.id || msgs[i].Content != want.content {
+			t.Fatalf("msgs[%d]=%+v, want id=%s content=%s", i, msgs[i], want.id, want.content)
+		}
+		if msgs[i].Role != openai.ChatMessageRoleTool {
+			t.Fatalf("msgs[%d].Role=%q", i, msgs[i].Role)
+		}
+	}
+	// Events stay in request order: all starts, then all results.
+	var kinds []string
+	var names []string
+	for _, ev := range events {
+		kinds = append(kinds, ev.Kind)
+		names = append(names, ev.Text)
+	}
+	wantKinds := []string{"tool_start", "tool_start", "tool_start", "tool_result", "tool_result", "tool_result"}
+	wantNames := []string{"tool_a", "tool_b", "tool_c", "tool_a", "tool_b", "tool_c"}
+	if strings.Join(kinds, ",") != strings.Join(wantKinds, ",") {
+		t.Fatalf("event kinds=%v", kinds)
+	}
+	if strings.Join(names, ",") != strings.Join(wantNames, ",") {
+		t.Fatalf("event names=%v", names)
+	}
+}
+
+// TestRunToolCallsAskSerial verifies batches containing AskUserQuestion still
+// run sequentially through the stubbed prompter with ordered output.
+func TestRunToolCallsAskSerial(t *testing.T) {
+	old := askPrompter
+	askPrompter = func(ctx context.Context, qs []AskQuestion) ([]string, error) {
+		return []string{"blue"}, nil
+	}
+	defer func() { askPrompter = old }()
+
+	r := NewRegistry()
+	if err := r.Add(sleepTool("tool_a", 10*time.Millisecond, "A")); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Add(AskUserQuestionTool()); err != nil {
+		t.Fatal(err)
+	}
+	calls := []openai.ToolCall{
+		{
+			ID:   "id-q",
+			Type: openai.ToolTypeFunction,
+			Function: openai.FunctionCall{
+				Name:      "AskUserQuestion",
+				Arguments: `{"questions":[{"question":"color?","options":[{"label":"blue"}]}]}`,
+			},
+		},
+		openaiToolCall("id-a", "tool_a"),
+	}
+	var events []Event
+	msgs := runToolCalls(context.Background(), r, calls, func(ev Event) { events = append(events, ev) })
+	if len(msgs) != 2 {
+		t.Fatalf("messages=%d", len(msgs))
+	}
+	if msgs[0].ToolCallID != "id-q" || !strings.Contains(msgs[0].Content, "blue") {
+		t.Fatalf("ask output=%+v", msgs[0])
+	}
+	if msgs[1].ToolCallID != "id-a" || msgs[1].Content != "A" {
+		t.Fatalf("tool output=%+v", msgs[1])
+	}
+	if len(events) != 4 {
+		t.Fatalf("events=%v", events)
+	}
+	if events[0].Kind != "tool_start" || events[0].Text != "AskUserQuestion" {
+		t.Fatalf("first event=%+v", events[0])
+	}
+	if events[2].Kind != "tool_start" || events[2].Text != "tool_a" {
+		t.Fatalf("third event=%+v", events[2])
 	}
 }

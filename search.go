@@ -25,7 +25,7 @@ const (
 // searchBaseURL is a package var so tests can point it at a local server.
 var searchBaseURL = "https://html.duckduckgo.com/html/"
 
-var httpClient = &http.Client{Timeout: httpTimeout}
+var httpClient = &http.Client{Transport: sharedTransport, Timeout: httpTimeout}
 
 var (
 	linkRe   = regexp.MustCompile(`class="result__a" href="([^"]+)"[^>]*>(.*?)</a>`)

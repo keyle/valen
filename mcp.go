@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mark3labs/mcp-go/client"
@@ -23,16 +24,71 @@ const (
 
 // LoadMCP starts each stdio server, registers its tools and returns the closers.
 // Servers that fail to start do not abort the run; their error is reported and
-// the remaining servers still load.
+// the remaining servers still load. Startup (process spawn + handshake +
+// tools/list) runs in parallel across servers; registration into the registry
+// stays serial in config order so tool order is deterministic.
 func LoadMCP(ctx context.Context, servers []MCPServer, r *Registry, warn func(string, ...any)) []func() {
+	if len(servers) < 2 {
+		var closers []func()
+		for _, s := range servers {
+			stop, err := registerMCPServer(ctx, s, r)
+			if err != nil {
+				warn("mcp %s: %v", s.Name, err)
+				continue
+			}
+			closers = append(closers, stop)
+		}
+		return closers
+	}
+	type fetched struct {
+		client *client.Client
+		tools  []mcp.Tool
+		err    error
+	}
+	results := make([]fetched, len(servers))
+	var wg sync.WaitGroup
+	for i, s := range servers {
+		wg.Add(1)
+		go func(i int, s MCPServer) {
+			defer wg.Done()
+			c, err := startMCPClient(ctx, s)
+			if err != nil {
+				results[i].err = err
+				return
+			}
+			handshake, cancel := context.WithTimeout(ctx, mcpHandshakeTimeout)
+			defer cancel()
+			tools, err := c.ListTools(handshake, mcp.ListToolsRequest{})
+			if err != nil {
+				c.Close()
+				results[i].err = fmt.Errorf("list tools: %w", err)
+				return
+			}
+			results[i].client = c
+			results[i].tools = tools.Tools
+		}(i, s)
+	}
+	wg.Wait()
 	var closers []func()
-	for _, s := range servers {
-		stop, err := registerMCPServer(ctx, s, r)
-		if err != nil {
-			warn("mcp %s: %v", s.Name, err)
+	for i, s := range servers {
+		f := results[i]
+		if f.err != nil {
+			warn("mcp %s: %v", s.Name, f.err)
 			continue
 		}
-		closers = append(closers, stop)
+		failed := false
+		for _, t := range f.tools {
+			if err := r.Add(mcpTool(s.Name, f.client, t)); err != nil {
+				f.client.Close()
+				warn("mcp %s: %v", s.Name, err)
+				failed = true
+				break
+			}
+		}
+		if !failed {
+			c := f.client
+			closers = append(closers, func() { c.Close() })
+		}
 	}
 	return closers
 }

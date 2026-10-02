@@ -40,6 +40,75 @@ func responsesTestConfig(baseURL string) Config {
 	return Config{Model: "muse-spark-1.3-contributor", BaseURL: baseURL, SessionID: "ses-test", MaxRounds: 4}
 }
 
+// responsesTwoToolResp returns one response with two function_call items.
+func responsesTwoToolResp() []byte {
+	b, _ := json.Marshal(map[string]any{
+		"id": "resp_1", "model": "m", "status": "completed",
+		"output": []any{
+			map[string]any{"type": "function_call", "id": "fc_call-1", "call_id": "call-1", "name": "shell", "arguments": `{"command":"echo hi"}`},
+			map[string]any{"type": "function_call", "id": "fc_call-2", "call_id": "call-2", "name": "shell", "arguments": `{"command":"echo yo"}`},
+		},
+		"usage": map[string]any{"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+	})
+	return b
+}
+
+// TestResponsesParallelToolBatch proves a multi-call batch runs through the
+// shared parallel dispatcher and both results fold back as ordered
+// function_call_output items in the next round's stateless input.
+func TestResponsesParallelToolBatch(t *testing.T) {
+	var bodies []map[string]any
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		bodies = append(bodies, body)
+		var out []byte
+		if calls == 0 {
+			out = responsesTwoToolResp()
+		} else {
+			out = responsesTextResp("all done")
+		}
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(out)
+	}))
+	defer srv.Close()
+
+	registry := NewRegistry()
+	registry.LoadBuiltins([]string{"shell"})
+	cfg := responsesTestConfig(srv.URL)
+
+	var stdout, stderr bytes.Buffer
+	if err := chat(context.Background(), cfg, newClient(cfg, "key"), "key", srv.Client(), registry, "hi", &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "all done") {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+	if calls != 2 || len(bodies) != 2 {
+		t.Fatalf("calls=%d bodies=%d", calls, len(bodies))
+	}
+	input, _ := bodies[1]["input"].([]any)
+	var ids, outputs []string
+	for _, item := range input {
+		m, _ := item.(map[string]any)
+		if m["type"] != "function_call_output" {
+			continue
+		}
+		id, _ := m["call_id"].(string)
+		ids = append(ids, id)
+		out, _ := m["output"].(string)
+		outputs = append(outputs, out)
+	}
+	if strings.Join(ids, ",") != "call-1,call-2" {
+		t.Fatalf("function_call_output order=%v", ids)
+	}
+	if len(outputs) != 2 || !strings.Contains(outputs[0], "hi") || !strings.Contains(outputs[1], "yo") {
+		t.Fatalf("function_call_output outputs=%v", outputs)
+	}
+}
+
 func TestResponsesReasoningMapping(t *testing.T) {
 	if responsesReasoning("") != nil || responsesReasoning("none") != nil {
 		t.Fatal("empty and none must omit (Spark rejects none with 400)")

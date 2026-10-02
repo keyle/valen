@@ -95,7 +95,7 @@ func checkFileAccess(ctx context.Context, op, abs string) error {
 	if askPrompter == nil {
 		return fmt.Errorf("denied: %s is outside workdir %s (no interactive prompter to approve it)", abs, root)
 	}
-	answers, err := askPrompter(ctx, []AskQuestion{{
+	answers, err := promptUser(ctx, []AskQuestion{{
 		Question: fmt.Sprintf("Allow %s of %s? Workdir is %s.", op, abs, root),
 		Header:   "File access",
 		Options: []AskOption{
@@ -327,28 +327,67 @@ func GlobTool() Tool {
 				pattern = filepath.ToSlash(rel)
 			}
 			var out []string
-			err = filepath.WalkDir(baseAbs, func(p string, d os.DirEntry, err error) error {
-				if err != nil {
-					return nil
-				}
-				if d.IsDir() && d.Name() == ".git" {
-					return filepath.SkipDir
-				}
-				if d.IsDir() {
-					return nil
-				}
-				rel, err := filepath.Rel(getFileRoot(), p)
-				if err != nil {
-					return nil
-				}
-				if matchGlob(pattern, filepath.ToSlash(rel)) {
-					out = append(out, filepath.ToSlash(rel))
-				}
-				return nil
-			})
+			// Top-level subtrees walk in parallel (syscall-bound); matches merge
+			// and sort for deterministic output.
+			entries, err := os.ReadDir(baseAbs)
 			if err != nil {
 				return "", err
 			}
+			var mu sync.Mutex
+			match := func(rel string) {
+				if matchGlob(pattern, rel) {
+					mu.Lock()
+					out = append(out, rel)
+					mu.Unlock()
+				}
+			}
+			var dirs []string
+			for _, e := range entries {
+				if e.IsDir() && e.Name() == ".git" {
+					continue
+				}
+				p := filepath.Join(baseAbs, e.Name())
+				if !e.IsDir() {
+					if rel, err := filepath.Rel(getFileRoot(), p); err == nil {
+						match(filepath.ToSlash(rel))
+					}
+					continue
+				}
+				dirs = append(dirs, p)
+			}
+			const globWorkers = 8
+			jobs := make(chan string)
+			var wg sync.WaitGroup
+			for w := 0; w < globWorkers; w++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for dir := range jobs {
+						_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+							if err != nil {
+								return nil
+							}
+							if d.IsDir() {
+								if d.Name() == ".git" {
+									return filepath.SkipDir
+								}
+								return nil
+							}
+							rel, err := filepath.Rel(getFileRoot(), p)
+							if err != nil {
+								return nil
+							}
+							match(filepath.ToSlash(rel))
+							return nil
+						})
+					}
+				}()
+			}
+			for _, d := range dirs {
+				jobs <- d
+			}
+			close(jobs)
+			wg.Wait()
 			sort.Strings(out)
 			if len(out) == 0 {
 				return "no matches", nil
@@ -396,11 +435,13 @@ func GrepTool() Tool {
 			} else if fi.IsDir() {
 				roots = []string{targetAbs}
 			}
-			var matches []string
-			truncated := false
-			walk := func(root string) error {
-				return filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-					if err != nil || len(matches) >= maxGrepMatches {
+			// Phase 1: serial walk collects candidate files (cheap metadata
+			// prefilters only). Phase 2 reads and matches them on a bounded
+			// worker pool, since file I/O dominates.
+			var files []string
+			for _, root := range roots {
+				err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+					if err != nil {
 						return nil
 					}
 					if d.IsDir() && d.Name() == ".git" {
@@ -420,44 +461,120 @@ func GrepTool() Tool {
 					if fi, err := d.Info(); err == nil && fi.Size() > maxGrepFileBytes {
 						return nil
 					}
-					raw, err := os.ReadFile(p)
-					if err != nil {
-						return nil
-					}
-					if bytes.IndexByte(raw, 0) != -1 {
-						return nil
-					}
-					for i, line := range strings.Split(string(raw), "\n") {
-						if re.MatchString(line) {
-							text := strings.TrimSpace(line)
-							if len(text) > 200 {
-								text = text[:200] + "…"
-							}
-							matches = append(matches, fmt.Sprintf("%s:%d: %s", slash, i+1, text))
-							if len(matches) >= maxGrepMatches {
-								truncated = true
-								return nil
-							}
-						}
-					}
+					files = append(files, p)
 					return nil
 				})
-			}
-			for _, r := range roots {
-				if err := walk(r); err != nil {
+				if err != nil {
 					return "", err
 				}
+			}
+			matches, capped := grepFilesParallel(ctx, re, files)
+			if len(matches) > maxGrepMatches {
+				matches = matches[:maxGrepMatches]
+				capped = true
 			}
 			if len(matches) == 0 {
 				return "no matches", nil
 			}
 			out := strings.Join(matches, "\n")
-			if truncated {
+			if capped {
 				out += fmt.Sprintf("\n...[showing first %d matches]", maxGrepMatches)
 			}
 			return truncate(out, maxToolOutput), nil
 		},
 	}
+}
+
+// grepFilesParallel reads and matches candidate files on a bounded worker
+// pool, returning matches sorted by file then line for deterministic output.
+// The second return value reports whether more matches existed past
+// maxGrepMatches: workers stop appending at the cap but keep scanning cheaply
+// enough to notice the overflow.
+// grepMatch is one match for deterministic file-then-line sorting.
+type grepMatch struct {
+	file string
+	line int
+	text string
+}
+
+func grepFilesParallel(ctx context.Context, re *regexp.Regexp, files []string) ([]string, bool) {
+	const workers = 8
+	root := getFileRoot()
+	var mu sync.Mutex
+	var matches []grepMatch
+	var capped bool
+	jobs := make(chan string)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for p := range jobs {
+				if ctx.Err() != nil {
+					continue
+				}
+				mu.Lock()
+				done := len(matches) >= maxGrepMatches && capped
+				mu.Unlock()
+				if done {
+					continue
+				}
+				raw, err := os.ReadFile(p)
+				if err != nil {
+					continue
+				}
+				if bytes.IndexByte(raw, 0) != -1 {
+					continue
+				}
+				rel, err := filepath.Rel(root, p)
+				if err != nil {
+					continue
+				}
+				slash := filepath.ToSlash(rel)
+				var local []grepMatch
+				for i, line := range strings.Split(string(raw), "\n") {
+					if !re.MatchString(line) {
+						continue
+					}
+					text := strings.TrimSpace(line)
+					if len(text) > 200 {
+						text = text[:200] + "…"
+					}
+					local = append(local, grepMatch{file: slash, line: i + 1, text: text})
+				}
+				if len(local) == 0 {
+					continue
+				}
+				mu.Lock()
+				room := maxGrepMatches - len(matches)
+				if room < 0 {
+					room = 0
+				}
+				if len(local) > room {
+					local = local[:room]
+					capped = true
+				}
+				matches = append(matches, local...)
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, f := range files {
+		jobs <- f
+	}
+	close(jobs)
+	wg.Wait()
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].file != matches[j].file {
+			return matches[i].file < matches[j].file
+		}
+		return matches[i].line < matches[j].line
+	})
+	out := make([]string, 0, len(matches))
+	for _, gm := range matches {
+		out = append(out, fmt.Sprintf("%s:%d: %s", gm.file, gm.line, gm.text))
+	}
+	return out, capped
 }
 
 // matchGlob matches rel (slash-separated) against a pattern with *, ?, [...]

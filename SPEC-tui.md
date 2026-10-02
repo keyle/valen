@@ -77,6 +77,9 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 
 - Transcript is padded conversation blocks separated by blank lines; no role
   prefixes. `You` (orange) and `✳ <model>` (green) head each block.
+  A blank session shows only a `No turns yet.` label; the AGENTS.md-first
+  behaviour lives in the default system prompt (`config.toml`), not as
+  intro text in the transcript.
 - Pending user message + working status render immediately on Enter, before
   `runTurn` completes. Spinner lives in the status bar so the transcript does
   not re-render every tick.
@@ -84,6 +87,12 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   call in order (running, then its first-line result), then the assistant
   reply as plain text (markdown applies on commit). The viewport stays pinned
   to the bottom so searches and thinking visibly arrive sequentially.
+- Open tool threads show the animated spinner frame plus `· running` in the
+  scrollback, so parallel batches read as concurrent work; finished threads
+  keep the usual line plus preview. The status line counts them
+  (`⏺ fetch… · 2 running`, `✓ search · 1 still running`). The scrollback
+  repaints at the ~10fps spinner tick only while threads are open; committed
+  turns stay cached.
 - Thinking renders dim/italic with a left rule, shown by default; ctrl+y or
   `/think` collapses to `✦ thinking (N chars)`.
 - Tool calls render one compact cyan line plus a dim first-line preview;
@@ -127,7 +136,13 @@ Rules:
 - Ctrl+C / Ctrl+D at idle quits. Ctrl+Q quits. MCP closers run on exit.
 - Text/thinking deltas render into the pending transcript throttled
   (~60ms, tail-capped) with the viewport pinned to the bottom; the committed
-  turn replaces the live block with the markdown reply.
+  turn replaces the live block with the markdown reply. Tool start/result
+  events share the same throttle (a parallel batch emits 2N events at once);
+  the committed `turnDoneMsg` always renders final state. Rendered committed
+  turns are cached append-only (keyed on turn count, width, thinking display,
+  model), so per-delta cost is the live pending block, not history depth.
+- Go plan quota refreshes share one in-flight fetch: the minute tick and the
+  post-turn refresh never overlap on slow networks.
 
 ## Architecture
 

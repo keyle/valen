@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // AskOption is one suggested answer to a model-driven question.
@@ -33,6 +34,21 @@ type AskQuestion struct {
 type AskFunc func(ctx context.Context, qs []AskQuestion) ([]string, error)
 
 var askPrompter AskFunc
+
+// askMu serializes interactive prompts so parallel tool calls cannot
+// interleave questions (single TUI overlay, single stdin).
+var askMu sync.Mutex
+
+// promptUser runs the active AskFunc under the prompt mutex. Parallel tool
+// batches stay parallel for non-interactive work and serialize only here.
+func promptUser(ctx context.Context, qs []AskQuestion) ([]string, error) {
+	askMu.Lock()
+	defer askMu.Unlock()
+	if askPrompter == nil {
+		return nil, errors.New("AskUserQuestion: no interactive prompter available")
+	}
+	return askPrompter(ctx, qs)
+}
 
 type askArgs struct {
 	Questions []AskQuestion `json:"questions"`
@@ -68,10 +84,7 @@ func AskUserQuestionTool() Tool {
 			if len(a.Questions) == 0 {
 				return "", errors.New("no questions provided")
 			}
-			if askPrompter == nil {
-				return "", errors.New("AskUserQuestion: no interactive prompter available")
-			}
-			answers, err := askPrompter(ctx, a.Questions)
+			answers, err := promptUser(ctx, a.Questions)
 			if err != nil {
 				return "", err
 			}

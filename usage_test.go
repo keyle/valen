@@ -128,4 +128,20 @@ func TestTUIUsageFetchCmd(t *testing.T) {
 	if !ok || msg.err != nil || msg.usage.Rolling.Percent != 7 {
 		t.Fatalf("usage msg: %+v ok=%v", msg, ok)
 	}
+	// A second fetch while one is in flight is a no-op (tick + post-turn
+	// refresh must not stack on slow networks); after the reply lands, a
+	// new fetch dispatches again.
+	m2 := newTestModel(t, testConfig(srv.URL))
+	m2.apiKey = "key"
+	m2.httpClient = srv.Client()
+	if m2.fetchUsageCmd() == nil {
+		t.Fatal("first fetch should dispatch")
+	}
+	if m2.fetchUsageCmd() != nil {
+		t.Fatal("overlapping fetch should be a no-op")
+	}
+	_, _ = m2.Update(usageMsg{usage: testGoUsage()})
+	if m2.fetchUsageCmd() == nil {
+		t.Fatal("fetch should dispatch again after the reply")
+	}
 }

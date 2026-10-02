@@ -258,8 +258,22 @@ type tuiModel struct {
 	pendingText     string
 	pendingThinking string
 	lastStreamFlush time.Time
-	notice          string
-	noticeErr       bool
+	// chatCache memoizes the rendered committed turns so streaming deltas
+	// only re-render the live pending block, not the whole history. Committed
+	// turns are immutable, so the prefix extends append-only; any key change
+	// (turn count reset, width, thinking toggle, model switch) rebuilds.
+	// Memory is one extra copy of the rendered transcript, proportional to
+	// history already held in session.Turns; /clear drops it.
+	chatCacheTurns int
+	chatCacheW     int
+	chatCacheThink bool
+	chatCacheModel string
+	chatCache      string
+	// usageInflight dedupes quota refreshes: the minute tick and the
+	// post-turn refresh share it, so slow networks never stack fetches.
+	usageInflight bool
+	notice        string
+	noticeErr     bool
 
 	showThink   bool
 	showMeta    bool
@@ -531,6 +545,18 @@ func (m *tuiModel) renderAsk() string {
 	return b.String()
 }
 
+// runningToolCount reports how many live tool calls have started but not
+// finished yet — the open threads.
+func (m *tuiModel) runningToolCount() int {
+	n := 0
+	for _, t := range m.pendingTools {
+		if !t.done {
+			n++
+		}
+	}
+	return n
+}
+
 // finishPendingTool marks the latest matching in-flight tool call done.
 func (m *tuiModel) finishPendingTool(name, output string) {
 	for i := len(m.pendingTools) - 1; i >= 0; i-- {
@@ -557,11 +583,14 @@ func (m *tuiModel) flushStream() {
 }
 
 // fetchUsageCmd reloads the Go plan quota off the UI thread. It is a no-op
-// (nil) when no HTTP client/key is configured, e.g. in model-only tests.
+// (nil) when no HTTP client/key is configured, e.g. in model-only tests, or
+// when a fetch is already in flight (the minute tick and post-turn refresh
+// would otherwise overlap on slow networks).
 func (m *tuiModel) fetchUsageCmd() tea.Cmd {
-	if m.httpClient == nil || m.apiKey == "" {
+	if m.httpClient == nil || m.apiKey == "" || m.usageInflight {
 		return nil
 	}
+	m.usageInflight = true
 	base := m.ctx
 	if base == nil {
 		base = context.Background()
@@ -1064,17 +1093,33 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			cmds = append(cmds, cmd)
+			// Keep the live transcript repainting at the ~10fps tick while
+			// a turn runs: open tool threads animate in the scrollback and
+			// the status spinner never goes stale between events. Committed
+			// turns are cached, so this is just the small pending block.
+			m.refreshViewport()
+			if m.mode == viewChat {
+				m.viewport.GotoBottom()
+			}
 		}
 		return m, tea.Batch(cmds...)
 
 	case toolEventMsg:
 		switch msg.kind {
 		case "tool_start":
-			m.toolStatus = "⏺ " + msg.text + "…"
 			m.pendingTools = append(m.pendingTools, pendingTool{name: msg.text, args: msg.args})
+			if n := m.runningToolCount(); n > 1 {
+				m.toolStatus = fmt.Sprintf("⏺ %s… · %d running", msg.text, n)
+			} else {
+				m.toolStatus = "⏺ " + msg.text + "…"
+			}
 		case "tool_result":
-			m.toolStatus = "✓ " + msg.text
 			m.finishPendingTool(msg.text, msg.output)
+			if n := m.runningToolCount(); n > 0 {
+				m.toolStatus = fmt.Sprintf("✓ %s · %d still running", msg.text, n)
+			} else {
+				m.toolStatus = "✓ " + msg.text
+			}
 		case "text_delta":
 			m.pendingText = appendStreamLine(m.pendingText, msg.text)
 			m.flushStream()
@@ -1086,13 +1131,14 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			m.toolStatus = msg.text
 		}
-		m.refreshViewport()
-		if m.mode == viewChat {
-			m.viewport.GotoBottom()
-		}
+		// Tool events share the delta throttle: a parallel batch emits 2N
+		// events at once and the committed turnDoneMsg always renders final
+		// state, so collapsing a burst into one render loses nothing.
+		m.flushStream()
 		return m, nil
 
 	case usageMsg:
+		m.usageInflight = false
 		if msg.err == nil {
 			u := msg.usage
 			m.goUsage = &u
@@ -1610,22 +1656,40 @@ func (m *tuiModel) renderViewportContent() string {
 
 func (m *tuiModel) renderChat() string {
 	w := m.viewWidth()
-	var blocks []string
 	if m.session == nil || len(m.session.Turns) == 0 {
+		m.chatCache, m.chatCacheTurns = "", 0
 		if m.pendingPrompt == "" {
-			return m.wrapPlain("Ask anything — read, write, edit, glob, grep, shell, web_search, web_fetch, AskUserQuestion, plus MCP tools.\n\nTip: on a blank session I check AGENTS.md in the workdir first and follow it.\n\nYour message appears instantly; thinking stays visible; tools show inline.\n\nTry /help for keys and commands.")
+			return emptyStyle.Render("No turns yet.")
 		}
 	}
-	if m.session != nil {
-		for i := range m.session.Turns {
-			blocks = append(blocks, m.renderTurn(&m.session.Turns[i], w))
-		}
+	committed := m.committedTurns(w)
+	if m.pendingPrompt == "" {
+		return committed
 	}
-	if m.pendingPrompt != "" {
-		blocks = append(blocks, m.renderPending(w))
+	if committed == "" {
+		return m.renderPending(w)
 	}
 	// Generous vertical padding between turns reads like a conversation.
-	return strings.Join(blocks, "\n\n\n")
+	return committed + "\n\n\n" + m.renderPending(w)
+}
+
+// committedTurns renders the immutable committed turns, extending the cached
+// prefix append-only. Delta flushes during streaming reuse the prefix, so
+// per-delta cost is the live pending block, not history.
+func (m *tuiModel) committedTurns(w int) string {
+	if m.session == nil {
+		return ""
+	}
+	n := len(m.session.Turns)
+	if m.chatCacheW != w || m.chatCacheThink != m.showThink || m.chatCacheModel != m.cfg.Model || m.chatCacheTurns > n {
+		m.chatCache, m.chatCacheTurns = "", 0
+	}
+	for m.chatCacheTurns < n {
+		m.chatCache += m.renderTurn(&m.session.Turns[m.chatCacheTurns], w) + "\n\n\n"
+		m.chatCacheTurns++
+	}
+	m.chatCacheW, m.chatCacheThink, m.chatCacheModel = w, m.showThink, m.cfg.Model
+	return strings.TrimSuffix(m.chatCache, "\n\n\n")
 }
 
 func (m *tuiModel) renderTurn(t *Turn, w int) string {
@@ -1711,6 +1775,24 @@ func (m *tuiModel) renderToolLine(tr ToolRecord) string {
 	return toolLineStyle.Width(cw).Render(breakLongWords(label, cw-2))
 }
 
+// renderPendingTool renders one live tool row. In-flight tools (no result
+// yet) carry the animated spinner frame so concurrent threads are visible
+// in the scrollback; finished tools render the usual line plus preview.
+func (m *tuiModel) renderPendingTool(t pendingTool) string {
+	if t.done {
+		return m.renderToolLine(ToolRecord{Name: t.name, Args: t.args, Output: t.output})
+	}
+	cw := m.contentWidth()
+	maxText := cw - 4
+	if maxText < 20 {
+		maxText = 20
+	}
+	args := truncateRunes(strings.TrimSpace(t.args), maxText)
+	label := fmt.Sprintf("%s  %s  %s · running", m.spinner.View(), t.name, args)
+	// Tool styles carry PaddingLeft(2), so break two short of cw.
+	return toolLineStyle.Width(cw).Render(breakLongWords(label, cw-2))
+}
+
 func (m *tuiModel) renderPending(w int) string {
 	bodyW := min(w-4, 120)
 	textW := bodyW - 2
@@ -1724,7 +1806,7 @@ func (m *tuiModel) renderPending(w int) string {
 		parts = append(parts, "")
 	}
 	for _, t := range m.pendingTools {
-		parts = append(parts, m.renderToolLine(ToolRecord{Name: t.name, Args: t.args, Output: t.output}))
+		parts = append(parts, m.renderPendingTool(t))
 	}
 	if len(m.pendingTools) > 0 {
 		parts = append(parts, "")
