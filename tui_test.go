@@ -756,3 +756,47 @@ func TestTUIEffortAliasAndClear(t *testing.T) {
 		t.Fatalf("thinking=%q", m.cfg.Thinking)
 	}
 }
+
+func TestTUIInputDefaults(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	if got := m.input.Height(); got != 3 {
+		t.Fatalf("default input height = %d, want 3", got)
+	}
+	if m.input.Cursor.Mode().String() != "blink" {
+		t.Fatalf("default cursor mode = %v, want blink", m.input.Cursor.Mode())
+	}
+}
+
+func TestTUIInputBlinkOffAndHeight(t *testing.T) {
+	f := false
+	m := newTestModel(t, Config{Model: "m", Input: InputConfig{Blink: &f, Height: 5}})
+	if got := m.input.Height(); got != 5 {
+		t.Fatalf("input height = %d, want 5", got)
+	}
+	if m.input.Cursor.Mode().String() != "static" {
+		t.Fatalf("cursor mode = %v, want static", m.input.Cursor.Mode())
+	}
+	if cmd := m.Init(); cmd == nil {
+		t.Fatalf("Init returned nil cmd")
+	}
+}
+
+func TestLoadConfigInputTable(t *testing.T) {
+	cfg, err := loadConfig(writeConfig(t, "model = \"m\"\n[input]\nblink = false\nheight = 5\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inputBlink(cfg) {
+		t.Fatalf("blink should be off")
+	}
+	if got := inputHeight(cfg); got != 5 {
+		t.Fatalf("height = %d, want 5", got)
+	}
+	cfg2, err := loadConfig(writeConfig(t, "model = \"m\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !inputBlink(cfg2) || inputHeight(cfg2) != 3 {
+		t.Fatalf("defaults: blink=%v height=%d, want true 3", inputBlink(cfg2), inputHeight(cfg2))
+	}
+}

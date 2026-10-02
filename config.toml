@@ -33,6 +33,10 @@ system = "You are a professional programming service. You are an MCP-capable thi
 # buffer = 30000                  # headroom below max_context_tokens; default 10% of the budget.
 # model = "glm-5.3-flash"         # cheap summarizer for the session model; empty means the session model itself.
 
+# [input]                         # chatbox chrome (TUI only): steady cursor + box height.
+# blink = true                    # block-cursor blink; set false for a steady cursor.
+# height = 3                      # input box height in lines; default 3.
+
 tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "grep"]
 # AskUserQuestion is always registered, so models can ask clarifying questions
 # in TUI and headless runs.

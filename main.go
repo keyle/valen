@@ -63,6 +63,7 @@ type Config struct {
 	Tools            []string         `toml:"tools"`
 	MCPServers       []MCPServer      `toml:"mcp"`
 	Compaction       CompactionConfig `toml:"compaction"`
+	Input            InputConfig      `toml:"input"`
 }
 
 // CompactionConfig mirrors the [compaction] table: summary-mode only,
@@ -74,6 +75,29 @@ type CompactionConfig struct {
 	KeepTokens int    `toml:"keep_tokens"`
 	Buffer     int    `toml:"buffer"`
 	Model      string `toml:"model"`
+}
+
+// InputConfig mirrors the [input] table: chatbox chrome (TUI only).
+// Blink nil means on; Height <= 0 means the 3-line default.
+type InputConfig struct {
+	Blink  *bool `toml:"blink"`
+	Height int   `toml:"height"`
+}
+
+// defaultInputHeight is the chatbox height in lines.
+const defaultInputHeight = 3
+
+// inputHeight is the chatbox height in lines, default 3.
+func inputHeight(cfg Config) int {
+	if cfg.Input.Height <= 0 {
+		return defaultInputHeight
+	}
+	return cfg.Input.Height
+}
+
+// inputBlink reports whether the chatbox block cursor blinks, default on.
+func inputBlink(cfg Config) bool {
+	return cfg.Input.Blink == nil || *cfg.Input.Blink
 }
 
 type MCPServer struct {
@@ -108,6 +132,7 @@ func loadConfig(path string) (Config, error) {
 		cfg.MaxContextTokens = defaultMaxContextTokens
 	}
 	cfg.Compaction = normalizeCompactionConfig(cfg.Compaction, cfg.MaxContextTokens)
+	cfg.Input.Height = inputHeight(cfg)
 	if cfg.SessionID == "" {
 		cfg.SessionID = newSessionID()
 	}
