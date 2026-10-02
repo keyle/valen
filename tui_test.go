@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -244,6 +245,122 @@ func TestTUICtrlShortcuts(t *testing.T) {
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatal("ctrl+q should return tea.Quit")
+	}
+}
+
+func TestTUIThinkingStepKeys(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.cfg.Model = "glm-5.3"
+	m.cfg.Thinking = "high"
+
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlCloseBracket}) // ctrl+] up
+	if m.cfg.Thinking != "max" {
+		t.Fatalf("ctrl+] should step high→max, got %q", m.cfg.Thinking)
+	}
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlCloseBracket}) // clamp at top
+	if m.cfg.Thinking != "max" || !strings.Contains(m.notice, "highest") {
+		t.Fatalf("clamp top: thinking=%q notice=%q", m.cfg.Thinking, m.notice)
+	}
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlBackslash}) // ctrl+\ down
+	if m.cfg.Thinking != "high" {
+		t.Fatalf("ctrl+\\ should step max→high, got %q", m.cfg.Thinking)
+	}
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlBackslash}) // high→default
+	if m.cfg.Thinking != "" {
+		t.Fatalf("step down should reach default, got %q", m.cfg.Thinking)
+	}
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlBackslash}) // clamp at bottom
+	if m.cfg.Thinking != "" || !strings.Contains(m.notice, "lowest") {
+		t.Fatalf("clamp bottom: thinking=%q notice=%q", m.cfg.Thinking, m.notice)
+	}
+}
+
+func TestTUIAskAndTranscriptWrap(t *testing.T) {
+	strip := func(s string) string {
+		re := regexp.MustCompile("\x1b\\[[0-9;]*m")
+		return re.ReplaceAllString(s, "")
+	}
+	maxLine := func(s string) int {
+		n := 0
+		for _, line := range strings.Split(s, "\n") {
+			if w := len([]rune(strings.TrimRight(line, " "))); w > n {
+				n = w
+			}
+		}
+		return n
+	}
+	m := newTestModel(t, testConfig("https://unused"))
+	m.viewport.Width = 50 // contentWidth 46
+	cw := m.contentWidth()
+	longWord := strings.Repeat("x", 200)
+	longSentence := strings.TrimSpace(strings.Repeat("word ", 60))
+
+	// Question overlay with long content.
+	picks := []map[int]bool{{}}
+	m.ask = &askState{
+		qs:      []AskQuestion{{Question: longSentence, Options: []AskOption{{Label: longSentence, Description: longSentence}}}},
+		picks:   picks,
+		ownText: make([]string, 1),
+		phase:   "pick",
+	}
+	if got := maxLine(strip(m.renderAsk())); got > cw {
+		t.Fatalf("ask overflows: max line %d > %d", got, cw)
+	}
+	m.ask = nil
+
+	// Committed turn with long thinking + unbroken token reply.
+	m.session.Turns = []Turn{{At: time.Now(), Prompt: longSentence, Thinking: longWord, Reply: longWord,
+		Tools: []ToolRecord{{Name: "shell", Args: longWord, Output: longWord}}, Usage: Usage{Total: 1}}}
+	if got := maxLine(strip(m.renderChat())); got > cw {
+		t.Fatalf("chat overflows: max line %d > %d", got, cw)
+	}
+
+	// Live pending block with long content.
+	m.pendingPrompt = longSentence
+	m.pendingThinking = longWord
+	m.pendingText = longWord
+	m.pendingTools = []pendingTool{{name: "shell", args: longWord, output: longWord}}
+	if got := maxLine(strip(m.renderChat())); got > cw {
+		t.Fatalf("pending overflows: max line %d > %d", got, cw)
+	}
+	m.pendingPrompt, m.pendingThinking, m.pendingText, m.pendingTools = "", "", "", nil
+
+	// Detail view with long content.
+	m.detailTitle = "Tool shell"
+	m.detailBody = longSentence + "\n" + longWord
+	if got := maxLine(strip(m.renderDetail())); got > cw {
+		t.Fatalf("detail overflows: max line %d > %d", got, cw)
+	}
+}
+
+func TestTUIAltEnterAndCtrlJInsertNewline(t *testing.T) {
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyEnter, Alt: true},
+		{Type: tea.KeyCtrlJ},
+	} {
+		m := newTestModel(t, testConfig("https://unused"))
+		m.input.SetValue("hello")
+		_, _ = m.handleKey(key)
+		if m.busy {
+			t.Fatalf("%v should not submit", key)
+		}
+		if m.input.Value() != "hello\n" {
+			t.Fatalf("%v should insert newline, got %q", key, m.input.Value())
+		}
+	}
+}
+
+func TestTUIDefaultSystemHintsAgents(t *testing.T) {
+	h := seedHistory(Config{})
+	if len(h) != 1 || h[0].Role != openai.ChatMessageRoleSystem {
+		t.Fatalf("blank config should seed one system message, got %+v", h)
+	}
+	if !strings.Contains(h[0].Content, "AGENTS.md") {
+		t.Fatalf("default system should hint AGENTS.md, got %q", h[0].Content)
+	}
+	m := newTestModel(t, testConfig("https://unused"))
+	if !strings.Contains(m.renderChat(), "AGENTS.md") {
+		t.Fatalf("empty chat should hint AGENTS.md:\n%s", m.renderChat())
 	}
 }
 

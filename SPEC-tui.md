@@ -186,7 +186,10 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
   `AvailableThinkingLevels`: effort models take `high`/`max` (sent as
   `reasoning_effort`), toggle models take `none`/`high` (sent as
   `enable_thinking`). Empty clears back to the provider default.
+  Ctrl+] steps up, Ctrl+\ steps down (ctrl+[ is esc in the terminal).
 - Tools always visible inline (compact); full output via Tools view.
+- Transcript, thinking, question and detail content wraps to the viewport
+  width (long single tokens are force-broken) so nothing runs off-screen.
 
 ## Model switching
 
@@ -228,11 +231,12 @@ ready, input focused. `/clear` resets intentionally.
 | Enter | send turn | open selected row |
 | Esc | cancel run / clear input / back | back to chat |
 | Ctrl+C / Ctrl+D | cancel (busy) / quit (idle) | quit |
-| Ctrl+J | newline in input | — |
+| Ctrl+J / Alt+Enter / Shift+Enter | newline in input (shift+enter where the terminal supports it) | — |
 | PgUp/PgDn | scroll transcript | scroll view |
 | Ctrl+G | help | help |
 | Ctrl+R / Ctrl+T / Ctrl+X | history / tools / errors | same |
 | Ctrl+Y | toggle thinking display | toggle thinking display |
+| Ctrl+] / Ctrl+\ | thinking level up / down (ctrl+[ is esc in the terminal, so ctrl+\ steps down) | same |
 | Ctrl+O | toggle status details | toggle status details |
 | Ctrl+P | model picker | model picker |
 | Ctrl+S | save transcript | save transcript |

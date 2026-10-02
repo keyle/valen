@@ -285,11 +285,16 @@ type tuiModel struct {
 
 func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session *Session) *tuiModel {
 	ta := textarea.New()
-	ta.Placeholder = "Type a message…  (/help for commands)"
+	ta.Placeholder = "Type a message…  (shift+enter newline · /help)"
 	ta.ShowLineNumbers = false
 	ta.SetWidth(78)
 	ta.SetHeight(3)
 	ta.CharLimit = 0
+	// No partial background: the default CursorLine background only shades
+	// the active line, leaving the rest of the box unshaded. Clear it so the
+	// whole input shares one flat background.
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
 	ta.Focus()
 
 	vp := viewport.New(80, 20)
@@ -310,11 +315,7 @@ func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session 
 }
 
 func seedHistory(cfg Config) []openai.ChatCompletionMessage {
-	var history []openai.ChatCompletionMessage
-	if cfg.System != "" {
-		history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: cfg.System})
-	}
-	return history
+	return []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleSystem, Content: effectiveSystem(cfg)}}
 }
 
 func (m *tuiModel) Init() tea.Cmd {
@@ -477,14 +478,15 @@ func (m *tuiModel) renderAsk() string {
 		return ""
 	}
 	a := m.ask
+	cw := m.contentWidth()
 	if a.phase == "review" {
 		var b strings.Builder
-		b.WriteString(metaStyle.Render("Confirm your answers — enter submits · esc cancels") + "\n\n")
+		b.WriteString(m.wrapPlain("Confirm your answers — enter submits · esc cancels") + "\n\n")
 		answers := m.askAnswers()
 		for i, q := range a.qs {
-			fmt.Fprintf(&b, "%s\n  → %s\n\n", q.Question, answers[i])
+			b.WriteString(m.wrapPlain(q.Question) + "\n" + m.wrapPlain("  → "+answers[i]) + "\n\n")
 		}
-		b.WriteString("\n  enter = submit · esc = cancel")
+		b.WriteString(m.wrapPlain("enter = submit · esc = cancel"))
 		return b.String()
 	}
 	q := a.qs[a.idx]
@@ -496,9 +498,9 @@ func (m *tuiModel) renderAsk() string {
 	if q.MultiSelect {
 		b.WriteString(" · multi-select (space toggles)")
 	}
-	b.WriteString("\n\n" + q.Question + "\n\n")
+	b.WriteString("\n\n" + m.wrapPlain(q.Question) + "\n\n")
 	if a.phase == "own" {
-		fmt.Fprintf(&b, "Type your answer: %s▏\n\n  enter keeps it · esc back", a.own)
+		b.WriteString(m.wrapPlain(fmt.Sprintf("Type your answer: %s▏\n\n  enter keeps it · esc back", a.own)))
 		return b.String()
 	}
 	for j, o := range q.Options {
@@ -509,21 +511,22 @@ func (m *tuiModel) renderAsk() string {
 		if q.MultiSelect {
 			row = "[" + map[bool]string{true: "x", false: " "}[a.picks[a.idx][j]] + "] " + row
 		}
+		row = breakLongWords(row, cw-2)
 		if j == a.cursor {
-			b.WriteString(selectedStyle.Render(row) + "\n")
+			b.WriteString(selectedStyle.Width(cw).Render(row) + "\n")
 		} else {
-			b.WriteString("  " + row + "\n")
+			b.WriteString(m.wrapPlain("  "+row) + "\n")
 		}
 	}
-	ownRow := fmt.Sprintf("%d. Type your own answer", len(q.Options)+1)
+	ownRow := breakLongWords(fmt.Sprintf("%d. Type your own answer", len(q.Options)+1), cw-2)
 	if a.cursor == len(q.Options) {
-		b.WriteString(selectedStyle.Render(ownRow) + "\n")
+		b.WriteString(selectedStyle.Width(cw).Render(ownRow) + "\n")
 	} else {
-		b.WriteString("  " + ownRow + "\n")
+		b.WriteString(m.wrapPlain("  "+ownRow) + "\n")
 	}
-	b.WriteString("\n  ↑↓/jk move · enter select · esc cancel")
+	b.WriteString(m.wrapPlain("↑↓/jk move · enter select · esc cancel") + "\n")
 	if q.MultiSelect {
-		b.WriteString(" · space toggles")
+		b.WriteString(m.wrapPlain("space toggles"))
 	}
 	return b.String()
 }
@@ -644,6 +647,72 @@ func truncatePlain(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// truncateRunes is truncatePlain but rune-safe, for wrapping display lines
+// that may contain multibyte text.
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	if n <= 0 {
+		return "…"
+	}
+	return string(r[:n]) + "…"
+}
+
+// contentWidth is the usable text width for transcript and overlay blocks:
+// the viewport width minus chrome, clamped to a readable range.
+func (m *tuiModel) contentWidth() int {
+	w := m.viewWidth() - 4
+	if w > 120 {
+		w = 120
+	}
+	if w < 20 {
+		w = 20
+	}
+	return w
+}
+
+// breakLongWords force-breaks single words (URLs, hashes, long tokens) that
+// exceed width, so they cannot push a line off-screen. Normal word wrapping
+// is left to the lipgloss Width styles applied at render time.
+func breakLongWords(s string, width int) string {
+	if width < 10 {
+		width = 10
+	}
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		if len([]rune(line)) <= width {
+			continue
+		}
+		words := strings.Split(line, " ")
+		var b strings.Builder
+		for j, w := range words {
+			if j > 0 {
+				b.WriteByte(' ')
+			}
+			r := []rune(w)
+			for len(r) > width {
+				b.WriteString(string(r[:width]))
+				b.WriteByte('\n')
+				r = r[width:]
+			}
+			b.WriteString(string(r))
+		}
+		lines[i] = b.String()
+	}
+	return strings.Join(lines, "\n")
+}
+
+// wrapPlain wraps preformatted/plain text to the transcript width, for
+// scrollback, question and detail views that render without markdown.
+func (m *tuiModel) wrapPlain(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return s
+	}
+	return lipgloss.NewStyle().Width(m.contentWidth()).Render(breakLongWords(s, m.contentWidth()))
 }
 
 // show switches overlay modes and keeps focus/viewport consistent.
@@ -860,18 +929,14 @@ func (m *tuiModel) applyModelSwitch(id string) {
 	m.show(viewChat)
 }
 
-// applyThinkingSwitch sets the reasoning level for the current model,
-// or clears it back to the provider default. "default", "auto" and "off"
-// all clear.
-func (m *tuiModel) applyThinkingSwitch(level string) {
+// setThinkingLevel validates, persists and announces level, preserving the
+// current view mode. It reports whether the level changed.
+func (m *tuiModel) setThinkingLevel(level string) bool {
 	level = strings.ToLower(strings.TrimSpace(level))
-	if level == "default" || level == "auto" || level == "off" || level == "-" {
-		level = ""
-	}
 	if !validThinkingLevel(m.cfg.Model, level) {
 		m.notice = fmt.Sprintf("Thinking %q is not available on %s (try: %s).", level, m.cfg.Model, strings.Join(AvailableThinkingLevels(m.cfg.Model), ", "))
 		m.noticeErr = true
-		return
+		return false
 	}
 	m.cfg.Thinking = level
 	display := level
@@ -891,7 +956,56 @@ func (m *tuiModel) applyThinkingSwitch(level string) {
 		m.notice = msg + " (session only)"
 		m.noticeErr = false
 	}
+	return true
+}
+
+// applyThinkingSwitch sets the reasoning level for the current model,
+// or clears it back to the provider default. "default", "auto" and "off"
+// all clear.
+func (m *tuiModel) applyThinkingSwitch(level string) {
+	level = strings.ToLower(strings.TrimSpace(level))
+	if level == "default" || level == "auto" || level == "off" || level == "-" {
+		level = ""
+	}
+	if !m.setThinkingLevel(level) {
+		return
+	}
 	m.show(viewChat)
+}
+
+// stepThinking moves the thinking level one step down (-) or up (+) through
+// the provider-default plus AvailableThinkingLevels, ordered low to high,
+// clamping at the ends. ctrl+[ is indistinguishable from esc in the terminal
+// (both arrive as "esc"), so ctrl+\ steps down while ctrl+] steps up.
+func (m *tuiModel) stepThinking(delta int) {
+	levels := append([]string{""}, AvailableThinkingLevels(m.cfg.Model)...)
+	idx := 0
+	for i, l := range levels {
+		if l == m.cfg.Thinking {
+			idx = i
+			break
+		}
+	}
+	next := idx + delta
+	if next < 0 {
+		next = 0
+	}
+	if next >= len(levels) {
+		next = len(levels) - 1
+	}
+	if next == idx {
+		if delta > 0 {
+			m.notice = "Thinking already at highest (" + effortLabel(levels[idx]) + ")."
+		} else {
+			m.notice = "Thinking already at lowest (" + effortLabel(levels[idx]) + ")."
+		}
+		m.noticeErr = false
+		m.refreshViewport()
+		return
+	}
+	if m.setThinkingLevel(levels[next]) {
+		m.refreshViewport()
+	}
 }
 
 func (m *tuiModel) exportTranscript() (string, bool) {
@@ -1113,6 +1227,12 @@ func isCancel(err error) bool {
 	return strings.Contains(s, "cancel") || strings.Contains(s, "context canceled")
 }
 
+// insertInputNewline adds a line break without submitting, shared by the
+// modifier-newline keys (shift+enter / alt+enter / ctrl+j).
+func (m *tuiModel) insertInputNewline() {
+	m.input.InsertRune('\n')
+}
+
 func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	s := msg.String()
 
@@ -1192,6 +1312,12 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+q":
 		return m, tea.Quit
+	case "ctrl+]":
+		m.stepThinking(+1)
+		return m, nil
+	case "ctrl+\\":
+		m.stepThinking(-1)
+		return m, nil
 	}
 
 	if m.ask != nil {
@@ -1219,8 +1345,11 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// Keep the spinner ticking while the turn runs.
 		return m, tea.Batch(cmd, m.spinner.Tick)
-	case "ctrl+j":
-		m.input.InsertRune('\n')
+	case "shift+enter", "alt+enter", "ctrl+j":
+		// shift+enter is indistinguishable from enter on legacy terminals
+		// (both arrive as "enter"), so alt+enter and ctrl+j are the working
+		// modifier-newlines today; shift+enter stays for Kitty-capable ones.
+		m.insertInputNewline()
 		return m, nil
 	case "pgup", "pgdown", "ctrl+u", "ctrl+d":
 		var vcmd tea.Cmd
@@ -1484,7 +1613,7 @@ func (m *tuiModel) renderChat() string {
 	var blocks []string
 	if m.session == nil || len(m.session.Turns) == 0 {
 		if m.pendingPrompt == "" {
-			return emptyStyle.Render("Ask anything — read, write, edit, glob, grep, shell, web_search, web_fetch, AskUserQuestion, plus MCP tools.\n\nYour message appears instantly; thinking stays visible; tools show inline.\n\nTry /help for keys and commands.")
+			return m.wrapPlain("Ask anything — read, write, edit, glob, grep, shell, web_search, web_fetch, AskUserQuestion, plus MCP tools.\n\nTip: on a blank session I check AGENTS.md in the workdir first and follow it.\n\nYour message appears instantly; thinking stays visible; tools show inline.\n\nTry /help for keys and commands.")
 		}
 	}
 	if m.session != nil {
@@ -1501,15 +1630,19 @@ func (m *tuiModel) renderChat() string {
 
 func (m *tuiModel) renderTurn(t *Turn, w int) string {
 	var parts []string
+	// bodyW is the style width; textW leaves room for the left border plus
+	// padding so force-broken words still fit inside the chrome.
+	bodyW := min(w-4, 120)
+	textW := bodyW - 2
 
 	head := userHeaderStyle.Render("You") + "  " + metaStyle.Render(t.At.Format("15:04"))
-	body := userBodyStyle.Width(min(w-4, 120)).Render(t.Prompt)
+	body := userBodyStyle.Width(bodyW).Render(breakLongWords(t.Prompt, textW))
 	parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, head, "", body))
 
 	if t.Thinking != "" {
 		if m.showThink {
 			thHead := thinkHeaderStyle.Render("✦ thinking")
-			thBody := thinkBodyStyle.Width(min(w-4, 120)).Render(t.Thinking)
+			thBody := thinkBodyStyle.Width(bodyW).Render(breakLongWords(t.Thinking, textW))
 			parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, thHead, thBody))
 		} else {
 			parts = append(parts, thinkHeaderStyle.Render(fmt.Sprintf("✦ thinking (%d chars) — ctrl+y to expand", len(t.Thinking))))
@@ -1522,12 +1655,12 @@ func (m *tuiModel) renderTurn(t *Turn, w int) string {
 
 	if t.Reply != "" {
 		aHead := asstHeadStyle.Render("✳ " + m.cfg.Model)
-		aBody := asstBodyStyle.Render(m.renderMarkdown(t.Reply))
+		aBody := asstBodyStyle.Width(bodyW).Render(breakLongWords(m.renderMarkdown(t.Reply), bodyW-1))
 		parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, aHead, aBody))
 	}
 
 	if t.Error != nil {
-		parts = append(parts, errorTitleSty.Render("✗ "+t.Error.Title)+"\n"+metaStyle.Render("  ctrl+x for details"))
+		parts = append(parts, errorTitleSty.Width(min(w-4, 120)).Render(breakLongWords("✗ "+t.Error.Title, min(w-6, 118)))+"\n"+metaStyle.Render("  ctrl+x for details"))
 	}
 
 	if t.Usage.Total > 0 {
@@ -1537,52 +1670,57 @@ func (m *tuiModel) renderTurn(t *Turn, w int) string {
 }
 
 // renderTurnFull always expands thinking and tool output for recall views.
+// Content is wrapped to the transcript width so detail views never run
+// off-screen.
 func (m *tuiModel) renderTurnFull(t *Turn) string {
 	var b strings.Builder
-	b.WriteString("You · " + t.At.Format("15:04:05") + "\n" + t.Prompt + "\n\n")
+	b.WriteString(m.wrapPlain("You · "+t.At.Format("15:04:05")+"\n"+t.Prompt) + "\n\n")
 	if t.Thinking != "" {
-		b.WriteString("✦ thinking\n" + t.Thinking + "\n\n")
+		b.WriteString(m.wrapPlain("✦ thinking\n"+t.Thinking) + "\n\n")
 	}
 	for _, tr := range t.Tools {
-		b.WriteString(fmt.Sprintf("⏺ %s\nargs: %s\n%s\n\n", tr.Name, tr.Args, tr.Output))
+		b.WriteString(m.wrapPlain(fmt.Sprintf("⏺ %s\nargs: %s\n%s", tr.Name, tr.Args, tr.Output)) + "\n\n")
 	}
 	if t.Error != nil {
-		b.WriteString("✗ " + t.Error.Title + "\n" + t.Error.Details + "\n\n")
+		b.WriteString(m.wrapPlain("✗ "+t.Error.Title+"\n"+t.Error.Details) + "\n\n")
 	}
 	if t.Reply != "" {
-		b.WriteString(t.Reply + "\n")
+		b.WriteString(m.wrapPlain(t.Reply) + "\n")
 	}
 	return b.String()
 }
 
 func (m *tuiModel) renderToolLine(tr ToolRecord) string {
-	args := strings.TrimSpace(tr.Args)
-	if len(args) > 90 {
-		args = args[:90] + "…"
+	cw := m.contentWidth()
+	maxText := cw - 4
+	if maxText < 20 {
+		maxText = 20
 	}
+	args := truncateRunes(strings.TrimSpace(tr.Args), maxText)
 	label := fmt.Sprintf("⏺ %s  %s", tr.Name, args)
+	// Tool styles carry PaddingLeft(2), so break two short of cw.
 	if tr.Err != "" || strings.HasPrefix(strings.TrimSpace(tr.Output), "error:") {
-		return toolErrStyle.Render("✗ " + label)
+		return toolErrStyle.Width(cw).Render(breakLongWords("✗ "+label, cw-2))
 	}
 	out := strings.TrimSpace(tr.Output)
 	if out != "" {
 		first := strings.SplitN(out, "\n", 2)[0]
-		if len(first) > 90 {
-			first = first[:90] + "…"
-		}
-		return toolLineStyle.Render(label) + "\n" + toolDimStyle.Render("→ "+first)
+		first = truncateRunes(first, maxText)
+		return toolLineStyle.Width(cw).Render(breakLongWords(label, cw-2)) + "\n" + toolDimStyle.Width(cw).Render(breakLongWords("→ "+first, cw-2))
 	}
-	return toolLineStyle.Render(label)
+	return toolLineStyle.Width(cw).Render(breakLongWords(label, cw-2))
 }
 
 func (m *tuiModel) renderPending(w int) string {
+	bodyW := min(w-4, 120)
+	textW := bodyW - 2
 	head := userHeaderStyle.Render("You") + "  " + metaStyle.Render("now")
-	body := userBodyStyle.Width(min(w-4, 120)).Render(m.pendingPrompt)
+	body := userBodyStyle.Width(bodyW).Render(breakLongWords(m.pendingPrompt, textW))
 	parts := []string{head, "", body, ""}
 
 	if m.pendingThinking != "" && m.showThink {
 		parts = append(parts, thinkHeaderStyle.Render("✦ thinking"))
-		parts = append(parts, thinkBodyStyle.Width(min(w-4, 120)).Render(m.pendingThinking))
+		parts = append(parts, thinkBodyStyle.Width(bodyW).Render(breakLongWords(m.pendingThinking, textW)))
 		parts = append(parts, "")
 	}
 	for _, t := range m.pendingTools {
@@ -1593,7 +1731,7 @@ func (m *tuiModel) renderPending(w int) string {
 	}
 	if m.pendingText != "" {
 		parts = append(parts, asstHeadStyle.Render("✳ "+m.cfg.Model))
-		parts = append(parts, asstBodyStyle.Render(streamTail(m.pendingText)))
+		parts = append(parts, asstBodyStyle.Width(bodyW).Render(breakLongWords(streamTail(m.pendingText), bodyW-1)))
 		parts = append(parts, "")
 	}
 
@@ -1705,13 +1843,15 @@ func (m *tuiModel) renderHistoryList() string {
 	}
 	var b strings.Builder
 	b.WriteString(metaStyle.Render("History — enter opens · esc back") + "\n\n")
+	cw := m.contentWidth()
 	for i, it := range items {
 		line := fmt.Sprintf("%2d  %s  %s", i+1, it.when.Format("15:04:05"), it.label)
 		if it.tokens > 0 {
 			line += fmt.Sprintf("  (%d tok)", it.tokens)
 		}
+		line = truncateRunes(line, cw)
 		if i == m.cursor {
-			b.WriteString(selectedStyle.Render(line) + "\n")
+			b.WriteString(selectedStyle.Width(cw).Render(line) + "\n")
 		} else {
 			b.WriteString("  " + line + "\n")
 		}
@@ -1745,14 +1885,16 @@ func (m *tuiModel) renderToolsList() string {
 	}
 	var b strings.Builder
 	b.WriteString(metaStyle.Render("Tools — enter opens full output · esc back") + "\n\n")
+	cw := m.contentWidth()
 	for i, it := range items {
 		status := "ok"
 		if strings.HasPrefix(strings.TrimSpace(it.record.Output), "error:") {
 			status = "error"
 		}
-		line := fmt.Sprintf("%2d  %s  %s  [%s]", i+1, it.record.Name, truncatePlain(it.record.Args, 48), status)
+		line := fmt.Sprintf("%2d  %s  %s  [%s]", i+1, it.record.Name, truncateRunes(it.record.Args, 48), status)
+		line = truncateRunes(line, cw)
 		if i == m.cursor {
-			b.WriteString(selectedStyle.Render(line) + "\n")
+			b.WriteString(selectedStyle.Width(cw).Render(line) + "\n")
 		} else {
 			b.WriteString("  " + line + "\n")
 		}
@@ -1786,11 +1928,12 @@ func (m *tuiModel) renderErrorsList() string {
 	}
 	var b strings.Builder
 	b.WriteString(metaStyle.Render("Errors — enter opens details · esc back") + "\n\n")
+	cw := m.contentWidth()
 	for i, ti := range idx {
 		t := m.session.Turns[ti]
-		line := fmt.Sprintf("%2d  %s  %s", i+1, t.At.Format("15:04:05"), t.Error.Title)
+		line := truncateRunes(fmt.Sprintf("%2d  %s  %s", i+1, t.At.Format("15:04:05"), t.Error.Title), cw)
 		if i == m.cursor {
-			b.WriteString(selectedStyle.Render(line) + "\n")
+			b.WriteString(selectedStyle.Width(cw).Render(line) + "\n")
 		} else {
 			b.WriteString("  " + line + "\n")
 		}
@@ -1814,6 +1957,7 @@ func (m *tuiModel) renderModelsList() string {
 		title = fmt.Sprintf("Models matching %q — enter switches · esc back", m.modelFilter)
 	}
 	b.WriteString(metaStyle.Render(title) + "\n\n")
+	cw := m.contentWidth()
 	for i, c := range m.modelChoices {
 		line := c.id
 		if c.current {
@@ -1822,8 +1966,9 @@ func (m *tuiModel) renderModelsList() string {
 		if c.transport != "chat" {
 			line += fmt.Sprintf("  [/%s]", c.transport)
 		}
+		line = truncateRunes(line, cw-4)
 		if i == m.cursor {
-			b.WriteString(selectedStyle.Render(fmt.Sprintf("%2d  %s", i+1, line)) + "\n")
+			b.WriteString(selectedStyle.Width(cw).Render(fmt.Sprintf("%2d  %s", i+1, line)) + "\n")
 		} else {
 			b.WriteString(fmt.Sprintf("  %2d  %s\n", i+1, line))
 		}
@@ -1851,13 +1996,14 @@ func (m *tuiModel) renderEffortList() string {
 	}
 	var b strings.Builder
 	b.WriteString(metaStyle.Render(fmt.Sprintf("Thinking for %s — enter sets · esc back", m.cfg.Model)) + "\n\n")
+	cw := m.contentWidth()
 	for i, l := range m.effortLevels {
-		line := effortLabel(l)
+		line := truncateRunes(effortLabel(l), cw-4)
 		if l == m.cfg.Thinking {
 			line += "  ● current"
 		}
 		if i == m.cursor {
-			b.WriteString(selectedStyle.Render(fmt.Sprintf("%2d  %s", i+1, line)) + "\n")
+			b.WriteString(selectedStyle.Width(cw).Render(fmt.Sprintf("%2d  %s", i+1, line)) + "\n")
 		} else {
 			b.WriteString(fmt.Sprintf("  %2d  %s\n", i+1, line))
 		}
@@ -1866,12 +2012,12 @@ func (m *tuiModel) renderEffortList() string {
 }
 
 func (m *tuiModel) renderHelp() string {
-	return emptyStyle.Render(`Conversation first: your message shows instantly, the reply streams into the same thread.
+	return emptyStyle.Width(m.contentWidth()).Render(`Conversation first: your message shows instantly, the reply streams into the same thread.
 
 Keys
-  enter send · ctrl+j newline · esc cancel/back · pgup/pgdn scroll
+  enter send · shift+enter/alt+enter/ctrl+j newline · esc cancel/back · pgup/pgdn scroll
   ctrl+g help · ctrl+r history · ctrl+t tools · ctrl+x errors · ctrl+y thinking
-  ctrl+o details · ctrl+p model · ctrl+s save · ctrl+q quit · ctrl+c cancel/quit
+  ctrl+o details · ctrl+p model · ctrl+] / ctrl+\ thinking up/down · ctrl+s save · ctrl+q quit · ctrl+c cancel/quit
   in lists: ↑↓ move · enter open · esc back
 
 Commands
@@ -1887,13 +2033,14 @@ minute and after every turn: dim normally, yellow past 80%, pink at the cap.
 Models persist to config.toml, so the last switch sticks across runs.
 Thinking levels depend on the model: effort models (glm, deepseek, …) take
 high/max, toggle models (kimi, mimo, qwen, …) take none/high.
-Unset thinking means the provider default.
+Unset thinking means the provider default. ctrl+] steps up, ctrl+\ steps
+down (ctrl+[ is esc in the terminal, so ctrl+\ stands in).
 
 Thinking is shown by default (ctrl+y hides). Tools render inline; ctrl+t shows full output.`) + "\n"
 }
 
 func (m *tuiModel) renderDetail() string {
-	return metaStyle.Render("‹ "+m.detailTitle+" · esc back ›") + "\n\n" + m.detailBody + "\n"
+	return m.wrapPlain("‹ "+m.detailTitle+" · esc back ›") + "\n\n" + m.wrapPlain(m.detailBody) + "\n"
 }
 
 func renderSessionFileText(m *tuiModel, path string) string {

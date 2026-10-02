@@ -9,7 +9,9 @@ thinking = "high"
 base_url = "https://opencode.ai/zen/go/v1"
 api_key_env = "OPENCODE_GO_API_KEY"
 # session_id = "ses-stable-id"   # optional, generated per run when omitted
-# system = "You are a terse assistant."
+# system = "You are a terse assistant."   # optional, overrides the built-in default
+                                # (helpful assistant, MCP-capable thinking agent with fast
+                                # tool loopback, checks AGENTS.md first on blank sessions).
 # max_rounds = unlimited by default, or an int like 8.
 max_rounds = 9999
 # temperature = 0.2               # omit entirely for provider defaults

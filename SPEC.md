@@ -48,7 +48,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `base_url` | string | `https://opencode.ai/zen/go/v1` | API base; the transport path (`/chat/completions`, `/messages`, `/responses`) is appended per model |
 | `api_key_env` | string | `OPENCODE_GO_API_KEY` | Name of the env var holding the key, not the key itself |
 | `session_id` | string | `ses-<unixnano>` | Stable per conversation; sent as `x-opencode-session` |
-| `system` | string | empty | System prompt; omitted from the request when empty |
+| `system` | string | built-in default | System prompt; empty uses the built-in default (helpful assistant, MCP-capable thinking agent with fast tool loopback, check AGENTS.md first). Set to override |
 | `max_rounds` | int | `8` | Hard stop on tool-loop iterations |
 | `temperature` | float | unset | Pointer semantics: unset omits the field, `0.0` sends zero |
 | `tools` | string[] | empty | Subset of `shell`, `web_search`, `web_fetch`, `read`, `write`, `edit`, `glob`, `grep`, `AskUserQuestion`. `AskUserQuestion` is also registered automatically when absent, so model-driven questions work in every frontend |

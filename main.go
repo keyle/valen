@@ -25,7 +25,20 @@ const (
 	defaultAPIKeyEnv  = "OPENCODE_GO_API_KEY"
 	defaultMaxRounds  = 9999
 	userAgent         = "mods/1.0"
+	// defaultSystem applies when `system` is unset in config.toml. It keeps
+	// the agent MCP-capable with a fast tool loopback and points blank
+	// sessions at AGENTS.md first.
+	defaultSystem = "You are a helpful assistant. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it."
 )
+
+// effectiveSystem returns the configured system prompt, or the built-in
+// default when none is set.
+func effectiveSystem(cfg Config) string {
+	if strings.TrimSpace(cfg.System) != "" {
+		return cfg.System
+	}
+	return defaultSystem
+}
 
 // Config mirrors config.toml. See SPEC.md for the full schema.
 type Config struct {
@@ -472,9 +485,7 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 // chat is the headless one-shot path: one prompt, one answer, stdout.
 func chat(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, prompt string, stdout, stderr io.Writer) error {
 	history := make([]openai.ChatCompletionMessage, 0, 8)
-	if cfg.System != "" {
-		history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: cfg.System})
-	}
+	history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: effectiveSystem(cfg)})
 	history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: prompt})
 
 	onEvent := func(ev Event) {
