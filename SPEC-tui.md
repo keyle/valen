@@ -198,10 +198,14 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
 - Shown by default, dim + indented. Ctrl+Y / `/think` toggles the display.
 - `/effort [level]` (`/thinking` alias) sets the reasoning level sent to the
   provider for the current model — not the display. Levels come from
-  `AvailableThinkingLevels`: effort models take `high`/`max` (sent as
-  `reasoning_effort`), toggle models take `none`/`high` (sent as
-  `enable_thinking`). Empty clears back to the provider default.
-  Ctrl+] steps up, Ctrl+\ steps down (ctrl+[ is esc in the terminal).
+  `AvailableThinkingLevels` (fixed well-known table per models.dev, plus a
+  disk cache at `$XDG_DATA_HOME/mods/thinking_levels.json`): muse-spark
+  `minimal`/`low`/`medium`/`high`/`xhigh`, gpt/grok `low`…`max`, glm/deepseek
+  `low`/`high`/`max` or `high`/`max`, kimi-k3 `max` only, toggle models
+  `none`/`high`, fixed models none. Empty clears back to the provider
+  default. Ctrl+t cycles low→high and wraps to low (ctrl+[ is esc in the
+  terminal, so up/down chords cannot work). Unknown models probe with a bogus
+  effort on switch and learn from any 400 listing valid levels.
 - Tools always visible inline (compact); full output via Tools view.
 - Transcript, thinking, question and detail content wraps to the viewport
   width (long single tokens are force-broken) so nothing runs off-screen.
@@ -249,9 +253,9 @@ ready, input focused. `/clear` resets intentionally.
 | Ctrl+J / Alt+Enter / Shift+Enter | newline in input (shift+enter where the terminal supports it) | — |
 | PgUp/PgDn | scroll transcript | scroll view |
 | Ctrl+G | help | help |
-| Ctrl+R / Ctrl+T / Ctrl+X | history / tools / errors | same |
+| Ctrl+R / Ctrl+L / Ctrl+X | history / tools / errors | same |
 | Ctrl+Y | toggle thinking display | toggle thinking display |
-| Ctrl+] / Ctrl+\ | thinking level up / down (ctrl+[ is esc in the terminal, so ctrl+\ steps down) | same |
+| Ctrl+T | thinking level cycle low→high, wraps to low | same |
 | Ctrl+O | toggle status details | toggle status details |
 | Ctrl+P | model picker | model picker |
 | Ctrl+S | save transcript | save transcript |

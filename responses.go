@@ -290,6 +290,9 @@ func runResponsesTurn(ctx context.Context, cfg Config, apiKey string, hc *http.C
 	tools := registry.ResponsesTools()
 	reasoning := responsesReasoning(cfg.Thinking)
 	for round := 0; round < cfg.MaxRounds; round++ {
+		if err := checkContextBudget(cfg, *history); err != nil {
+			return openai.ChatCompletionMessage{}, usage, err
+		}
 		instructions, input := splitResponsesInput(*history)
 		req := responsesRequest{
 			Model:        cfg.Model,
@@ -336,6 +339,9 @@ func runResponsesTurn(ctx context.Context, cfg Config, apiKey string, hc *http.C
 			usage.TotalTokens += roundUsage.TotalTokens
 		}
 
+		if name := doomLoopTool(*history, msg.ToolCalls); name != "" {
+			return openai.ChatCompletionMessage{}, usage, doomLoopError(name)
+		}
 		*history = append(*history, msg)
 		if len(msg.ToolCalls) == 0 {
 			return msg, usage, nil

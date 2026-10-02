@@ -26,6 +26,8 @@ func TestFriendlyError(t *testing.T) {
 		{"no key", errors.New("OPENCODE_GO_API_KEY is not set"), "No API key"},
 		{"empty", errors.New("api: empty choices in response"), "empty reply"},
 		{"rounds", errors.New("stopped after 8 rounds without a final answer"), "stopped after 8 rounds"},
+		{"doom", doomLoopError("read"), "repeated the same tool call"},
+		{"budget", errors.New("context too large: est. 999999 tokens exceeds budget 200000"), "context budget"},
 		{"network", errors.New("dial tcp: connection refused"), "Couldn't reach"},
 		{"mcp", errors.New("transport error: transport closed"), "MCP server"},
 		{"messages 429", &transportError{Transport: "messages", Status: 429, Message: "slow down"}, "Rate limited"},

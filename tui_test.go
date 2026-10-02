@@ -206,6 +206,9 @@ func TestTUICtrlShortcuts(t *testing.T) {
 	if help := m.renderHelp(); !strings.Contains(help, "ctrl+g help") || strings.Contains(help, "F1 help") {
 		t.Fatalf("help must list the ctrl shortcuts:\n%s", help)
 	}
+	if help := m.renderHelp(); !strings.Contains(help, "ctrl+t thinking") || !strings.Contains(help, "ctrl+l tools") {
+		t.Fatalf("help must list ctrl+t thinking and ctrl+l tools:\n%s", help)
+	}
 
 	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlG})
 	if m.mode != viewHelp {
@@ -215,9 +218,9 @@ func TestTUICtrlShortcuts(t *testing.T) {
 	if m.mode != viewHistory {
 		t.Fatalf("ctrl+r: mode=%v", m.mode)
 	}
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlT})
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlL})
 	if m.mode != viewTools {
-		t.Fatalf("ctrl+t: mode=%v", m.mode)
+		t.Fatalf("ctrl+l: mode=%v", m.mode)
 	}
 	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlX})
 	if m.mode != viewErrors {
@@ -249,30 +252,42 @@ func TestTUICtrlShortcuts(t *testing.T) {
 	}
 }
 
-func TestTUIThinkingStepKeys(t *testing.T) {
+func TestTUIThinkingCycleKey(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
-	m.cfg.Model = "glm-5.3"
+	m.cfg.Model = "glm-5.3" // levels low,high,max
 	m.cfg.Thinking = "high"
 
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlCloseBracket}) // ctrl+] up
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlT}) // high→max
 	if m.cfg.Thinking != "max" {
-		t.Fatalf("ctrl+] should step high→max, got %q", m.cfg.Thinking)
+		t.Fatalf("ctrl+t should cycle high→max, got %q", m.cfg.Thinking)
 	}
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlCloseBracket}) // clamp at top
-	if m.cfg.Thinking != "max" || !strings.Contains(m.notice, "highest") {
-		t.Fatalf("clamp top: thinking=%q notice=%q", m.cfg.Thinking, m.notice)
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlT}) // max→low (wrap)
+	if m.cfg.Thinking != "low" {
+		t.Fatalf("ctrl+t should wrap max→low, got %q", m.cfg.Thinking)
 	}
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlBackslash}) // ctrl+\ down
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlT}) // low→high
 	if m.cfg.Thinking != "high" {
-		t.Fatalf("ctrl+\\ should step max→high, got %q", m.cfg.Thinking)
+		t.Fatalf("ctrl+t should cycle low→high, got %q", m.cfg.Thinking)
 	}
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlBackslash}) // high→default
-	if m.cfg.Thinking != "" {
-		t.Fatalf("step down should reach default, got %q", m.cfg.Thinking)
+	// Default goes to the lowest.
+	m.cfg.Thinking = ""
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlT})
+	if m.cfg.Thinking != "low" {
+		t.Fatalf("ctrl+t from default should go to low, got %q", m.cfg.Thinking)
 	}
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlBackslash}) // clamp at bottom
-	if m.cfg.Thinking != "" || !strings.Contains(m.notice, "lowest") {
-		t.Fatalf("clamp bottom: thinking=%q notice=%q", m.cfg.Thinking, m.notice)
+	// Single-level models stay put with a note.
+	m.cfg.Model = "kimi-k3"
+	m.cfg.Thinking = "max"
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlT})
+	if m.cfg.Thinking != "max" || !strings.Contains(m.notice, "only offers") {
+		t.Fatalf("single level: thinking=%q notice=%q", m.cfg.Thinking, m.notice)
+	}
+	// No-control models report it.
+	m.cfg.Model = "mimo-v2.5"
+	m.cfg.Thinking = ""
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlT})
+	if !strings.Contains(m.notice, "No adjustable thinking") {
+		t.Fatalf("no-control notice=%q", m.notice)
 	}
 }
 
@@ -471,6 +486,25 @@ func TestTUIPendingRunningToolsShowSpinnerAndCounts(t *testing.T) {
 	}
 }
 
+// TestPendingToolMatchesByID: two parallel same-name calls keep their own
+// outputs — the first-started finishing first must not credit the later row.
+func TestPendingToolMatchesByID(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.viewport.Width = 80
+	m.busy = true
+	m.pendingPrompt = "read two files"
+
+	_, _ = m.Update(toolEventMsg{kind: "tool_start", text: "read", args: `{"path":"a"}`, id: "call-a"})
+	_, _ = m.Update(toolEventMsg{kind: "tool_start", text: "read", args: `{"path":"b"}`, id: "call-b"})
+	_, _ = m.Update(toolEventMsg{kind: "tool_result", text: "read", output: "A-content", id: "call-a"})
+	if !m.pendingTools[0].done || m.pendingTools[0].output != "A-content" {
+		t.Fatalf("call-a row must close with its own output: %+v", m.pendingTools)
+	}
+	if m.pendingTools[1].done {
+		t.Fatalf("call-b must still be open: %+v", m.pendingTools)
+	}
+}
+
 func TestTUIUnknownCommandNotices(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	m.handleCommand("/nope")
@@ -503,15 +537,15 @@ func newTestModelWithConfig(t *testing.T, body string) (*tuiModel, string) {
 
 func TestTUIModelDirectSwitchPersists(t *testing.T) {
 	m, path := newTestModelWithConfig(t, "model = \"glm-5.3-flash\"\nthinking = \"max\"\nbase_url = \"https://unused\"\n")
-	m.handleCommand("/model kimi-k3")
-	if m.cfg.Model != "kimi-k3" {
+	m.handleCommand("/model kimi-k2.6")
+	if m.cfg.Model != "kimi-k2.6" {
 		t.Fatalf("model=%q notice=%q", m.cfg.Model, m.notice)
 	}
 	if m.cfg.Thinking != "" {
-		t.Fatalf("max is invalid on kimi and must reset, got %q", m.cfg.Thinking)
+		t.Fatalf("max is invalid on kimi toggle and must reset, got %q", m.cfg.Thinking)
 	}
 	raw, _ := os.ReadFile(path)
-	if !strings.Contains(string(raw), `model = "kimi-k3"`) || strings.Contains(string(raw), "thinking") {
+	if !strings.Contains(string(raw), `model = "kimi-k2.6"`) || strings.Contains(string(raw), "thinking") {
 		t.Fatalf("config not persisted:\n%s", raw)
 	}
 	if !strings.Contains(m.notice, "Switched") || !strings.Contains(m.notice, "Saved") {
@@ -586,7 +620,7 @@ func TestTUIModelStaleFetchIgnored(t *testing.T) {
 func TestTUIEffortPickerAndSet(t *testing.T) {
 	m, path := newTestModelWithConfig(t, "model = \"glm-5.3\"\nbase_url = \"https://unused\"\n")
 	m.openEffortPicker()
-	if m.mode != viewEffort || len(m.effortLevels) != 3 {
+	if m.mode != viewEffort || len(m.effortLevels) != 4 {
 		t.Fatalf("mode=%v levels=%v", m.mode, m.effortLevels)
 	}
 	m.applyThinkingSwitch("bogus")
@@ -607,7 +641,7 @@ func TestTUIEffortPickerAndSet(t *testing.T) {
 }
 
 func TestTUIEffortAliasAndClear(t *testing.T) {
-	m, _ := newTestModelWithConfig(t, "model = \"kimi-k3\"\nthinking = \"high\"\nbase_url = \"https://unused\"\n")
+	m, _ := newTestModelWithConfig(t, "model = \"kimi-k2.6\"\nthinking = \"high\"\nbase_url = \"https://unused\"\n")
 	m.handleCommand("/thinking default")
 	if m.cfg.Thinking != "" {
 		t.Fatalf("thinking=%q", m.cfg.Thinking)

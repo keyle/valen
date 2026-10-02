@@ -36,6 +36,10 @@ func friendlyError(err error) FriendlyError {
 		return FriendlyError{"The model returned an empty reply. Try rephrasing or resending.", msg}
 	case strings.Contains(lower, "stopped after"):
 		return FriendlyError{msg + " — ask the model to continue or simplify.", msg}
+	case strings.Contains(lower, "identical input"):
+		return FriendlyError{"Stopped: the model repeated the same tool call 3× — resend with a narrower ask or /clear.", msg}
+	case strings.Contains(lower, "context too large"):
+		return FriendlyError{"History exceeded the context budget — /clear for a fresh start or raise max_context_tokens.", msg}
 	case strings.Contains(lower, "transport error"), strings.Contains(lower, "initialize:"), strings.Contains(lower, "list tools:"):
 		return FriendlyError{"An MCP server hiccuped; the conversation kept going without its tools.", msg}
 	}

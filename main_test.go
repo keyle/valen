@@ -30,7 +30,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.BaseURL != defaultBaseURL || cfg.APIKeyEnv != defaultAPIKeyEnv || cfg.MaxRounds != defaultMaxRounds {
+	if cfg.BaseURL != defaultBaseURL || cfg.APIKeyEnv != defaultAPIKeyEnv || cfg.MaxRounds != defaultMaxRounds || cfg.MaxContextTokens != defaultMaxContextTokens {
 		t.Fatalf("bad defaults: %+v", cfg)
 	}
 	if !strings.HasPrefix(cfg.SessionID, "ses-") {
@@ -195,6 +195,77 @@ func TestChatStopsAtMaxRounds(t *testing.T) {
 	err := chat(context.Background(), cfg, newClient(cfg, "key"), "key", nil, registry, "hi", io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "2 rounds") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+// TestRunTurnStopsDoomLoop: the same single tool call a third consecutive
+// time aborts the turn instead of executing again — no 4th request.
+func TestRunTurnStopsDoomLoop(t *testing.T) {
+	same := completion(toolCall("shell", `{"command":"true"}`), "")
+	srv, calls := fakeServer(t, same, same, same, completion(nil, "done"))
+	registry := NewRegistry()
+	registry.LoadBuiltins([]string{"shell"})
+	cfg := newTestConfig(srv.URL)
+
+	err := chat(context.Background(), cfg, newClient(cfg, "key"), "key", nil, registry, "hi", io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "identical input") {
+		t.Fatalf("err=%v", err)
+	}
+	if *calls != 3 {
+		t.Fatalf("calls=%d, want 3 (abort before a 4th request)", *calls)
+	}
+}
+
+func TestDoomLoopToolShapes(t *testing.T) {
+	call := func(id, args string) openai.ToolCall {
+		return openai.ToolCall{ID: id, Type: openai.ToolTypeFunction,
+			Function: openai.FunctionCall{Name: "read", Arguments: args}}
+	}
+	asst := func(calls ...openai.ToolCall) openai.ChatCompletionMessage {
+		return openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, ToolCalls: calls}
+	}
+	twoPrior := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "hi"},
+		asst(call("1", `{"path":"a"}`)),
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "1", Content: "A"},
+		asst(call("2", `{"path":"a"}`)),
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "2", Content: "A"},
+	}
+	if got := doomLoopTool(twoPrior, []openai.ToolCall{call("3", `{"path":"a"}`)}); got != "read" {
+		t.Fatalf("third identical repeat must trip, got %q", got)
+	}
+	if got := doomLoopTool(twoPrior, []openai.ToolCall{call("3", `{"path":"b"}`)}); got != "" {
+		t.Fatalf("different args must not trip, got %q", got)
+	}
+	if got := doomLoopTool(twoPrior, []openai.ToolCall{call("3", `{"path":"a"}`), call("4", `{"path":"a"}`)}); got != "" {
+		t.Fatalf("multi-call batches break the chain, got %q", got)
+	}
+	onePrior := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "hi"},
+		asst(call("1", `{"path":"a"}`)),
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "1", Content: "A"},
+	}
+	if got := doomLoopTool(onePrior, []openai.ToolCall{call("2", `{"path":"a"}`)}); got != "" {
+		t.Fatalf("second repeat is still allowed, got %q", got)
+	}
+}
+
+// TestRunTurnRejectsOversizeContext: a bloated history fail-fasts before any
+// request leaves the process — the server must see zero calls.
+func TestRunTurnRejectsOversizeContext(t *testing.T) {
+	srv, calls := fakeServer(t, completion(nil, "unreached"))
+	cfg := newTestConfig(srv.URL)
+	cfg.MaxContextTokens = 100
+	history := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: "sys"},
+		{Role: openai.ChatMessageRoleUser, Content: strings.Repeat("x", 1000)},
+	}
+	_, _, err := runTurn(context.Background(), cfg, newClient(cfg, "key"), "key", newHTTPClient(cfg), NewRegistry(), &history, nil)
+	if err == nil || !strings.Contains(err.Error(), "context too large") {
+		t.Fatalf("err=%v", err)
+	}
+	if *calls != 0 {
+		t.Fatalf("calls=%d, want 0 (fail fast, good citizen)", *calls)
 	}
 }
 

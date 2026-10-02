@@ -24,8 +24,13 @@ const (
 	defaultConfigPath = "config.toml"
 	defaultBaseURL    = "https://opencode.ai/zen/go/v1"
 	defaultAPIKeyEnv  = "OPENCODE_GO_API_KEY"
-	defaultMaxRounds  = 9999
-	userAgent         = "mods/1.0"
+	defaultMaxRounds  = 100
+	// defaultMaxContextTokens fail-fasts absurd sends: stateless transports
+	// resend all of history every round, so burn compounds as rounds ×
+	// history. Assumption (reversible via max_context_tokens): well under
+	// the smallest catalog model's limit, over any healthy session.
+	defaultMaxContextTokens = 300000
+	userAgent               = "mods/1.0"
 	// defaultSystem applies when `system` is unset in config.toml. It keeps
 	// the agent MCP-capable with a fast tool loopback and points blank
 	// sessions at AGENTS.md first.
@@ -43,16 +48,17 @@ func effectiveSystem(cfg Config) string {
 
 // Config mirrors config.toml. See SPEC.md for the full schema.
 type Config struct {
-	Model       string      `toml:"model"`
-	Thinking    string      `toml:"thinking"`
-	BaseURL     string      `toml:"base_url"`
-	APIKeyEnv   string      `toml:"api_key_env"`
-	SessionID   string      `toml:"session_id"`
-	System      string      `toml:"system"`
-	MaxRounds   int         `toml:"max_rounds"`
-	Temperature *float32    `toml:"temperature"`
-	Tools       []string    `toml:"tools"`
-	MCPServers  []MCPServer `toml:"mcp"`
+	Model            string      `toml:"model"`
+	Thinking         string      `toml:"thinking"`
+	BaseURL          string      `toml:"base_url"`
+	APIKeyEnv        string      `toml:"api_key_env"`
+	SessionID        string      `toml:"session_id"`
+	System           string      `toml:"system"`
+	MaxRounds        int         `toml:"max_rounds"`
+	MaxContextTokens int         `toml:"max_context_tokens"`
+	Temperature      *float32    `toml:"temperature"`
+	Tools            []string    `toml:"tools"`
+	MCPServers       []MCPServer `toml:"mcp"`
 }
 
 type MCPServer struct {
@@ -82,6 +88,9 @@ func loadConfig(path string) (Config, error) {
 	}
 	if cfg.MaxRounds == 0 {
 		cfg.MaxRounds = defaultMaxRounds
+	}
+	if cfg.MaxContextTokens == 0 {
+		cfg.MaxContextTokens = defaultMaxContextTokens
 	}
 	if cfg.SessionID == "" {
 		cfg.SessionID = newSessionID()
@@ -272,22 +281,33 @@ type Event struct {
 	// tool result on tool_result.
 	Args   string
 	Output string
+	// ID carries the tool call ID on tool_start/tool_result so the UI
+	// matches rows by call, not by name (parallel same-name calls).
+	ID string
 }
 
 // runTurn drives the tool loop for one user turn. history grows in place with
 // assistant and tool messages so the caller can keep the conversation going.
 // It dispatches on model transport: chat (/chat/completions), messages
 // (/messages) or responses (/responses). History stays OpenAI-shaped; the
-// non-chat transports convert per round and fold replies back.
+// non-chat transports convert per round and fold replies back. A 400 that
+// lists valid thinking levels is learned to disk for next time.
 func runTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
+	var msg openai.ChatCompletionMessage
+	var usage openai.Usage
+	var err error
 	switch modelTransport(cfg.Model) {
 	case "messages":
-		return runMessagesTurn(ctx, cfg, apiKey, hc, registry, history, onEvent)
+		msg, usage, err = runMessagesTurn(ctx, cfg, apiKey, hc, registry, history, onEvent)
 	case "responses":
-		return runResponsesTurn(ctx, cfg, apiKey, hc, registry, history, onEvent)
+		msg, usage, err = runResponsesTurn(ctx, cfg, apiKey, hc, registry, history, onEvent)
 	default:
-		return runChatTurn(ctx, cfg, apiKey, hc, registry, history, onEvent)
+		msg, usage, err = runChatTurn(ctx, cfg, apiKey, hc, registry, history, onEvent)
 	}
+	if err != nil {
+		maybeLearnThinkingLevels(cfg.Model, err.Error())
+	}
+	return msg, usage, err
 }
 
 // maxParallelTools bounds concurrent tool execution in one round. Outputs
@@ -302,6 +322,73 @@ var mcpMu sync.Mutex
 
 // isMCPTool reports namespaced MCP tools (<server>__<tool>).
 func isMCPTool(name string) bool { return strings.Contains(name, "__") }
+
+// loopFingerprint identifies a tool call for repeat detection: same tool
+// with the same (normalized) arguments doing the same work.
+func loopFingerprint(tc openai.ToolCall) string {
+	return tc.Function.Name + "\x00" + normalizeArgs(tc.Function.Arguments)
+}
+
+// doomLoopTool reports the tool name when calls would repeat the same single
+// tool call a third consecutive time — the death pattern (re-reading the
+// same file, retrying the same command). Multi-call batches break the chain:
+// they run as one parallel unit, not a loop step. "" means no loop.
+func doomLoopTool(history []openai.ChatCompletionMessage, calls []openai.ToolCall) string {
+	if len(calls) != 1 {
+		return ""
+	}
+	want := loopFingerprint(calls[0])
+	found := 0
+	for i := len(history) - 1; i >= 0 && found < 2; i-- {
+		m := history[i]
+		if m.Role != openai.ChatMessageRoleAssistant || len(m.ToolCalls) == 0 {
+			continue
+		}
+		if len(m.ToolCalls) != 1 || loopFingerprint(m.ToolCalls[0]) != want {
+			return ""
+		}
+		found++
+	}
+	if found < 2 {
+		return ""
+	}
+	return calls[0].Function.Name
+}
+
+func doomLoopError(name string) error {
+	return fmt.Errorf("stopped: tool %q called 3 times with identical input — ask for a different approach or /clear", name)
+}
+
+// estimateTokens approximates prompt tokens as runes/4 over content plus
+// tool args. No tokenizer dep; good enough for a fail-fast guard.
+func estimateTokens(msgs []openai.ChatCompletionMessage) int {
+	var runes int
+	for _, m := range msgs {
+		runes += len([]rune(m.Content))
+		for _, tc := range m.ToolCalls {
+			runes += len([]rune(tc.Function.Arguments))
+		}
+	}
+	return runes / 4
+}
+
+func contextBudget(cfg Config) int {
+	if cfg.MaxContextTokens > 0 {
+		return cfg.MaxContextTokens
+	}
+	return defaultMaxContextTokens
+}
+
+// checkContextBudget fail-fasts a round that would send a ridiculous context
+// (and burn tokens × rounds on stateless transports) instead of letting it
+// crawl into a 429. Compaction is the real fix; this is the guardrail.
+func checkContextBudget(cfg Config, history []openai.ChatCompletionMessage) error {
+	budget := contextBudget(cfg)
+	if est := estimateTokens(history); est > budget {
+		return fmt.Errorf("context too large: est. %d tokens exceeds budget %d — /clear for a fresh history (or raise max_context_tokens)", est, budget)
+	}
+	return nil
+}
 
 // runToolCalls executes one round's tool calls and returns the tool messages
 // in request order. Batches without AskUserQuestion run with bounded
@@ -322,7 +409,7 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 	}
 	if onEvent != nil {
 		for _, tc := range calls {
-			onEvent(Event{Kind: "tool_start", Text: tc.Function.Name, Args: tc.Function.Arguments})
+			onEvent(Event{Kind: "tool_start", Text: tc.Function.Name, Args: tc.Function.Arguments, ID: tc.ID})
 		}
 	}
 	outs := make([]string, len(calls))
@@ -344,7 +431,7 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 	wg.Wait()
 	if onEvent != nil {
 		for i, tc := range calls {
-			onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: outs[i]})
+			onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: outs[i], ID: tc.ID})
 		}
 	}
 	out := make([]openai.ChatCompletionMessage, 0, len(calls))
@@ -359,11 +446,11 @@ func runToolCallsSerial(ctx context.Context, registry *Registry, calls []openai.
 	out := make([]openai.ChatCompletionMessage, 0, len(calls))
 	for _, tc := range calls {
 		if onEvent != nil {
-			onEvent(Event{Kind: "tool_start", Text: tc.Function.Name, Args: tc.Function.Arguments})
+			onEvent(Event{Kind: "tool_start", Text: tc.Function.Name, Args: tc.Function.Arguments, ID: tc.ID})
 		}
 		res := registry.Run(ctx, tc.Function.Name, tc.Function.Arguments)
 		if onEvent != nil {
-			onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: res})
+			onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: res, ID: tc.ID})
 		}
 		out = append(out, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: tc.ID, Content: res})
 	}
@@ -374,6 +461,9 @@ func runToolCallsSerial(ctx context.Context, registry *Registry, calls []openai.
 func runChatTurn(ctx context.Context, cfg Config, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
 	var usage openai.Usage
 	for round := 0; round < cfg.MaxRounds; round++ {
+		if err := checkContextBudget(cfg, *history); err != nil {
+			return openai.ChatCompletionMessage{}, usage, err
+		}
 		req := openai.ChatCompletionRequest{Model: cfg.Model, Messages: *history, Tools: registry.OpenAITools()}
 		if cfg.Temperature != nil {
 			req.Temperature = *cfg.Temperature
@@ -394,6 +484,9 @@ func runChatTurn(ctx context.Context, cfg Config, apiKey string, hc *http.Client
 		usage.CompletionTokens += roundUsage.CompletionTokens
 		usage.TotalTokens += roundUsage.TotalTokens
 
+		if name := doomLoopTool(*history, msg.ToolCalls); name != "" {
+			return openai.ChatCompletionMessage{}, usage, doomLoopError(name)
+		}
 		*history = append(*history, msg)
 		if len(msg.ToolCalls) == 0 {
 			return msg, usage, nil

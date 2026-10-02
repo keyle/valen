@@ -1,18 +1,30 @@
 # mods harness config. See SPEC.md for the full schema.
 
 model = "muse-spark-1.3-contributor"
-thinking = "high"
+thinking = "xhigh"
 # thinking = "high"            # optional reasoning level; omit for provider default.
-                               # Effort models (glm, deepseek, longcat, hy, …): high, max.
-                               # Toggle models (kimi, mimo, qwen, …): none, high.
+                               # Per-model (/effort picker, ctrl+t cycles low→high, wraps):
+                               # muse-spark: minimal, low, medium, high, xhigh.
+                               # gpt/grok: low…max (+none on gpt). glm/deepseek:
+                               # low/high/max or high/max. kimi-k3: max only.
+                               # Toggle (kimi-k2.6, qwen, …): none, high.
+                               # Fixed (mimo, minimax, …): omit (default only).
+                               # Unknown models learn from the provider 400 and
+                               # cache to $XDG_DATA_HOME/mods/thinking_levels.json.
                                # Switch live with /model (ctrl+p) and /effort — saved back here.
 base_url = "https://opencode.ai/zen/go/v1"
 api_key_env = "OPENCODE_GO_API_KEY"
 # session_id = "ses-stable-id"   # optional, generated per run when omitted
-system = "You are a helpful assistant. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it."
+
+system = "You are a professional programming service. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it. Work fast and multithreaded."
                                 # default system prompt (same as the built-in); set to override.
-# max_rounds = unlimited by default, or an int like 8.
-max_rounds = 9999
+# max_rounds = 100 
+
+# max_context_tokens = 200000  # fail-fast per-round budget (est. runes/4):
+                               # over-budget history aborts the turn instead of
+                               # a doomed 1M-token send into a 429. Raise for
+                               # large-context models; compaction (planned)
+                               # will continue work instead of restarting.
 # temperature = 0.2               # omit entirely for provider defaults
 
 tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "grep"]

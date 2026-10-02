@@ -171,6 +171,7 @@ type toolEventMsg struct {
 	text   string
 	args   string
 	output string
+	id     string // tool call ID: matches rows by call, not by name
 }
 
 // pendingTool is one in-flight or finished tool call in the live transcript.
@@ -179,6 +180,7 @@ type pendingTool struct {
 	args   string
 	output string
 	done   bool
+	id     string
 }
 
 // turnDoneMsg carries the finished turn back to the UI thread.
@@ -557,8 +559,19 @@ func (m *tuiModel) runningToolCount() int {
 	return n
 }
 
-// finishPendingTool marks the latest matching in-flight tool call done.
-func (m *tuiModel) finishPendingTool(name, output string) {
+// finishPendingTool marks the in-flight tool call done, matched by call ID
+// so parallel same-name calls keep their own outputs. Empty IDs fall back to
+// the latest name match (older event sources).
+func (m *tuiModel) finishPendingTool(id, name, output string) {
+	if id != "" {
+		for i := range m.pendingTools {
+			if m.pendingTools[i].id == id && !m.pendingTools[i].done {
+				m.pendingTools[i].done = true
+				m.pendingTools[i].output = output
+				return
+			}
+		}
+	}
 	for i := len(m.pendingTools) - 1; i >= 0; i-- {
 		if m.pendingTools[i].name == name && !m.pendingTools[i].done {
 			m.pendingTools[i].done = true
@@ -818,7 +831,7 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 		h := append([]openai.ChatCompletionMessage(nil), hist...)
 		onEvent := func(ev Event) {
 			if prog != nil {
-				prog.Send(toolEventMsg{kind: ev.Kind, text: ev.Text, args: ev.Args, output: ev.Output})
+				prog.Send(toolEventMsg{kind: ev.Kind, text: ev.Text, args: ev.Args, output: ev.Output, id: ev.ID})
 			}
 		}
 		reply, usage, err := runTurn(ctx, cfg, client, apiKey, httpClient, registry, &h, onEvent)
@@ -931,7 +944,9 @@ func (m *tuiModel) openEffortPicker() {
 }
 
 // applyModelSwitch moves the session to id, resets an incompatible thinking
-// level, and persists both to config.toml so the choice sticks.
+// level, and persists both to config.toml so the choice sticks. Unknown
+// models probe the provider in the background: a bogus effort 400s with the
+// valid list, which is cached on disk for ctrl+t.
 func (m *tuiModel) applyModelSwitch(id string) {
 	prevThinking := m.cfg.Thinking
 	m.cfg.Model = id
@@ -956,6 +971,20 @@ func (m *tuiModel) applyModelSwitch(id string) {
 		m.noticeErr = false
 	}
 	m.show(viewChat)
+	if _, ok := cachedThinkingLevels(id); !ok {
+		if _, ok := lookupKnownLevels(normalizeModelID(id)); !ok && m.httpClient != nil && m.apiKey != "" {
+			cfg, apiKey, hc := m.cfg, m.apiKey, m.httpClient
+			base := m.ctx
+			if base == nil {
+				base = context.Background()
+			}
+			go func() {
+				ctx, cancel := context.WithTimeout(base, 15*time.Second)
+				defer cancel()
+				_, _ = probeThinkingLevels(ctx, cfg, apiKey, hc)
+			}()
+		}
+	}
 }
 
 // setThinkingLevel validates, persists and announces level, preserving the
@@ -1002,35 +1031,34 @@ func (m *tuiModel) applyThinkingSwitch(level string) {
 	m.show(viewChat)
 }
 
-// stepThinking moves the thinking level one step down (-) or up (+) through
-// the provider-default plus AvailableThinkingLevels, ordered low to high,
-// clamping at the ends. ctrl+[ is indistinguishable from esc in the terminal
-// (both arrive as "esc"), so ctrl+\ steps down while ctrl+] steps up.
-func (m *tuiModel) stepThinking(delta int) {
-	levels := append([]string{""}, AvailableThinkingLevels(m.cfg.Model)...)
-	idx := 0
+// cycleThinking moves the thinking level forward low to high through
+// AvailableThinkingLevels, wrapping back to the lowest. ctrl+t is the
+// mnemonic (T-hinking); ctrl+] / ctrl+[ never arrive reliably in the
+// terminal (ctrl+[ is esc), so a single wrapping key beats up/down.
+func (m *tuiModel) cycleThinking() {
+	levels := AvailableThinkingLevels(m.cfg.Model)
+	if len(levels) == 0 {
+		m.notice = "No adjustable thinking on " + m.cfg.Model + " (provider default only)."
+		m.noticeErr = false
+		m.refreshViewport()
+		return
+	}
+	idx := -1
 	for i, l := range levels {
 		if l == m.cfg.Thinking {
 			idx = i
 			break
 		}
 	}
-	next := idx + delta
-	if next < 0 {
-		next = 0
-	}
-	if next >= len(levels) {
-		next = len(levels) - 1
-	}
-	if next == idx {
-		if delta > 0 {
-			m.notice = "Thinking already at highest (" + effortLabel(levels[idx]) + ")."
-		} else {
-			m.notice = "Thinking already at lowest (" + effortLabel(levels[idx]) + ")."
-		}
+	if len(levels) == 1 && idx == 0 {
+		m.notice = "Thinking only offers " + effortLabel(levels[0]) + " on " + m.cfg.Model + "."
 		m.noticeErr = false
 		m.refreshViewport()
 		return
+	}
+	next := 0
+	if idx >= 0 {
+		next = (idx + 1) % len(levels)
 	}
 	if m.setThinkingLevel(levels[next]) {
 		m.refreshViewport()
@@ -1107,14 +1135,14 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case toolEventMsg:
 		switch msg.kind {
 		case "tool_start":
-			m.pendingTools = append(m.pendingTools, pendingTool{name: msg.text, args: msg.args})
+			m.pendingTools = append(m.pendingTools, pendingTool{name: msg.text, args: msg.args, id: msg.id})
 			if n := m.runningToolCount(); n > 1 {
 				m.toolStatus = fmt.Sprintf("⏺ %s… · %d running", msg.text, n)
 			} else {
 				m.toolStatus = "⏺ " + msg.text + "…"
 			}
 		case "tool_result":
-			m.finishPendingTool(msg.text, msg.output)
+			m.finishPendingTool(msg.id, msg.text, msg.output)
 			if n := m.runningToolCount(); n > 0 {
 				m.toolStatus = fmt.Sprintf("✓ %s · %d still running", msg.text, n)
 			} else {
@@ -1336,7 +1364,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+r":
 		m.show(viewHistory)
 		return m, nil
-	case "ctrl+t":
+	case "ctrl+l":
 		m.show(viewTools)
 		return m, nil
 	case "ctrl+x":
@@ -1358,11 +1386,10 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+q":
 		return m, tea.Quit
-	case "ctrl+]":
-		m.stepThinking(+1)
-		return m, nil
-	case "ctrl+\\":
-		m.stepThinking(-1)
+	case "ctrl+t":
+		// ctrl+t shadows textarea transpose (rarely used); it cycles the
+		// reasoning level low→high and wraps to low.
+		m.cycleThinking()
 		return m, nil
 	}
 
@@ -1512,7 +1539,7 @@ func (m *tuiModel) headerView() string {
 	title := headerTitleStyle.Render("✳ mods")
 	model := m.cfg.Model
 	if m.cfg.Thinking != "" {
-		model += " · ⚡" + m.cfg.Thinking
+		model += " · " + m.cfg.Thinking
 	}
 	meta := headerDimStyle.Render(fmt.Sprintf("  ·  %s  ·  %s  ·  %d tools", model, shortSession(m.session), len(m.registry.Names())))
 	mode := ""
@@ -2098,8 +2125,8 @@ func (m *tuiModel) renderHelp() string {
 
 Keys
   enter send · shift+enter/alt+enter/ctrl+j newline · esc cancel/back · pgup/pgdn scroll
-  ctrl+g help · ctrl+r history · ctrl+t tools · ctrl+x errors · ctrl+y thinking
-  ctrl+o details · ctrl+p model · ctrl+] / ctrl+\ thinking up/down · ctrl+s save · ctrl+q quit · ctrl+c cancel/quit
+  ctrl+g help · ctrl+r history · ctrl+l tools · ctrl+x errors · ctrl+y thinking display
+  ctrl+o details · ctrl+p model · ctrl+t thinking level (cycles low→high, wraps) · ctrl+s save · ctrl+q quit · ctrl+c cancel/quit
   in lists: ↑↓ move · enter open · esc back
 
 Commands
@@ -2113,12 +2140,14 @@ Go plan usage (5h rolling / 7d / 30d) shows in the footer, refreshed each
 minute and after every turn: dim normally, yellow past 80%, pink at the cap.
 
 Models persist to config.toml, so the last switch sticks across runs.
-Thinking levels depend on the model: effort models (glm, deepseek, …) take
-high/max, toggle models (kimi, mimo, qwen, …) take none/high.
-Unset thinking means the provider default. ctrl+] steps up, ctrl+\ steps
-down (ctrl+[ is esc in the terminal, so ctrl+\ stands in).
+Thinking levels depend on the model (see /effort picker): muse-spark takes
+minimal/low/medium/high/xhigh, gpt/grok take low…max, glm/deepseek take
+low/high/max or high/max, kimi-k3 is max-only, toggle models take none/high.
+Unset thinking means the provider default. ctrl+t cycles the list low→high
+and wraps to low; unknown models learn valid levels from the provider 400
+and cache them on disk.
 
-Thinking is shown by default (ctrl+y hides). Tools render inline; ctrl+t shows full output.`) + "\n"
+Thinking is shown by default (ctrl+y hides). Tools render inline; ctrl+l shows full output.`) + "\n"
 }
 
 func (m *tuiModel) renderDetail() string {

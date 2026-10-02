@@ -44,12 +44,13 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | Key | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `model` | string | — | **required.** Model ID, e.g. `glm-5.3-flash`, `kimi-k3`. Switch live with `/model` (ctrl+p); persisted to `config.toml` |
-| `thinking` | string | empty (provider default) | Reasoning level. Effort models (`glm-*`, `deepseek-*`, `longcat-*`, `hy*`): `high`, `max`. Toggle models (`kimi-*`, `mimo-*`, `qwen*`, …): `none`, `high`. Switch live with `/effort` (`/thinking` alias); persisted to `config.toml` |
+| `thinking` | string | empty (provider default) | Reasoning level, per-model (see `/effort` picker): muse-spark `minimal`/`low`/`medium`/`high`/`xhigh`, gpt/grok `low`…`max` (+`none` on gpt), glm/deepseek `low`/`high`/`max` or `high`/`max`, kimi-k3 `max` only, toggle models `none`/`high`, fixed no-control models omit. Switch live with `/effort` (`/thinking` alias) or ctrl+t (cycles low→high, wraps); persisted to `config.toml`. Unknown models fall back to the full vocabulary until a 400 teaches the valid list, cached at `$XDG_DATA_HOME/mods/thinking_levels.json` |
 | `base_url` | string | `https://opencode.ai/zen/go/v1` | API base; the transport path (`/chat/completions`, `/messages`, `/responses`) is appended per model |
 | `api_key_env` | string | `OPENCODE_GO_API_KEY` | Name of the env var holding the key, not the key itself |
 | `session_id` | string | `ses-<unixnano>` | Stable per conversation; sent as `x-opencode-session` |
 | `system` | string | built-in default (mirrors `config.toml`) | System prompt; empty uses the built-in default (helpful assistant, MCP-capable thinking agent with fast tool loopback, check AGENTS.md first). The shipped `config.toml` sets it explicitly — edit there to override |
 | `max_rounds` | int | `8` | Hard stop on tool-loop iterations |
+| `max_context_tokens` | int | `200000` | Fail-fast budget per round (est. runes/4): over-budget history aborts the turn with guidance instead of a doomed send |
 | `temperature` | float | unset | Pointer semantics: unset omits the field, `0.0` sends zero |
 | `tools` | string[] | empty | Subset of `shell`, `web_search`, `web_fetch`, `read`, `write`, `edit`, `glob`, `grep`, `AskUserQuestion`. `AskUserQuestion` is also registered automatically when absent, so model-driven questions work in every frontend |
 | `mcp` | table[] | empty | Each entry needs `name` + `cmd`; optional `args`, `env` |
@@ -105,11 +106,14 @@ Sampling params are omitted unless configured: some models reject a
 `temperature` that differs from their fixed value. The same rule covers
 `thinking`: empty omits the field (provider default). On chat, effort models
 get `reasoning_effort` and toggle models get `enable_thinking` in
-`chat_template_kwargs` (see `models.go`). On messages, `none` sends
-`thinking: {type: disabled}` and `high` sends `{type: enabled,
-budget_tokens: 4096}`. On responses, `none`/empty omit `reasoning` (Muse
-Spark rejects effort `none` with 400); otherwise `reasoning: {effort:
-<level>}` passes through verbatim.
+`chat_template_kwargs` (see `models.go`); fixed no-control models omit both.
+On messages, `none` sends `thinking: {type: disabled}` and any other known
+level sends `{type: enabled}` with a budget scaled low→high (1024…6144).
+On responses, `none`/empty omit `reasoning` (Muse Spark rejects effort
+`none` with 400); otherwise `reasoning: {effort: <level>}` passes through
+verbatim. A 400 listing valid efforts is parsed and cached per model at
+`$XDG_DATA_HOME/mods/thinking_levels.json`, so the next `/effort` and ctrl+t
+use the learned list.
 
 ## Agent loop
 
@@ -146,6 +150,14 @@ error: "stopped after N rounds without a final answer"
   confirmation), and the formatted answers return as an ordinary tool result.
   Transports encode that result with their existing converters (`role: tool`,
   `tool_result`, or `function_call_output`).
+- Good-citizen guards run every round on all three transports:
+  `checkContextBudget` fail-fasts when history exceeds `max_context_tokens`
+  (estimated as runes/4, no tokenizer dep) instead of sending a doomed
+  request into a 429; `doomLoopTool` aborts the turn when the same single
+  tool call repeats a third consecutive time (multi-call batches break the
+  chain). Both keep history and surface as friendly errors, so the user can
+  redirect or `/clear`. Compaction is the follow-up that lets work continue
+  instead of restarting.
 
 ## Tool contract
 

@@ -96,15 +96,24 @@ func (r *Registry) MessagesTools() []messagesTool {
 	return out
 }
 
-// messagesThinking maps our toggle levels onto Anthropic thinking. Empty
-// omits the field (provider default). "none" disables; "high" enables with a
-// budget below max_tokens. Unknown levels omit rather than risk a 400.
+// messagesThinking maps our levels onto Anthropic thinking. Empty omits the
+// field (provider default). "none" disables; any other known effort level
+// enables with a budget scaled low to high, staying below max_tokens.
+// Unknown levels omit rather than risk a 400.
 func messagesThinking(level string) map[string]any {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "none":
 		return map[string]any{"type": "disabled"}
+	case "minimal":
+		return map[string]any{"type": "enabled", "budget_tokens": 1024}
+	case "low":
+		return map[string]any{"type": "enabled", "budget_tokens": 2048}
+	case "medium":
+		return map[string]any{"type": "enabled", "budget_tokens": 3072}
 	case "high":
 		return map[string]any{"type": "enabled", "budget_tokens": messagesThinkingBudget}
+	case "xhigh", "max":
+		return map[string]any{"type": "enabled", "budget_tokens": 6144}
 	default:
 		return nil
 	}
@@ -285,6 +294,9 @@ func runMessagesTurn(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 	tools := registry.MessagesTools()
 	thinking := messagesThinking(cfg.Thinking)
 	for round := 0; round < cfg.MaxRounds; round++ {
+		if err := checkContextBudget(cfg, *history); err != nil {
+			return openai.ChatCompletionMessage{}, usage, err
+		}
 		system, msgs := splitChatHistory(*history)
 		req := messagesRequest{
 			Model:     cfg.Model,
@@ -327,6 +339,9 @@ func runMessagesTurn(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 			usage.TotalTokens += roundUsage.TotalTokens
 		}
 
+		if name := doomLoopTool(*history, msg.ToolCalls); name != "" {
+			return openai.ChatCompletionMessage{}, usage, doomLoopError(name)
+		}
 		*history = append(*history, msg)
 		if len(msg.ToolCalls) == 0 {
 			return msg, usage, nil

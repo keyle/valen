@@ -2,6 +2,17 @@
 
 How to work in this repo: fast loop, small steps, together.
 
+## Goals
+
+- Terse: smallest change that closes the gap. Less code, fewer keys, fewer views.
+- Maintainable: stdlib-first, single binary, one way to do things. No new
+  runtime dep without explicit approval; follow the existing pattern
+  (converter + registry + test) instead of inventing one.
+- Fast: bounded parallelism, order-preserving, cached caps. Memory is a
+  feature (~2% of opencode) — keep every cap in `openspec/project.md`.
+- Consistent: `runTurn` stays UI-agnostic; SPEC + help + `config.toml`
+  comments update together; offline `httptest` tests for every track.
+
 ## Response loop (most important)
 
 1. Keep the feedback loop quick enough that we work together. Prefer many small iterations over one big drop.
