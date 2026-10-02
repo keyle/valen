@@ -1,7 +1,6 @@
 # valen harness config. See SPEC.md for the full schema.
 
 model = "muse-spark-1.3-contributor"
-thinking = "minimal"
 # thinking = "high"            # optional reasoning level; omit for provider default.
                                # Per-model (/effort picker, ctrl+t cycles low→high, wraps):
                                # muse-spark: minimal, low, medium, high, xhigh.
@@ -46,3 +45,5 @@ tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "g
 # cmd = "npx"
 # args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
 # env = { NODE_ENV = "production" }
+
+thinking = "xhigh"

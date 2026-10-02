@@ -196,6 +196,10 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
   every tool record with status.
   Errors view: turns with `Error`. Enter opens full detail; Esc returns.
 - `/clear` resets in-memory history and turns; the disk log is never deleted.
+  `/new` (ctrl+n) mints a fresh `ses-<unixnano>` session with its own JSONL:
+  history reseeds, pending/live state and render cache drop, `x-opencode-session`
+  clients rebuild around the new id, and the old file stays resumable via
+  `/sessions`. Blocked while a turn runs (esc first).
 
 ## Thinking / reasoning display
 
@@ -260,6 +264,7 @@ ready, input focused. `/clear` resets intentionally.
 | Ctrl+G | help | help |
 | Ctrl+R / Ctrl+L / Ctrl+U / Ctrl+X | history / sessions / tools / errors | same |
 | Ctrl+Y | toggle thinking display | toggle thinking display |
+| Ctrl+N | new blank session (fresh id + file; blocked while busy) | same |
 | Ctrl+T | thinking level cycle low→high, wraps to low | same |
 | Ctrl+O | toggle status details | toggle status details |
 | Ctrl+P | model picker | model picker |

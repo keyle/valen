@@ -270,6 +270,91 @@ func TestTUICommandClear(t *testing.T) {
 	}
 }
 
+func TestTUINewSessionMintsBlankID(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.cfg.System = "sys"
+	m.history = append(seedHistory(m.cfg), openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: "a"})
+	m.session.Turns = append(m.session.Turns, Turn{Prompt: "a", Reply: "b", Usage: Usage{Prompt: 5, Completion: 6, Total: 11}})
+	oldID, oldPath := m.session.ID, m.session.Path
+	m.pendingText = "streamed scrap"
+	m.input.SetValue("typed scrap")
+
+	m.handleCommand("/new")
+
+	if m.session.ID == oldID || m.session.Path == oldPath {
+		t.Fatalf("/new must mint a fresh id+file, got %q %q", m.session.ID, m.session.Path)
+	}
+	if len(m.history) != 1 || len(m.session.Turns) != 0 || m.session.TotalUsage.Total != 0 {
+		t.Fatalf("fresh session must reset memory: history=%d turns=%d usage=%+v", len(m.history), len(m.session.Turns), m.session.TotalUsage)
+	}
+	if m.pendingText != "" || m.input.Value() != "" || m.chatCacheTurns != 0 || m.chatCache != "" {
+		t.Fatalf("pending/live state not released: text=%q input=%q cache=%q/%d", m.pendingText, m.input.Value(), m.chatCache, m.chatCacheTurns)
+	}
+	if _, err := os.Stat(oldPath); err != nil {
+		// Old file may not exist (nothing committed) — but the pointer must
+		// have moved on regardless.
+		t.Logf("old path absent (ok): %v", err)
+	}
+	// Old session with committed turns stays resumable on disk.
+	m2 := newTestModel(t, testConfig("https://unused"))
+	s, err := newSession(Config{SessionID: "ses-old-resume"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.append(Turn{At: time.Now(), Prompt: "old work", Reply: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	oldPath2 := s.Path
+	m2.handleCommand("/new")
+	if items := m2.sessionItems(); len(items) == 0 {
+		t.Fatal("old session should remain listed after /new")
+	} else {
+		found := false
+		for _, it := range items {
+			if it.path == oldPath2 {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("old session %q lost from list: %+v", oldPath2, items)
+		}
+	}
+}
+
+func TestTUINewSessionBlockedWhileBusy(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.busy = true
+	m.cancel = func() {}
+	oldID := m.session.ID
+	m.handleCommand("/new")
+	if m.session.ID != oldID {
+		t.Fatal("/new while busy must not mint a session")
+	}
+	if !strings.Contains(m.notice, "Working") {
+		t.Fatalf("notice=%q", m.notice)
+	}
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlN})
+	if m.session.ID != oldID {
+		t.Fatal("ctrl+n while busy must not mint a session")
+	}
+}
+
+func TestTUICtrlNStartsNewSession(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.session.Turns = append(m.session.Turns, Turn{Prompt: "a", Reply: "b"})
+	oldID := m.session.ID
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlN})
+	if m.session.ID == oldID {
+		t.Fatal("ctrl+n must mint a fresh session")
+	}
+	if len(m.session.Turns) != 0 || len(m.history) != 1 {
+		t.Fatalf("fresh session must be blank: turns=%d history=%d", len(m.session.Turns), len(m.history))
+	}
+	if !strings.Contains(m.notice, "New session") {
+		t.Fatalf("notice=%q", m.notice)
+	}
+}
+
 func TestTUIThinkCommandToggles(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	before := m.showThink

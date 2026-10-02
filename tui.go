@@ -873,7 +873,7 @@ func (m *tuiModel) handleCommand(text string) tea.Cmd {
 	fields := strings.Fields(text)
 	cmd := strings.ToLower(fields[0])
 	switch cmd {
-	case "/clear", "/new":
+	case "/clear":
 		m.history = seedHistory(m.cfg)
 		if m.session != nil {
 			m.session.Turns = nil
@@ -882,6 +882,9 @@ func (m *tuiModel) handleCommand(text string) tea.Cmd {
 		m.notice = "Cleared — fresh conversation."
 		m.noticeErr = false
 		m.show(viewChat)
+		return nil
+	case "/new":
+		m.startFreshSession()
 		return nil
 	case "/think":
 		m.showThink = !m.showThink
@@ -939,6 +942,46 @@ func (m *tuiModel) handleCommand(text string) tea.Cmd {
 		m.noticeErr = true
 		return nil
 	}
+}
+
+// startFreshSession mints a brand-new blank session: a fresh ses-<nano> ID
+// with its own JSONL, reseeded history, and all pending/live state dropped
+// so memory and token history release. The old session file stays on disk,
+// resumable via /sessions. Blocked while busy so an in-flight turn can't
+// commit into (or be orphaned by) the fresh session.
+func (m *tuiModel) startFreshSession() {
+	if m.busy {
+		m.notice = "Working… press esc to cancel."
+		m.noticeErr = false
+		return
+	}
+	m.cfg.SessionID = newSessionID()
+	s, err := newSession(m.cfg)
+	if err != nil {
+		m.notice = "New session failed: " + err.Error()
+		m.noticeErr = true
+		return
+	}
+	m.session = s
+	m.history = seedHistory(m.cfg)
+	// SessionID is stamped per-request by headerTransport, so rebuild the
+	// clients around the new ID; otherwise turns would keep attributing
+	// to the old session server-side.
+	m.httpClient = newHTTPClient(m.cfg)
+	if m.apiKey != "" {
+		m.client = newClient(m.cfg, m.apiKey)
+	}
+	m.pendingPrompt = ""
+	m.pendingTools = nil
+	m.pendingText = ""
+	m.pendingThinking = ""
+	m.toolStatus = ""
+	m.cancel = nil
+	m.chatCache, m.chatCacheTurns = "", 0
+	m.input.SetValue("")
+	m.notice = "New session " + m.session.ID + " — blank."
+	m.noticeErr = false
+	m.show(viewChat)
 }
 
 // compactCmd runs a manual compaction off the UI thread: prune older tool
@@ -1491,6 +1534,11 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+q":
 		return m, tea.Quit
+	case "ctrl+n":
+		// Fresh blank session; blocked while busy (see startFreshSession).
+		// Shadows textarea's down-history (unused: no history recall here).
+		m.startFreshSession()
+		return m, nil
 	case "ctrl+t":
 		// ctrl+t shadows textarea transpose (rarely used); it cycles the
 		// reasoning level low→high and wraps to low.
@@ -2355,11 +2403,11 @@ func (m *tuiModel) renderHelp() string {
 Keys
   enter send · shift+enter/alt+enter/ctrl+j newline · esc cancel/back · pgup/pgdn scroll
   ctrl+g help · ctrl+r history · ctrl+l sessions · ctrl+u tools · ctrl+x errors · ctrl+y thinking display
-  ctrl+o details · ctrl+p model · ctrl+t thinking level (cycles low→high, wraps) · ctrl+s save · ctrl+q quit · ctrl+c cancel/quit
+  ctrl+o details · ctrl+p model · ctrl+n new session · ctrl+t thinking level (cycles low→high, wraps) · ctrl+s save · ctrl+q quit · ctrl+c cancel/quit
   in lists: ↑↓ move · enter open · esc back
 
 Commands
-  /help /history /sessions (/resume) /tools /errors /think /save /clear /quit
+  /help /history /sessions (/resume) /tools /errors /think /save /clear /new /quit
   /compact (/summarize) — prune + summarize older history with the cheap model; disk log untouched
   /model [filter] — list OpenCode Go models and switch (ctrl+p does the same)
   /effort [level] — thinking level for the current model (/thinking is an alias)
