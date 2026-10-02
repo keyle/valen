@@ -17,4 +17,6 @@ Ordered, each item ends in a tangible, verifiable result.
 - [x] 13. the progress text in white appends to the end of line as progress happens that is meta progress. this is good. however we'd like it to insert a \n for cleaner approach. (each `text_delta` now lands on its own line in the live pending block via `appendStreamLine`; committed reply text unchanged.)
 - [ ] 14. ability to change the thinking level with ctrl+[ for lower and ctrl+] for higher (they're usually listed low to high).
 - [ ] 15. questions need to wrap, so does content in the timeline / scrollback buffer, it's going off the screen!
+- [ ] 16. the chatbox I'd like shift+enter to not submit but add a line return. Also the background is gray but not for the entire box. It would be better if it was either the entire box or no background to it at all!
+- [ ] 17. can we hint to read AGENTS.md on a blank session, first. Make that part of the default "you are a helpful assistant" type line. Give a hint that we're a mcp capable thinking agent with a fast loopback.
 
