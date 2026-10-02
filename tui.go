@@ -1484,7 +1484,7 @@ func (m *tuiModel) renderChat() string {
 	var blocks []string
 	if m.session == nil || len(m.session.Turns) == 0 {
 		if m.pendingPrompt == "" {
-			return emptyStyle.Render("Ask anything — shell, web_search, web_fetch, AskUserQuestion, plus MCP tools.\n\nYour message appears instantly; thinking stays visible; tools show inline.\n\nTry /help for keys and commands.")
+			return emptyStyle.Render("Ask anything — read, write, edit, glob, grep, shell, web_search, web_fetch, AskUserQuestion, plus MCP tools.\n\nYour message appears instantly; thinking stays visible; tools show inline.\n\nTry /help for keys and commands.")
 		}
 	}
 	if m.session != nil {

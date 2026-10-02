@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -118,10 +119,41 @@ func main() {
 
 func start() error {
 	cfgPath := flag.String("config", defaultConfigPath, "path to config")
+	dirFlag := flag.String("dir", "", "working directory: sandbox root for file tools and shell")
 	printMode := flag.Bool("p", false, "one-shot: answer the prompt and exit")
 	flag.Parse()
 
-	cfg, err := loadConfig(*cfgPath)
+	// Resolve the config path before any chdir so relative paths keep working.
+	cfgAbs := *cfgPath
+	if abs, err := filepath.Abs(cfgAbs); err == nil {
+		cfgAbs = abs
+	}
+
+	tuiMode := !*printMode && isTTY(os.Stdin) && isTTY(os.Stdout)
+	workdir, rest := splitWorkdirArg(*dirFlag, flag.Args(), tuiMode)
+	if workdir != "" {
+		abs, err := filepath.Abs(workdir)
+		if err != nil {
+			return fmt.Errorf("dir: %w", err)
+		}
+		fi, err := os.Stat(abs)
+		if err != nil {
+			return fmt.Errorf("dir %s: %w", abs, err)
+		}
+		if !fi.IsDir() {
+			return fmt.Errorf("dir %s is not a directory", abs)
+		}
+		if err := os.Chdir(abs); err != nil {
+			return fmt.Errorf("dir: %w", err)
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		setFileRoot(cwd)
+	} else {
+		return fmt.Errorf("workdir: %w", err)
+	}
+
+	cfg, err := loadConfig(cfgAbs)
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
@@ -151,10 +183,10 @@ func start() error {
 
 	client := newClient(cfg, apiKey)
 	if !*printMode && isTTY(os.Stdin) && isTTY(os.Stdout) {
-		return runTUI(ctx, cfg, *cfgPath, client, registry, apiKey)
+		return runTUI(ctx, cfg, cfgAbs, client, registry, apiKey)
 	}
 
-	prompt, err := readPrompt(flag.Args())
+	prompt, err := readPrompt(rest)
 	if err != nil {
 		return err
 	}
@@ -162,6 +194,22 @@ func start() error {
 		return errors.New("empty prompt")
 	}
 	return chat(ctx, cfg, client, apiKey, newHTTPClient(cfg), registry, prompt, os.Stdout, os.Stderr)
+}
+
+// splitWorkdirArg resolves the sandbox root: an explicit -dir flag wins,
+// otherwise a single positional directory is taken as the workdir in TUI
+// mode (where positionals carry no prompt). Headless prompts are never
+// stolen: -p "..." keeps its args unless -dir is given.
+func splitWorkdirArg(dirFlag string, args []string, tuiMode bool) (string, []string) {
+	if strings.TrimSpace(dirFlag) != "" {
+		return dirFlag, args
+	}
+	if tuiMode && len(args) > 0 {
+		if fi, err := os.Stat(args[0]); err == nil && fi.IsDir() {
+			return args[0], args[1:]
+		}
+	}
+	return "", args
 }
 
 func isTTY(f *os.File) bool {

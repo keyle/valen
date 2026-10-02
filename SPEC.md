@@ -33,6 +33,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `errors.go` | Friendly one-line errors mapped from status codes/causes (ctrl+x has details) |
 | `think.go` | Splits `<think>` blocks out of replies so the UI can collapse them |
 | `tools.go` | Tool contract, ordered registry, builtin loader, output limits, `shell` |
+| `files.go` | File builtins (`read`, `write`, `edit`, `glob`, `grep`): workdir sandbox, outside-access approval, glob matching |
 | `ask.go` | `AskUserQuestion` contract, headless prompting/confirmation, answer formatting |
 | `search.go` | `web_search` (DuckDuckGo HTML) and `web_fetch` (HTML → text) |
 | `mcp.go` | stdio MCP client lifecycle, tool registration, result flattening |
@@ -50,7 +51,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `system` | string | empty | System prompt; omitted from the request when empty |
 | `max_rounds` | int | `8` | Hard stop on tool-loop iterations |
 | `temperature` | float | unset | Pointer semantics: unset omits the field, `0.0` sends zero |
-| `tools` | string[] | empty | Subset of `shell`, `web_search`, `web_fetch`, `AskUserQuestion`. `AskUserQuestion` is also registered automatically when absent, so model-driven questions work in every frontend |
+| `tools` | string[] | empty | Subset of `shell`, `web_search`, `web_fetch`, `read`, `write`, `edit`, `glob`, `grep`, `AskUserQuestion`. `AskUserQuestion` is also registered automatically when absent, so model-driven questions work in every frontend |
 | `mcp` | table[] | empty | Each entry needs `name` + `cmd`; optional `args`, `env` |
 
 Validation errors (missing `model`, MCP entry without `cmd`, unreadable file)
@@ -162,10 +163,22 @@ Rules the registry enforces:
 
 | Tool | Args | Behaviour |
 | --- | --- | --- |
-| `shell` | `command` | `sh -c`, 60s timeout, combined stdout+stderr; non-zero exit is returned as content with `[exit N]`, not as an error |
+| `shell` | `command` | `sh -c` in the workdir, 60s timeout, combined stdout+stderr; non-zero exit is returned as content with `[exit N]`, not as an error |
 | `web_search` | `query` | DuckDuckGo HTML endpoint, up to 8 results as `N. title / url / snippet`; unwraps `/l/?uddg=` tracker links; 1 MiB body cap |
 | `web_fetch` | `url` | GET with 512 KiB cap, HTML tokenized to text (script/style/noscript dropped), truncated to 8000 chars |
+| `read` | `path`, `offset`, `limit` | Line-windowed read (default 2000 lines); lines prefixed with their number for `edit` context |
+| `write` | `path`, `content` | Create/overwrite a file, creating parents; preserves the existing mode |
+| `edit` | `path`, `oldString`, `newString`, `replaceAll` | Exact-string replace; refuses ambiguous multi-matches unless `replaceAll` |
+| `glob` | `pattern`, `path` | Recursive file list supporting `*`/`?`/`[...]`/`**`; skips `.git` |
+| `grep` | `pattern`, `path`, `include` | Go regexp content search as `file:line: text`; skips `.git`/binaries/>1 MiB files, capped at 100 matches |
 | `AskUserQuestion` | `questions[]` | Presents each question with options plus type-your-own, confirms all answers, and returns `User has answered your questions: ...` |
+
+File tools and `shell` share one sandbox root: the startup directory,
+`-dir <path>`, or a positional directory in TUI mode
+(`./mods ~/Code/something`). Paths escaping the root pause for approval
+through the active `AskUserQuestion` frontend (remembered per path for the
+session); without an interactive frontend they are denied with a clear
+error, so the model can explain and ask.
 
 Non-200 responses are errors, so the model sees `error: <url> returned 429 ...`
 rather than an HTML error page.
@@ -195,6 +208,9 @@ plus `env` overrides, then `initialize` → `tools/list`. Tools are registered a
   and tool list serialization, temperature omission).
 - `tools_test.go` — ordering, name validation, unknown tools, truncation,
   argument normalization, shell success/exit-code/empty-command paths.
+- `files_test.go` — workdir split, sandbox containment, `read`/`write`/`edit`
+  round trip and error paths, `glob`/`grep` results, outside-access
+  allow/deny via a stubbed prompter, shell running in the file root.
 - `search_test.go` — result parsing, redirect unwrapping, result cap, no
   results, HTTP error, script/style stripping, truncation, text extraction.
 - `mcp_test.go` — end-to-end stdio round trip: the test binary re-execs itself
@@ -229,6 +245,8 @@ plus `env` overrides, then `initialize` → `tools/list`. Tools are registered a
 ```sh
 export OPENCODE_GO_API_KEY=...
 go run .                              # fullscreen TUI (ctrl+g for keys)
+go run . ~/Code/something             # TUI rooted at another folder
+go run . -dir ~/Code/something        # same, explicit (also works headless)
 go run . -p "..."                     # one-shot answer on stdout
 go run . -config other.toml < prompt.txt   # headless via pipe
 ```
