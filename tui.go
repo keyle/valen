@@ -962,7 +962,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toolStatus = "✓ " + msg.text
 			m.finishPendingTool(msg.text, msg.output)
 		case "text_delta":
-			m.pendingText = appendStreamText(m.pendingText, msg.text)
+			m.pendingText = appendStreamLine(m.pendingText, msg.text)
 			m.flushStream()
 			return m, nil
 		case "thinking_delta":
@@ -1616,15 +1616,58 @@ func appendStreamText(s, delta string) string {
 	return s + delta
 }
 
+// appendStreamLine accumulates live text deltas so each progress update lands
+// on its own line instead of appending to the end of the same line. Chunks
+// that already carry line breaks keep them; bare appends are separated with
+// a newline. The committed history message still keeps the exact full text;
+// this only affects the live transcript render.
+func appendStreamLine(s, delta string) string {
+	const maxChars = 32768
+	if strings.TrimSpace(delta) == "" {
+		return s
+	}
+	if len(s) >= maxChars {
+		return s
+	}
+	if s == "" {
+		if len(delta) > maxChars {
+			return delta[:maxChars]
+		}
+		return delta
+	}
+	sep := "\n"
+	if strings.HasSuffix(s, "\n") || strings.HasPrefix(delta, "\n") {
+		sep = ""
+	}
+	if len(s)+len(sep)+len(delta) > maxChars {
+		return s
+	}
+	return s + sep + delta
+}
+
 // streamTail keeps live transcript renders cheap: only the tail of a long
 // streamed reply is shown while it arrives; the full text lands on commit.
+// It cuts on a line boundary so the live view stays a list of whole lines.
 func streamTail(s string) string {
 	const maxRunes = 1500
 	r := []rune(s)
 	if len(r) <= maxRunes {
 		return s
 	}
-	return "…\n" + string(r[len(r)-maxRunes:])
+	tail := r[len(r)-maxRunes:]
+	if i := indexRune(tail, '\n'); i >= 0 {
+		tail = tail[i+1:]
+	}
+	return "…\n" + string(tail)
+}
+
+func indexRune(r []rune, c rune) int {
+	for i, v := range r {
+		if v == c {
+			return i
+		}
+	}
+	return -1
 }
 
 func (m *tuiModel) historyItems() []historyItem {

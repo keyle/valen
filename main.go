@@ -23,7 +23,7 @@ const (
 	defaultConfigPath = "config.toml"
 	defaultBaseURL    = "https://opencode.ai/zen/go/v1"
 	defaultAPIKeyEnv  = "OPENCODE_GO_API_KEY"
-	defaultMaxRounds  = 8
+	defaultMaxRounds  = 9999
 	userAgent         = "mods/1.0"
 )
 

@@ -14,5 +14,7 @@ Ordered, each item ends in a tangible, verifiable result.
 - [x] 10. Docs: SPEC.md layout/usage updated for both modes; SPEC-tui.md rewritten for bubbletea; TODO.md checkboxes updated.
 - [x] 11. Models: `models.go` (live `/models` list + curated fallback, transport map, per-model thinking levels, comment-preserving `config.toml` persist), `thinking` config key with `loadConfig` validation, reasoning params in `runTurn`, `/model` (ctrl+p) + `/effort` (`/thinking` alias) pickers with persistence, header shows level, help + SPEC/SPEC-tui/config.toml docs, `models_test.go` + TUI switch tests.
 - [x] 12. the models should request permission to navigate outside of the executed folder. we also should add a parameter to ./mods where it takes a folder, e.g. ./mods ~/Code/something, or ./mods . (`-dir` flag + positional dir in TUI mode; file tools prompt via AskUserQuestion on escapes.)
-- [ ] 13. the progress text in white appends to the end of line as progress happens that is meta progress. this is good. however we'd like it to insert a \n for cleaner approach.
+- [x] 13. the progress text in white appends to the end of line as progress happens that is meta progress. this is good. however we'd like it to insert a \n for cleaner approach. (each `text_delta` now lands on its own line in the live pending block via `appendStreamLine`; committed reply text unchanged.)
+- [ ] 14. ability to change the thinking level with ctrl+[ for lower and ctrl+] for higher (they're usually listed low to high).
+- [ ] 15. questions need to wrap, so does content in the timeline / scrollback buffer, it's going off the screen!
 

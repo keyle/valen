@@ -28,6 +28,7 @@ func newTestModel(t *testing.T, cfg Config) *tuiModel {
 	}
 	m := newTUIModel(cfg, newClient(cfg, "key"), NewRegistry(), session)
 	m.ctx = context.Background()
+	m.apiKey = "key"
 	return m
 }
 

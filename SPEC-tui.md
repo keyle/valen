@@ -253,7 +253,8 @@ forwards `text_delta` / `thinking_delta` via `prog.Send(toolEventMsg)` plus
 `tool_start` (with args) / `tool_result` (with output); `Update` accumulates a
 `pendingTools` timeline plus `pendingText` / `pendingThinking` and re-renders
 the pending block throttled with the viewport pinned to the bottom. Streamed
-text renders plain until commit, when the full reply renders as markdown.
+text renders plain with each `text_delta` on its own line until commit, when
+the full reply renders as markdown.
 Providers answering unary JSON fold with no deltas; a 400 blaming streaming
 retries the round unary.
 
