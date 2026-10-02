@@ -18,18 +18,16 @@ regresses `project.md` caps.
 - [ ] A.3 TUI `@` fuzzy picker + composer chips; headless `-f` repeatable.
   (`TestTUIAttachChip`, `TestHeadlessFileFlag`).
 
-- [ ] S. Sessions (`sessions/`): resume/continue/fork without a server.
-  Verifiable: `--session/--continue/--fork` round-trip + `/sessions`
-  overlay resume/fork on seeded JSONLs.
-- [ ] S.1 Flags + title capture (first prompt, 60 runes); JSONL stays
-  append-only, fork copies history under a new ID.
-- [x] S.1a Title (first prompt, 60 runes) + model/effort captured per turn
-  and in a `.jsonl.meta.json` sidecar; Ctrl+L `/sessions` overlay lists
-  titles with model/effort and resumes on Enter; tool-call log moved to
-  Ctrl+U (`/tools`). (`TestSessionTitleCapturedOnce`,
+- [ ] S. Sessions (`sessions/`): TUI-only resume/fork without a server.
+  Verifiable: `/sessions` overlay resume/fork on seeded JSONLs.
+  (No headless `--session/--continue/--fork` — dropped.)
+- [x] S.1 Title capture (first prompt, 60 runes); JSONL stays
+  append-only; Ctrl+L `/sessions` lists titles with model/effort,
+  Enter resumes; tool-call log moved to Ctrl+U (`/tools`).
+  (`TestSessionTitleCapturedOnce`,
   `TestTUISessionsListShowsTitlesAndResumes`.)
-- [ ] S.2 `/sessions` (`/resume`|`/continue`) overlay reusing history view:
-  Enter resumes, `f` forks.
+- [ ] S.2 `f` forks in overlay (copy history under a new ID).
+  (`TestTUISessionResumeFork`.)
 
 - [x] C. Compaction (`compaction/`): summary-mode only, send-side (disk log
   lossless). Closes perf 4.4. Verifiable: long fixture compacts, recent
