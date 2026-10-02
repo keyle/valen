@@ -152,6 +152,42 @@ func TestPersistModelSelection(t *testing.T) {
 	}
 }
 
+func TestPersistModelSelectionKeepsTopLevelScope(t *testing.T) {
+	// Regression: appending model/thinking after a [table] header silently
+	// scopes them as table keys (input.model), which strict loading rejects.
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := "model = \"m\"\n[input]\nblink = false\nheight = 2\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := persistModelSelection(path, "kimi-k2.6", "high"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("persisted file must reload: %v", err)
+	}
+	if cfg.Model != "kimi-k2.6" || cfg.Thinking != "high" {
+		t.Fatalf("reloaded=%+v", cfg)
+	}
+	raw, _ := os.ReadFile(path)
+	lines := strings.Split(string(raw), "\n")
+	headerAt, modelAt, thinkAt := -1, -1, -1
+	for i, l := range lines {
+		t := strings.TrimSpace(l)
+		if t == "[input]" {
+			headerAt = i
+		} else if isKeyLine(t, "model") {
+			modelAt = i
+		} else if isKeyLine(t, "thinking") {
+			thinkAt = i
+		}
+	}
+	if headerAt < 0 || modelAt < 0 || thinkAt < 0 || modelAt > headerAt || thinkAt > headerAt {
+		t.Fatalf("top-level keys must precede [input]:\n%s", raw)
+	}
+}
+
 func TestLoadConfigThinkingValidation(t *testing.T) {
 	cfg, err := loadConfig(writeConfig(t, "model = \"glm-5.3\"\nthinking = \"MAX\"\n"))
 	if err != nil {

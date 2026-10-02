@@ -11,6 +11,8 @@ model = "muse-spark-1.3-contributor"
                                # Unknown models learn from the provider 400 and
                                # cache to $XDG_DATA_HOME/valen/thinking_levels.json.
                                # Switch live with /model (ctrl+p) and /effort — saved back here.
+thinking = "xhigh"
+tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "grep"]
 base_url = "https://opencode.ai/zen/go/v1"
 api_key_env = "OPENCODE_GO_API_KEY"
 # session_id = "ses-stable-id"   # optional, generated per run when omitted
@@ -32,6 +34,9 @@ system = "You are a professional programming service. You are an MCP-capable thi
 # buffer = 30000                  # headroom below max_context_tokens; default 10% of the budget.
 # model = "glm-5.3-flash"         # cheap summarizer for the session model; empty means the session model itself.
 
+# NOTE: [input] must stay the last table in this file. In TOML every key
+# after a [table] header belongs to that table, so top-level keys placed
+# below it decode as input.* and fail strict loading.
 # [input]                         # chatbox chrome (TUI only): steady cursor + box height.
 # blink = true                    # block-cursor blink; set false for a steady cursor.
 # height = 3                      # input box height in lines; default 3.
@@ -39,7 +44,6 @@ system = "You are a professional programming service. You are an MCP-capable thi
 blink = false
 height = 2
 
-tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "grep"]
 # AskUserQuestion is always registered, so models can ask clarifying questions
 # in TUI and headless runs.
 # File tools (read, write, edit, glob, grep) and shell are scoped to the
@@ -53,4 +57,3 @@ tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "g
 # args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
 # env = { NODE_ENV = "production" }
 
-thinking = "xhigh"

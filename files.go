@@ -19,10 +19,12 @@ import (
 // main.go; every path is resolved against it and escapes ask first.
 
 const (
-	defaultReadLimit = 2000
+	defaultReadLimit = 200
 	maxReadLimit     = 5000
 	maxGrepMatches   = 100
+	maxGrepPerFile   = 20
 	maxGrepFileBytes = 1 << 20
+	maxReadLineChars = 1000
 )
 
 var (
@@ -128,7 +130,7 @@ func ReadTool() Tool {
 	return Tool{
 		Name:        "read",
 		Description: "Read a file from the workdir. Lines are prefixed with their number (e.g. `12: code`); when editing, use the exact file text without numbers.",
-		Schema:      json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"file path, relative to the workdir or absolute"},"offset":{"type":"integer","description":"first line to show, 1-indexed (default 1)"},"limit":{"type":"integer","description":"max lines to show (default 2000)"}},"required":["path"]}`),
+		Schema:      json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"file path, relative to the workdir or absolute"},"offset":{"type":"integer","description":"first line to show, 1-indexed (default 1)"},"limit":{"type":"integer","description":"max lines to show (default 200, max 5000)"}},"required":["path"]}`),
 		Fn: func(ctx context.Context, args string) (string, error) {
 			var a struct {
 				Path   string `json:"path"`
@@ -175,7 +177,11 @@ func ReadTool() Tool {
 			var b strings.Builder
 			fmt.Fprintf(&b, "File %s (%d lines, showing %d-%d):\n", relToRoot(abs), total, start, end)
 			for i := start; i <= end; i++ {
-				fmt.Fprintf(&b, "%d: %s\n", i, lines[i-1])
+				line := lines[i-1]
+				if len(line) > maxReadLineChars {
+					line = line[:maxReadLineChars] + "\u2026[long line truncated]"
+				}
+				fmt.Fprintf(&b, "%d: %s\n", i, line)
 			}
 			if end < total {
 				fmt.Fprintf(&b, "...[%d more lines, read with offset %d]", total-end, end+1)
@@ -544,6 +550,12 @@ func grepFilesParallel(ctx context.Context, re *regexp.Regexp, files []string) (
 				}
 				if len(local) == 0 {
 					continue
+				}
+				if len(local) > maxGrepPerFile {
+					local = local[:maxGrepPerFile]
+					mu.Lock()
+					capped = true
+					mu.Unlock()
 				}
 				mu.Lock()
 				room := maxGrepMatches - len(matches)

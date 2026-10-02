@@ -482,7 +482,7 @@ func persistModelSelection(path, model, thinking string) error {
 		}
 	}
 	if !modelDone {
-		lines = append(lines, fmt.Sprintf("model = %q", model))
+		lines = insertTopLevel(lines, fmt.Sprintf("model = %q", model))
 	}
 	if thinking == "" {
 		kept := lines[:0]
@@ -504,7 +504,7 @@ func persistModelSelection(path, model, thinking string) error {
 			}
 		}
 		if !thinkDone {
-			lines = append(lines, fmt.Sprintf("thinking = %q", thinking))
+			lines = insertTopLevel(lines, fmt.Sprintf("thinking = %q", thinking))
 		}
 	}
 	out := strings.Join(lines, "\n")
@@ -512,6 +512,26 @@ func persistModelSelection(path, model, thinking string) error {
 		out += "\n"
 	}
 	return os.WriteFile(path, []byte(out), info.Mode().Perm())
+}
+
+// insertTopLevel adds a top-level key before the first table header ([...]).
+// Appending at end-of-file would silently scope the key under the last
+// table (e.g. [input]), which strict config loading then rejects as
+// input.<key>. Pure-comment files have no header, so append is correct.
+func insertTopLevel(lines []string, line string) []string {
+	for i, l := range lines {
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(t, "[") {
+			out := append([]string{}, lines[:i]...)
+			// Keep one blank line between the key and the table header.
+			if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
+				out = append(out, "")
+			}
+			out = append(out, line)
+			return append(out, lines[i:]...)
+		}
+	}
+	return append(lines, line)
 }
 
 func isKeyLine(trimmed, key string) bool {

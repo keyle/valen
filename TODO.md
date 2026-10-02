@@ -11,6 +11,8 @@
 ## Medium
 
 - [ ] M.1 operations that take the model more than 30 seconds need to be investigated as either we're sending too large data in the window or something has gone wrong. How can we handle this? this is a bigger todo that may require soul searching so to speak.
+		note: I feel maybe we need to check whether we get clogged down, maybe we need more turns? Big task may need to automatically be done as multiple turn TODO written in memory like opencode does? 'Updating Todos' which are only for this session. This might be the key!
+		note2: I am not sure we're actually compacting between tool calls, only between turns, and that may not be often enough? thoughts?
 - [ ] M.2 are different sessions trully independent? I feel running more than 2 can lead to a major slowdown, maybe backend is doing it?
 - [ ] M.3 we need Plan mode! Something we don't have yet.
 

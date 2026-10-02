@@ -185,11 +185,33 @@ func TestGrepParallelMultiFileSortedAndCapped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(capped, "big.txt:"); got != 100 {
-		t.Fatalf("expected 100 capped matches, got %d", got)
+	// Per-file isolation: one noisy file fills at most maxGrepPerFile slots,
+	// so it can't starve matches from other files.
+	if got := strings.Count(capped, "big.txt:"); got != maxGrepPerFile {
+		t.Fatalf("expected %d capped matches, got %d", maxGrepPerFile, got)
 	}
 	if !strings.Contains(capped, "showing first 100 matches") {
 		t.Fatalf("missing truncation note: %q", capped)
+	}
+}
+
+func TestGrepPerFileIsolation(t *testing.T) {
+	useTempRoot(t)
+	ctx := context.Background()
+	noisy := strings.Repeat("needle\n", 150)
+	if _, err := WriteTool().Fn(ctx, `{"path":"noisy.txt","content":`+quoteJSON(noisy)+`}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteTool().Fn(ctx, `{"path":"quiet.txt","content":"needle here\n"}`); err != nil {
+		t.Fatal(err)
+	}
+	out, err := GrepTool().Fn(ctx, `{"pattern":"needle"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The quiet file's match must survive even though noisy.txt overflows.
+	if !strings.Contains(out, "quiet.txt:1: needle here") {
+		t.Fatalf("quiet match starved by noisy file: %q", out)
 	}
 }
 

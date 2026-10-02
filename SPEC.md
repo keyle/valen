@@ -200,11 +200,11 @@ Rules the registry enforces:
 | `shell` | `command` | `sh -c` in the workdir, 60s timeout, combined stdout+stderr; non-zero exit is returned as content with `[exit N]`, not as an error |
 | `web_search` | `query` | DuckDuckGo HTML endpoint, up to 8 results as `N. title / url / snippet`; unwraps `/l/?uddg=` tracker links; 1 MiB body cap |
 | `web_fetch` | `url` | GET with 512 KiB cap, HTML tokenized to text (script/style/noscript dropped), truncated to 8000 chars |
-| `read` | `path`, `offset`, `limit` | Line-windowed read (default 2000 lines); lines prefixed with their number for `edit` context |
+| `read` | `path`, `offset`, `limit` | Line-windowed read (default 200 lines, max 5000); lines prefixed with their number for `edit` context; long lines trimmed at 1000 chars |
 | `write` | `path`, `content` | Create/overwrite a file, creating parents; preserves the existing mode |
 | `edit` | `path`, `oldString`, `newString`, `replaceAll` | Exact-string replace; refuses ambiguous multi-matches unless `replaceAll` |
 | `glob` | `pattern`, `path` | Recursive file list supporting `*`/`?`/`[...]`/`**`; top-level subtrees walk in parallel, results sorted; skips `.git` |
-| `grep` | `pattern`, `path`, `include` | Go regexp content search as `file:line: text`, sorted by file then line; directory walk collects candidates while file reads/matches run on a bounded worker pool (8); skips `.git`/binaries/>1 MiB files, capped at 100 matches |
+| `grep` | `pattern`, `path`, `include` | Go regexp content search as `file:line: text`, sorted by file then line; directory walk collects candidates while file reads/matches run on a bounded worker pool (8); skips `.git`/binaries/>1 MiB files, capped at 100 matches (max 20 per file, so one noisy file can't starve others) |
 | `AskUserQuestion` | `questions[]` | Presents each question with options plus type-your-own, confirms all answers, and returns `User has answered your questions: ...` |
 
 File tools and `shell` share one sandbox root: the startup directory,

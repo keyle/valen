@@ -18,7 +18,7 @@ Single-binary Go agent harness. No server/client split, everything in-process in
   `15k` keep-tokens tail, `10%` buffer, early threshold at `keep×3`,
   `2000`-char tool output inside the summarizer payload, newest `2` reads
   intact (older reads collapse to path/range descriptors), `40k` newest
-  tool-output tokens protected from pruning, user decisions never pruned.
+  tool-output tokens protected from pruning, user decisions never pruned. Exploration stays lean: read defaults to 200 lines (max 5000), grep capped at 100 matches / 20 per file.
 - Offline tests only: `httptest` fakes, no real network. Never hand-edit `go.sum`.
 - `runTurn` in `main.go` shared by headless (`-p`) and TUI: keep UI-agnostic.
   UI state lives in `tuiModel` (`tui.go`) only.
