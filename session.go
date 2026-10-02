@@ -58,13 +58,13 @@ type Session struct {
 
 func sessionsDir() (string, error) {
 	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
-		return filepath.Join(d, "mods", "sessions"), nil
+		return filepath.Join(d, "valen", "sessions"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".local", "share", "mods", "sessions"), nil
+	return filepath.Join(home, ".local", "share", "valen", "sessions"), nil
 }
 
 func newSession(cfg Config) (*Session, error) {

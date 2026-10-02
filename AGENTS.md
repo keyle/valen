@@ -1,4 +1,4 @@
-# AGENTS.md — mods
+# AGENTS.md — valen
 
 How to work in this repo: fast loop, small steps, together.
 

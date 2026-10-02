@@ -1,4 +1,4 @@
-# mods openspec — conventions
+# valen openspec — conventions
 
 Single-binary Go agent harness. No server/client split, everything in-process in Bubble Tea.
 

@@ -19,7 +19,7 @@ blind 4th run).
 2. Defaults preserve today (`default allow`, `external_directory ask`) so
    existing tests stay green; docs recommend `shell ask` on shared machines.
 3. `always` appends a project-local allow rule to git-ignored
-   `.mods/approvals.toml`; `deny` always wins.
+   `.valen/approvals.toml`; `deny` always wins.
 4. `doom_loop`: hash consecutive identical tool calls per turn; on the 3rd
    repeat ask ("change approach or confirm retry?") instead of running blind.
 

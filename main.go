@@ -151,7 +151,7 @@ func newSessionID() string {
 
 func main() {
 	if err := start(); err != nil {
-		fmt.Fprintln(os.Stderr, "mods:", err)
+		fmt.Fprintln(os.Stderr, "valen:", err)
 		os.Exit(1)
 	}
 }

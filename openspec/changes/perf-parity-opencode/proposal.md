@@ -2,12 +2,12 @@
 
 ## Why
 
-`mods` feels slower than opencode, and the gap widens on deeper tasks.
+`valen` feels slower than opencode, and the gap widens on deeper tasks.
 Wall-clock is `sum(latencies)` almost everywhere — no `go func`/`WaitGroup`
 in non-test code. History cost is `O(rounds × history)` per turn, so each
 successive turn re-pays more: full re-encode + full re-send + full re-render.
 
-Memory is the counter-weight: `mods` uses ~2% of opencode. This change must
+Memory is the counter-weight: `valen` uses ~2% of opencode. This change must
 close the latency gap without losing that.
 
 ## What changes
@@ -29,13 +29,13 @@ close the latency gap without losing that.
 
 ## Context
 
-Prior research (mods audit + opencode `sst/opencode` docs/code):
+Prior research (valen audit + opencode `sst/opencode` docs/code):
 
 - opencode runs one turn's tool calls with `concurrency:10`
   (`tool-runtime.ts`), `read` fan-out 8, `grep` stat 16; TUI batches deltas
   every 40ms; `grep`/`glob` use `rg --json`; prompt-cache breakpoints (max 4)
   + stable system prefix + 1h TTL; fewer LLM rounds via `plan`/`explore` agents.
-- mods sequential spots: `main.go:299-308`, `messages.go:334-343`,
+- valen sequential spots: `main.go:299-308`, `messages.go:334-343`,
   `responses.go:343-352` tool loops; `mcp.go:27-38` serial startup;
   `stream.go:21-43` re-marshal per round; `files.go:330-348,401-444` serial
   `WalkDir`; `tui.go:1455-1537` full re-render per delta;

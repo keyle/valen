@@ -1,4 +1,4 @@
-# mods — spec
+# valen — spec
 
 A single-binary Go agent harness for OpenCode Go models. No server, no runtime
 dependencies beyond the binary: it talks to the Go transports
@@ -28,7 +28,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `messages.go` | Anthropic `/messages` transport: wire format, thinking, tool loop |
 | `responses.go` | OpenAI `/responses` transport (stateless): wire format, reasoning, tool loop |
 | `stream.go` | Shared streaming layer: raw POST, SSE scanner, unary-JSON fallback |
-| `session.go` | Turn model + JSONL session log at `$XDG_DATA_HOME/mods/sessions/` |
+| `session.go` | Turn model + JSONL session log at `$XDG_DATA_HOME/valen/sessions/` |
 | `compaction.go` | Summary-mode compaction (prune + cheap-model summary, send-side only) |
 | `usage.go` | OpenCode Go plan quota (`GET /usage`) for the TUI footer |
 | `errors.go` | Friendly one-line errors mapped from status codes/causes (ctrl+x has details) |
@@ -45,7 +45,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | Key | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `model` | string | — | **required.** Model ID, e.g. `glm-5.3-flash`, `kimi-k3`. Switch live with `/model` (ctrl+p); persisted to `config.toml` |
-| `thinking` | string | empty (provider default) | Reasoning level, per-model (see `/effort` picker): muse-spark `minimal`/`low`/`medium`/`high`/`xhigh`, gpt/grok `low`…`max` (+`none` on gpt), glm/deepseek `low`/`high`/`max` or `high`/`max`, kimi-k3 `max` only, toggle models `none`/`high`, fixed no-control models omit. Switch live with `/effort` (`/thinking` alias) or ctrl+t (cycles low→high, wraps); persisted to `config.toml`. Unknown models fall back to the full vocabulary until a 400 teaches the valid list, cached at `$XDG_DATA_HOME/mods/thinking_levels.json` |
+| `thinking` | string | empty (provider default) | Reasoning level, per-model (see `/effort` picker): muse-spark `minimal`/`low`/`medium`/`high`/`xhigh`, gpt/grok `low`…`max` (+`none` on gpt), glm/deepseek `low`/`high`/`max` or `high`/`max`, kimi-k3 `max` only, toggle models `none`/`high`, fixed no-control models omit. Switch live with `/effort` (`/thinking` alias) or ctrl+t (cycles low→high, wraps); persisted to `config.toml`. Unknown models fall back to the full vocabulary until a 400 teaches the valid list, cached at `$XDG_DATA_HOME/valen/thinking_levels.json` |
 | `base_url` | string | `https://opencode.ai/zen/go/v1` | API base; the transport path (`/chat/completions`, `/messages`, `/responses`) is appended per model |
 | `api_key_env` | string | `OPENCODE_GO_API_KEY` | Name of the env var holding the key, not the key itself |
 | `session_id` | string | `ses-<unixnano>` | Stable per conversation; sent as `x-opencode-session` |
@@ -115,7 +115,7 @@ level sends `{type: enabled}` with a budget scaled low→high (1024…6144).
 On responses, `none`/empty omit `reasoning` (Muse Spark rejects effort
 `none` with 400); otherwise `reasoning: {effort: <level>}` passes through
 verbatim. A 400 listing valid efforts is parsed and cached per model at
-`$XDG_DATA_HOME/mods/thinking_levels.json`, so the next `/effort` and ctrl+t
+`$XDG_DATA_HOME/valen/thinking_levels.json`, so the next `/effort` and ctrl+t
 use the learned list.
 
 ## Agent loop
@@ -139,7 +139,7 @@ error: "stopped after N rounds without a final answer"
   a shared mutex (one stdin pipe per server); builtins run fully parallel.
 
 - Assistant text goes to stdout; `[tool name]` traces and the token tally go to
-  stderr, so `mods "..." > out.md` stays clean.
+  stderr, so `valen "..." > out.md` stays clean.
 - `resp.Choices` empty is an error, not a panic.
 - API errors are returned wrapped (`api: ...`) with the provider's message.
 - Ctrl-C cancels the request context and unwinds MCP closers.
@@ -208,7 +208,7 @@ Rules the registry enforces:
 
 File tools and `shell` share one sandbox root: the startup directory,
 `-dir <path>`, or a positional directory in TUI mode
-(`./mods ~/Code/something`). Paths escaping the root pause for approval
+(`./valen ~/Code/something`). Paths escaping the root pause for approval
 through the active `AskUserQuestion` frontend (remembered per path for the
 session); without an interactive frontend they are denied with a clear
 error, so the model can explain and ask.
@@ -249,7 +249,7 @@ deterministic. Tools are registered as
 - `search_test.go` — result parsing, redirect unwrapping, result cap, no
   results, HTTP error, script/style stripping, truncation, text extraction.
 - `mcp_test.go` — end-to-end stdio round trip: the test binary re-execs itself
-  as a one-tool MCP server (`MODS_MCP_FIXTURE=1`, see `TestMain`), covering
+  as a one-tool MCP server (`VALEN_MCP_FIXTURE=1`, see `TestMain`), covering
   registration, schema exposure, success, `isError`, bad arguments, and the
   warn-and-continue path for a server that fails to start.
 - `messages_test.go` — `/messages` transport offline: history conversion

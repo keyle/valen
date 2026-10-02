@@ -13,7 +13,7 @@ func TestSessionAppendAndLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(tmp, "mods", "sessions", "ses-test-1.jsonl"); s.Path != want {
+	if want := filepath.Join(tmp, "valen", "sessions", "ses-test-1.jsonl"); s.Path != want {
 		t.Fatalf("path %q want %q", s.Path, want)
 	}
 	turn := Turn{

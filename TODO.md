@@ -36,7 +36,7 @@ regresses `project.md` caps.
 - [ ] P.1 Evaluator (last-match-wins, `deny` hard-stops) + TOML table
   (`shell`, `read:*.env`, `mcp_*` wildcards).
 - [ ] P.2 `ask` via `promptUser` (once/always/reject); `always` appends to
-  git-ignored `.mods/approvals.toml`, never overrides `deny`.
+  git-ignored `.valen/approvals.toml`, never overrides `deny`.
 - [x] P.3 `doom_loop`: 3× identical call → guided ask instead of 4th run.
 
 - [ ] F. File tools (`file-tools/`): `read` lists dirs, atomic `patch`,
@@ -51,8 +51,8 @@ regresses `project.md` caps.
 - [ ] W. Workflow tools (`workflow-tools/`): phased, foreground-only.
   Verifiable: each tool's round trip offline, no new files for todos.
 - [ ] W.1 `todowrite`/`todoread` (in-memory + session fold, opencode schema).
-- [ ] W.2 `skill` loader + discovery (`~/.config/mods/skills`,
-  `.mods/skills`, `.opencode/`+`.claude/` compat) + `skill` permission.
+- [ ] W.2 `skill` loader + discovery (`~/.config/valen/skills`,
+  `.valen/skills`, `.opencode/`+`.claude/` compat) + `skill` permission.
 - [ ] W.3 `task` foreground-only (`general`/`explore` policies, depth ≤2,
   shared `mcpMu`); background deferred.
 

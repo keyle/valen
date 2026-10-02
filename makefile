@@ -2,6 +2,6 @@ default:
 	rm -rf bin/
 	mkdir -p bin/
 	go build .
-	mv mods bin/
+	mv valen bin/
 	cp config.toml bin/
-	bin/mods
+	bin/valen

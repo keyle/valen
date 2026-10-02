@@ -1139,7 +1139,7 @@ func (m *tuiModel) exportTranscript() (string, bool) {
 	if m.session == nil {
 		return "No session to save.", true
 	}
-	path := fmt.Sprintf("mods-%s.md", m.session.ID)
+	path := fmt.Sprintf("valen-%s.md", m.session.ID)
 	var b strings.Builder
 	for _, t := range m.session.Turns {
 		fmt.Fprintf(&b, "## You · %s\n\n%s\n\n", t.At.Format("15:04"), t.Prompt)
@@ -1647,7 +1647,7 @@ func (m *tuiModel) View() string {
 }
 
 func (m *tuiModel) headerView() string {
-	title := headerTitleStyle.Render("✳ mods")
+	title := headerTitleStyle.Render("✳ valen")
 	model := m.cfg.Model
 	if m.cfg.Thinking != "" {
 		model += " · " + m.cfg.Thinking

@@ -1,4 +1,4 @@
-module mods
+module valen
 
 go 1.27.1
 

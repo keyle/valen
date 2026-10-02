@@ -3,7 +3,7 @@
 - [ ] 1. Ordered evaluator + TOML table (shorthand + `tool:pattern` keys +
   wildcards). `TestPermissionEval` table (allow/ask/deny, last-wins).
 - [ ] 2. `ask` via `promptUser` (once/always/reject); `always` persists to
-  `.mods/approvals.toml`, never overrides `deny`.
+  `.valen/approvals.toml`, never overrides `deny`.
   `TestPermissionApprovals` with stubbed prompter.
 - [x] 3. `doom_loop` triple-repeat guard (`doomLoopTool`/`doomLoopError` +
   `checkContextBudget`; `TestDoomLoopToolShapes`, `TestRunTurnStopsDoomLoop`).

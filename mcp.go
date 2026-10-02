@@ -18,7 +18,7 @@ import (
 const (
 	mcpHandshakeTimeout = 30 * time.Second
 	mcpCallTimeout      = 2 * time.Minute
-	clientInfoName      = "mods"
+	clientInfoName      = "valen"
 	clientInfoVersion   = "0.1.0"
 )
 

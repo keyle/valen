@@ -12,7 +12,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-const fixtureEnv = "MODS_MCP_FIXTURE"
+const fixtureEnv = "VALEN_MCP_FIXTURE"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(fixtureEnv) == "1" {

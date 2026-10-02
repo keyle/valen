@@ -67,7 +67,7 @@ func modelTransport(id string) string {
 	}
 }
 
-// chatCompatible reports whether mods can talk to the model.
+// chatCompatible reports whether valen can talk to the model.
 func chatCompatible(id string) bool { return modelTransport(id) == "chat" }
 
 // thinkingFamily groups models by how their thinking level is expressed
@@ -144,7 +144,7 @@ var knownThinkingLevels = map[string][]string{
 	"gpt-5.6-luna":                 {"none", "low", "medium", "high", "xhigh", "max"},
 	// Muse Spark forces reasoning on (none 400s). Contributor tier has no
 	// max; standard 1.3 adds max but the contributor IDs below are what
-	// mods ships, so list without max. Probe/learn will add max if the
+	// valen ships, so list without max. Probe/learn will add max if the
 	// provider ever accepts it.
 	"muse-spark-1.3-contributor":      {"minimal", "low", "medium", "high", "xhigh"},
 	"muse-spark-1.3-contributor-free": {"minimal", "low", "medium", "high", "xhigh"},
@@ -194,17 +194,17 @@ func AvailableThinkingLevels(model string) []string {
 	return append([]string(nil), standardThinkingLevels...)
 }
 
-// thinkingLevelsCachePath is $XDG_DATA_HOME/mods/thinking_levels.json
-// (or ~/.local/share/mods/...), a map of lowercase model ID to levels.
+// thinkingLevelsCachePath is $XDG_DATA_HOME/valen/thinking_levels.json
+// (or ~/.local/share/valen/...), a map of lowercase model ID to levels.
 func thinkingLevelsCachePath() (string, error) {
 	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
-		return filepath.Join(d, "mods", "thinking_levels.json"), nil
+		return filepath.Join(d, "valen", "thinking_levels.json"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".local", "share", "mods", "thinking_levels.json"), nil
+	return filepath.Join(home, ".local", "share", "valen", "thinking_levels.json"), nil
 }
 
 func loadThinkingLevelsCache() map[string][]string {

@@ -51,7 +51,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 ## UX
 
 ```
- ✳ mods  ·  glm-5.3-flash  ·  ses-…  ·  3 tools
+ ✳ valen  ·  glm-5.3-flash  ·  ses-…  ·  3 tools
 
   You  15:04
   ┌ summarise the latest go release notes
@@ -186,7 +186,7 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
 ## History & recall
 
 - Same `Turn` model + JSONL log at
-  `$XDG_DATA_HOME/mods/sessions/<session_id>.jsonl`.
+  `$XDG_DATA_HOME/valen/sessions/<session_id>.jsonl`.
 - History view: one row per turn (time, prompt snippet, tokens) plus older
   saved session files read-only. Sessions view (Ctrl+L): every saved session
   with its title (first prompt, 60 runes), model/effort, turn count — Enter
@@ -204,7 +204,7 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
 - `/effort [level]` (`/thinking` alias) sets the reasoning level sent to the
   provider for the current model — not the display. Levels come from
   `AvailableThinkingLevels` (fixed well-known table per models.dev, plus a
-  disk cache at `$XDG_DATA_HOME/mods/thinking_levels.json`): muse-spark
+  disk cache at `$XDG_DATA_HOME/valen/thinking_levels.json`): muse-spark
   `minimal`/`low`/`medium`/`high`/`xhigh`, gpt/grok `low`…`max`, glm/deepseek
   `low`/`high`/`max` or `high`/`max`, kimi-k3 `max` only, toggle models
   `none`/`high`, fixed models none. Empty clears back to the provider
