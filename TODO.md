@@ -26,12 +26,13 @@ regresses `project.md` caps.
 - [ ] S.2 `/sessions` (`/resume`|`/continue`) overlay reusing history view:
   Enter resumes, `f` forks.
 
-- [ ] C. Compaction (`compaction/`): summary-mode only, send-side (disk log
+- [x] C. Compaction (`compaction/`): summary-mode only, send-side (disk log
   lossless). Closes perf 4.4. Verifiable: long fixture compacts, recent
   `keep.tokens` kept, `/compact` + auto on too-long 400.
-- [ ] C.1 `compactSession` via session model (summarizer prompt, runes/4
-  token estimate, `[compaction] auto/keep_tokens/buffer`).
-- [ ] C.2 `/compact` (`/summarize` alias) + auto trigger; attachment data →
+- [x] C.1 `compactSession` via cheap summarizer model (summarizer prompt, runes/4
+  token estimate, `[compaction] auto/keep_tokens/buffer/model`; empty model =
+  session model at minimal thinking).
+- [x] C.2 `/compact` (`/summarize` alias) + auto trigger; attachment data →
   description in kept window.
 
 - [ ] P. Permissions (`permissions/`): ordered `allow/ask/deny` + patterns,

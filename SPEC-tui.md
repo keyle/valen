@@ -267,7 +267,7 @@ Function keys are gone; the footer only points at `/help`, which lists every
 shortcut (and the shortcut line above).
 
 Slash commands: `/help` `/history` `/tools` `/errors` `/think` `/save`
-`/clear` `/model [filter]` `/effort [level]` (`/thinking` alias) `/quit`.
+`/clear` `/compact` (`/summarize` alias) `/model [filter]` `/effort [level]` (`/thinking` alias) `/quit`.
 
 ## Streaming (live)
 

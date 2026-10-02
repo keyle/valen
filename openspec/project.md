@@ -14,7 +14,9 @@ Single-binary Go agent harness. No server/client split, everything in-process in
   Current direct deps: `toml`, `go-openai`, `mcp-go`, `x/net/html` + charm TUI stack.
 - Memory is a feature: currently ~2% of opencode. Keep streaming caps:
   `8MiB LimitReader` per round, `16k` tool-output truncate, `100` grep matches,
-  `1MiB/512KiB` search/fetch caps, `8000` fetch runes.
+  `1MiB/512KiB` search/fetch caps, `8000` fetch runes. Keep compaction caps:
+  `15k` keep-tokens tail, `10%` buffer, `2000`-char tool output inside the
+  summarizer payload, `40k` newest tool-output tokens protected from pruning.
 - Offline tests only: `httptest` fakes, no real network. Never hand-edit `go.sum`.
 - `runTurn` in `main.go` shared by headless (`-p`) and TUI: keep UI-agnostic.
   UI state lives in `tuiModel` (`tui.go`) only.

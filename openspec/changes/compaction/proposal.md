@@ -11,9 +11,11 @@ retrying a too-long request once after compacting.
 ## What changes
 
 1. `compactSession` (summary-mode only, no provider-native checkpoints):
-   one `runTurn` with a summarizer prompt on the session model; token
-   estimate = runes/4 (no tokenizer dep); config `[compaction]
-   auto/keep_tokens/buffer` (opencode defaults).
+   one `runTurn` with a summarizer prompt; token estimate = runes/4 (no
+   tokenizer dep); config `[compaction] auto/keep_tokens/buffer/model`
+   (opencode defaults plus an optional cheap `model` override — empty means
+   the session model at minimal thinking, so large sessions stay cheap for
+   the big model).
 2. Send-side only: disk JSONL keeps everything (recall lossless); the kept
    window shortens long tool output and replaces attachment data with a
    description.
@@ -23,7 +25,7 @@ retrying a too-long request once after compacting.
 ## Non-goals
 
 - Native/encrypted provider checkpoints (pins provider+model); background
-  or second-model summarization.
+  summarization.
 
 ## Success criteria
 

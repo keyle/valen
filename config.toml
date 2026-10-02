@@ -23,9 +23,15 @@ system = "You are a professional programming service. You are an MCP-capable thi
 # max_context_tokens = 200000  # fail-fast per-round budget (est. runes/4):
                                # over-budget history aborts the turn instead of
                                # a doomed 1M-token send into a 429. Raise for
-                               # large-context models; compaction (planned)
-                               # will continue work instead of restarting.
+                               # large-context models; auto-compaction usually
+                               # keeps work going instead of restarting.
 # temperature = 0.2               # omit entirely for provider defaults
+
+# [compaction]                    # summary-mode, send-side only (disk JSONL stays lossless).
+# auto = true                     # compact before send when over budget; retry once after a too-long 400.
+# keep_tokens = 15000             # recent tail kept verbatim beside the summary.
+# buffer = 30000                  # headroom below max_context_tokens; default 10% of the budget.
+# model = "glm-5.3-flash"         # cheap summarizer for the session model; empty means the session model itself.
 
 tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "grep"]
 # AskUserQuestion is always registered, so models can ask clarifying questions

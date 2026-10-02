@@ -29,6 +29,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `responses.go` | OpenAI `/responses` transport (stateless): wire format, reasoning, tool loop |
 | `stream.go` | Shared streaming layer: raw POST, SSE scanner, unary-JSON fallback |
 | `session.go` | Turn model + JSONL session log at `$XDG_DATA_HOME/mods/sessions/` |
+| `compaction.go` | Summary-mode compaction (prune + cheap-model summary, send-side only) |
 | `usage.go` | OpenCode Go plan quota (`GET /usage`) for the TUI footer |
 | `errors.go` | Friendly one-line errors mapped from status codes/causes (ctrl+x has details) |
 | `think.go` | Splits `<think>` blocks out of replies so the UI can collapse them |
@@ -52,6 +53,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `max_rounds` | int | `8` | Hard stop on tool-loop iterations |
 | `max_context_tokens` | int | `200000` | Fail-fast budget per round (est. runes/4): over-budget history aborts the turn with guidance instead of a doomed send |
 | `temperature` | float | unset | Pointer semantics: unset omits the field, `0.0` sends zero |
+| `compaction` | table | `auto=true, keep_tokens=15000, buffer=10%` | Summary-mode, send-side only (disk JSONL stays lossless): `auto` compacts before send when over budget and retries once after a too-long 400; `keep_tokens` recent tail kept verbatim beside the summary; `buffer` headroom below `max_context_tokens`; `model` cheap summarizer override (empty = session model with minimal thinking) |
 | `tools` | string[] | empty | Subset of `shell`, `web_search`, `web_fetch`, `read`, `write`, `edit`, `glob`, `grep`, `AskUserQuestion`. `AskUserQuestion` is also registered automatically when absent, so model-driven questions work in every frontend |
 | `mcp` | table[] | empty | Each entry needs `name` + `cmd`; optional `args`, `env` |
 
@@ -155,9 +157,17 @@ error: "stopped after N rounds without a final answer"
   (estimated as runes/4, no tokenizer dep) instead of sending a doomed
   request into a 429; `doomLoopTool` aborts the turn when the same single
   tool call repeats a third consecutive time (multi-call batches break the
-  chain). Both keep history and surface as friendly errors, so the user can
-  redirect or `/clear`. Compaction is the follow-up that lets work continue
-  instead of restarting.
+  chain). `maybeAutoCompact` runs before send when over the compaction
+  threshold (`max_context_tokens` minus `buffer`): older tool output is
+  pruned in place (newest 40k tokens protected, the rest shortened to 2000
+  chars), then the head is summarized beside the verbatim `keep_tokens`
+  tail — via the cheap `[compaction] model` when set, else the session
+  model at minimal thinking, no tools. A too-long 400/413 compacts once
+  and retries the turn; the second failure is terminal. The summary updates
+  in place on repeats, and `/compact` (`/summarize`) forces the same path
+  manually from the TUI. Compaction is send-side only: the JSONL log keeps
+  every turn. Both keep history and surface as friendly errors, so the user can
+  redirect or `/clear`.
 
 ## Tool contract
 

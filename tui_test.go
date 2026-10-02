@@ -197,6 +197,24 @@ func TestTUIThinkCommandToggles(t *testing.T) {
 	}
 }
 
+func TestTUICompactCommandSmallHistory(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.history = seedHistory(m.cfg)
+	if cmd := m.handleCommand("/compact"); cmd != nil {
+		t.Fatal("/compact on a tiny history must not launch network")
+	}
+	if !strings.Contains(m.notice, "Nothing to compact") {
+		t.Fatalf("notice=%q", m.notice)
+	}
+	m.history = seedHistory(m.cfg)
+	if cmd := m.handleCommand("/summarize"); cmd != nil {
+		t.Fatal("/summarize is the /compact alias and must behave the same")
+	}
+	if !strings.Contains(m.renderHelp(), "/compact") {
+		t.Fatal("help must list /compact")
+	}
+}
+
 func TestTUICtrlShortcuts(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 

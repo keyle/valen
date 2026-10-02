@@ -48,17 +48,29 @@ func effectiveSystem(cfg Config) string {
 
 // Config mirrors config.toml. See SPEC.md for the full schema.
 type Config struct {
-	Model            string      `toml:"model"`
-	Thinking         string      `toml:"thinking"`
-	BaseURL          string      `toml:"base_url"`
-	APIKeyEnv        string      `toml:"api_key_env"`
-	SessionID        string      `toml:"session_id"`
-	System           string      `toml:"system"`
-	MaxRounds        int         `toml:"max_rounds"`
-	MaxContextTokens int         `toml:"max_context_tokens"`
-	Temperature      *float32    `toml:"temperature"`
-	Tools            []string    `toml:"tools"`
-	MCPServers       []MCPServer `toml:"mcp"`
+	Model            string           `toml:"model"`
+	Thinking         string           `toml:"thinking"`
+	BaseURL          string           `toml:"base_url"`
+	APIKeyEnv        string           `toml:"api_key_env"`
+	SessionID        string           `toml:"session_id"`
+	System           string           `toml:"system"`
+	MaxRounds        int              `toml:"max_rounds"`
+	MaxContextTokens int              `toml:"max_context_tokens"`
+	Temperature      *float32         `toml:"temperature"`
+	Tools            []string         `toml:"tools"`
+	MCPServers       []MCPServer      `toml:"mcp"`
+	Compaction       CompactionConfig `toml:"compaction"`
+}
+
+// CompactionConfig mirrors the [compaction] table: summary-mode only,
+// send-side (disk JSONL stays lossless). Model selects the summarizer:
+// empty means the session model; set a cheap flash model to keep large
+// sessions cheap for the big model.
+type CompactionConfig struct {
+	Auto       *bool  `toml:"auto"`
+	KeepTokens int    `toml:"keep_tokens"`
+	Buffer     int    `toml:"buffer"`
+	Model      string `toml:"model"`
 }
 
 type MCPServer struct {
@@ -92,6 +104,7 @@ func loadConfig(path string) (Config, error) {
 	if cfg.MaxContextTokens == 0 {
 		cfg.MaxContextTokens = defaultMaxContextTokens
 	}
+	cfg.Compaction = normalizeCompactionConfig(cfg.Compaction, cfg.MaxContextTokens)
 	if cfg.SessionID == "" {
 		cfg.SessionID = newSessionID()
 	}
@@ -293,6 +306,36 @@ type Event struct {
 // non-chat transports convert per round and fold replies back. A 400 that
 // lists valid thinking levels is learned to disk for next time.
 func runTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
+	msg, usage, err := dispatchTurn(ctx, cfg, client, apiKey, hc, registry, history, onEvent)
+	if err != nil {
+		maybeLearnThinkingLevels(cfg.Model, err.Error())
+		// One recovery compaction when the provider rejects history as too
+		// long: compact send-side, then retry the turn once. Second failure
+		// is terminal so we never loop on an irreducibly large request.
+		if isContextOverflow(err) && compactionAuto(cfg) {
+			if _, ok, cerr := compactHistory(ctx, cfg, client, apiKey, hc, history); cerr == nil && ok {
+				m2, u2, err2 := dispatchTurn(ctx, cfg, client, apiKey, hc, registry, history, onEvent)
+				usage.PromptTokens += u2.PromptTokens
+				usage.CompletionTokens += u2.CompletionTokens
+				usage.TotalTokens += u2.TotalTokens
+				if err2 != nil {
+					maybeLearnThinkingLevels(cfg.Model, err2.Error())
+				}
+				return m2, usage, err2
+			}
+		}
+	}
+	return msg, usage, err
+}
+
+// dispatchTurn runs one pre-send auto-compaction when over threshold, then
+// the model transport. Shared by all three transports so every model gets
+// the same send-side bound.
+func dispatchTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
+	if ctx.Err() != nil {
+		return openai.ChatCompletionMessage{}, openai.Usage{}, ctx.Err()
+	}
+	maybeAutoCompact(ctx, cfg, client, apiKey, hc, history)
 	var msg openai.ChatCompletionMessage
 	var usage openai.Usage
 	var err error
@@ -303,9 +346,6 @@ func runTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey stri
 		msg, usage, err = runResponsesTurn(ctx, cfg, apiKey, hc, registry, history, onEvent)
 	default:
 		msg, usage, err = runChatTurn(ctx, cfg, apiKey, hc, registry, history, onEvent)
-	}
-	if err != nil {
-		maybeLearnThinkingLevels(cfg.Model, err.Error())
 	}
 	return msg, usage, err
 }
@@ -385,7 +425,7 @@ func contextBudget(cfg Config) int {
 func checkContextBudget(cfg Config, history []openai.ChatCompletionMessage) error {
 	budget := contextBudget(cfg)
 	if est := estimateTokens(history); est > budget {
-		return fmt.Errorf("context too large: est. %d tokens exceeds budget %d — /clear for a fresh history (or raise max_context_tokens)", est, budget)
+		return fmt.Errorf("context too large: est. %d tokens exceeds budget %d — /compact to summarize or /clear for a fresh history (or raise max_context_tokens)", est, budget)
 	}
 	return nil
 }

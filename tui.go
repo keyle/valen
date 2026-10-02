@@ -231,6 +231,18 @@ type usageMsg struct {
 // usageTickMsg triggers a periodic quota refresh.
 type usageTickMsg struct{}
 
+// compactDoneMsg carries a finished manual compaction back to the UI thread.
+type compactDoneMsg struct {
+	summary   string
+	err       error
+	history   []openai.ChatCompletionMessage
+	before    int
+	after     int
+	pruned    int
+	compacted bool
+	model     string
+}
+
 type tuiModel struct {
 	cfg        Config
 	cfgPath    string
@@ -905,12 +917,57 @@ func (m *tuiModel) handleCommand(text string) tea.Cmd {
 		}
 		m.applyThinkingSwitch(fields[1])
 		return nil
+	case "/compact", "/summarize":
+		return m.compactCmd()
 	case "/quit", "/exit", "/q":
 		return tea.Quit
 	default:
 		m.notice = fmt.Sprintf("Unknown command %s — try /help.", fields[0])
 		m.noticeErr = true
 		return nil
+	}
+}
+
+// compactCmd runs a manual compaction off the UI thread: prune older tool
+// output locally, then summarize the head with the cheap [compaction] model.
+// Send-side only — the session JSONL keeps every turn.
+func (m *tuiModel) compactCmd() tea.Cmd {
+	if m.busy {
+		m.notice = "Working… press esc to cancel."
+		m.noticeErr = false
+		return nil
+	}
+	if len(m.history) < 3 {
+		m.notice = "Nothing to compact — history already small."
+		m.noticeErr = false
+		return nil
+	}
+	base := m.ctx
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithCancel(base)
+	m.cancel = cancel
+	m.busy = true
+	m.toolStatus = "Compacting…"
+	m.notice = ""
+	m.refreshViewport()
+	m.viewport.GotoBottom()
+
+	cfg := m.cfg
+	client := m.client
+	apiKey := m.apiKey
+	httpClient := m.httpClient
+	h := append([]openai.ChatCompletionMessage(nil), m.history...)
+	before := estimateTokens(h)
+	return func() tea.Msg {
+		pruned := pruneOldToolOutputs(h)
+		summary, ok, err := compactHistory(ctx, cfg, client, apiKey, httpClient, &h)
+		return compactDoneMsg{
+			summary: summary, err: err, history: h,
+			before: before, after: estimateTokens(h),
+			pruned: pruned, compacted: ok, model: compactionModel(cfg),
+		}
 	}
 }
 
@@ -1267,6 +1324,35 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		m.viewport.GotoBottom()
 		return m, m.fetchUsageCmd()
+
+	case compactDoneMsg:
+		m.busy = false
+		m.toolStatus = ""
+		m.cancel = nil
+		if msg.err != nil {
+			if isCancel(msg.err) {
+				m.notice = "Compaction cancelled."
+				m.noticeErr = false
+			} else {
+				m.notice = "Compaction failed: " + friendlyError(msg.err).Title
+				m.noticeErr = true
+			}
+		} else if msg.compacted {
+			m.history = msg.history
+			m.notice = fmt.Sprintf("Compacted %d→%d tokens (summary by %s). Disk log untouched.", msg.before, msg.after, msg.model)
+			m.noticeErr = false
+		} else if msg.pruned > 0 {
+			m.history = msg.history
+			m.notice = fmt.Sprintf("Pruned older tool output %d→%d tokens; nothing left to summarize.", msg.before, msg.after)
+			m.noticeErr = false
+		} else {
+			m.notice = "Nothing to compact — history already small."
+			m.noticeErr = false
+		}
+		m.input.Focus()
+		m.refreshViewport()
+		m.viewport.GotoBottom()
+		return m, nil
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -2131,6 +2217,7 @@ Keys
 
 Commands
   /help /history /tools /errors /think /save /clear /quit
+  /compact (/summarize) — prune + summarize older history with the cheap model; disk log untouched
   /model [filter] — list OpenCode Go models and switch (ctrl+p does the same)
   /effort [level] — thinking level for the current model (/thinking is an alias)
 

@@ -39,7 +39,7 @@ func friendlyError(err error) FriendlyError {
 	case strings.Contains(lower, "identical input"):
 		return FriendlyError{"Stopped: the model repeated the same tool call 3× — resend with a narrower ask or /clear.", msg}
 	case strings.Contains(lower, "context too large"):
-		return FriendlyError{"History exceeded the context budget — /clear for a fresh start or raise max_context_tokens.", msg}
+		return FriendlyError{"History exceeded the context budget — /compact to summarize or /clear for a fresh start.", msg}
 	case strings.Contains(lower, "transport error"), strings.Contains(lower, "initialize:"), strings.Contains(lower, "list tools:"):
 		return FriendlyError{"An MCP server hiccuped; the conversation kept going without its tools.", msg}
 	}
