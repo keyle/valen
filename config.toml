@@ -1,6 +1,7 @@
 # mods harness config. See SPEC.md for the full schema.
 
-model = "qwen3.8-flash"
+model = "muse-spark-1.3-contributor"
+thinking = "xhigh"
 # thinking = "high"            # optional reasoning level; omit for provider default.
                                # Effort models (glm, deepseek, longcat, hy, …): high, max.
                                # Toggle models (kimi, mimo, qwen, …): none, high.
