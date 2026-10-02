@@ -85,7 +85,7 @@ func (r *Registry) Run(ctx context.Context, name, args string) string {
 
 // LoadBuiltins registers the named builtin tools and returns unknown names.
 func (r *Registry) LoadBuiltins(names []string) []string {
-	builtins := map[string]func() Tool{"shell": ShellTool, "web_search": WebSearchTool, "web_fetch": WebFetchTool, "AskUserQuestion": AskUserQuestionTool, "read": ReadTool, "write": WriteTool, "edit": EditTool, "glob": GlobTool, "grep": GrepTool}
+	builtins := map[string]func() Tool{"shell": ShellTool, "web_search": WebSearchTool, "web_fetch": WebFetchTool, "AskUserQuestion": AskUserQuestionTool, "read": ReadTool, "write": WriteTool, "edit": EditTool, "glob": GlobTool, "grep": GrepTool, "todowrite": TodoWriteTool, "todoread": TodoReadTool}
 	var unknown []string
 	for _, n := range names {
 		f, ok := builtins[n]

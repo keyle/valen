@@ -1,6 +1,6 @@
 # Tasks: workflow-tools
 
-- [ ] 1. `todowrite`/`todoread` (memory + session fold, opencode schema).
+- [x] 1. `todowrite`/`todoread` (memory + session fold, opencode schema).
   `TestTodoRoundTrip`.
 - [ ] 2. `skill` discovery + loader + `skill` permission action.
   `TestSkillDiscoveryLoad` (compat dirs, missing-ID error, ≤10 paths).

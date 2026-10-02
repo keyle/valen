@@ -9,10 +9,12 @@
 - [ ] shift+enter should insert a line return in the chatbox, it does not (yet!) - fix.
 - [ ] when working, page up/down temporarly jumps and then gets smashed back down.
 - [ ] related: the wheelmouse should scroll the scrollback, it does not. add this. Scrolling up should go through the history.
+- [ ] show live errors such as backend overloaded, rate limiting, etc. in the thinking but in red?
 
 ## Medium
 
-- [ ] M.1 operations that take the model more than 30 seconds need to be investigated as either we're sending too large data in the window or something has gone wrong. How can we handle this? this is a bigger todo that may require soul searching so to speak.
+- [x] M.1 operations that take the model more than 30 seconds need to be investigated as either we're sending too large data in the window or something has gone wrong. How can we handle this? this is a bigger todo that may require soul searching so to speak.
+		fixed: per-round lean (`leanHistoryForNextRound` in all 3 transports — prune every round, summarize past the threshold; previously only between turns) + `todowrite`/`todoread` session plan so chunky work runs as small verified steps. Diagnosis: single turns resent rounds × history every round (quadratic), and no plan surface meant sprawling loops.
 		note: I feel maybe we need to check whether we get clogged down, maybe we need more turns? Big task may need to automatically be done as multiple turn TODO written in memory like opencode does? 'Updating Todos' which are only for this session. This might be the key!
 		note2: I am not sure we're actually compacting between tool calls, only between turns, and that may not be often enough? thoughts?
 - [ ] M.2 are different sessions trully independent? I feel running more than 2 can lead to a major slowdown, maybe backend is doing it?

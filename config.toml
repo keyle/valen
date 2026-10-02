@@ -17,7 +17,7 @@ base_url = "https://opencode.ai/zen/go/v1"
 api_key_env = "OPENCODE_GO_API_KEY"
 # session_id = "ses-stable-id"   # optional, generated per run when omitted
 
-system = "You are a professional programming service. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it. Work fast and multithreaded. Agressively prune irrelevant context to the task at hand to keep the tokens reasonable; not for cost but for speed and lean approach."
+system = "You are a professional programming service. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, todowrite, todoread, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it. Work fast and multithreaded. Agressively prune irrelevant context to the task at hand to keep the tokens reasonable; not for cost but for speed and lean approach. For multi-step work, plan with todowrite first (one in_progress at a time, mark completed as you go)."
                                 # default system prompt (same as the built-in); set to override.
 # max_rounds = 100 
 
@@ -44,7 +44,8 @@ system = "You are a professional programming service. You are an MCP-capable thi
 blink = false
 
 # AskUserQuestion is always registered, so models can ask clarifying questions
-# in TUI and headless runs.
+# in TUI and headless runs. todowrite/todoread are always registered too, so
+# chunky work breaks into small session-plan steps even when tools omits them.
 # File tools (read, write, edit, glob, grep) and shell are scoped to the
 # workdir: the startup directory, `-dir <path>`, or a positional directory in
 # TUI mode (e.g. `./valen ~/Code/something`). Paths outside ask for approval

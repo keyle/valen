@@ -147,7 +147,7 @@ func TestAskUserQuestionChatLoop(t *testing.T) {
 	registry.LoadBuiltins([]string{"AskUserQuestion"})
 	cfg := newTestConfig(srv.URL)
 	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}
-	reply, _, err := runChatTurn(context.Background(), cfg, "key", srv.Client(), registry, &history, nil)
+	reply, _, err := runChatTurn(context.Background(), cfg, nil, "key", srv.Client(), registry, &history, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestAskUserQuestionMessagesLoop(t *testing.T) {
 	registry.LoadBuiltins([]string{"AskUserQuestion"})
 	cfg := messagesTestConfig(srv.URL)
 	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}
-	reply, _, err := runMessagesTurn(context.Background(), cfg, "key", srv.Client(), registry, &history, nil)
+	reply, _, err := runMessagesTurn(context.Background(), cfg, nil, "key", srv.Client(), registry, &history, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestAskUserQuestionResponsesLoop(t *testing.T) {
 	registry.LoadBuiltins([]string{"AskUserQuestion"})
 	cfg := responsesTestConfig(srv.URL)
 	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}
-	reply, _, err := runResponsesTurn(context.Background(), cfg, "key", srv.Client(), registry, &history, nil)
+	reply, _, err := runResponsesTurn(context.Background(), cfg, nil, "key", srv.Client(), registry, &history, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

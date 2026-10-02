@@ -37,7 +37,7 @@ const (
 	// defaultSystem applies when `system` is unset in config.toml. It keeps
 	// the agent MCP-capable with a fast tool loopback and points blank
 	// sessions at AGENTS.md first.
-	defaultSystem = "You are a helpful assistant. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it."
+	defaultSystem = "You are a helpful assistant. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, todowrite, todoread, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it. For multi-step work, plan with todowrite first (one in_progress at a time, mark completed as you go) and keep each round lean: re-read files instead of resending them."
 )
 
 // effectiveSystem returns the configured system prompt, or the built-in
@@ -248,6 +248,16 @@ func start() error {
 			return fmt.Errorf("register AskUserQuestion: %w", err)
 		}
 	}
+	// Session plan tools are always present (like AskUserQuestion) so chunky
+	// work can break into small todowrite steps even when config.toml omits
+	// them. In-memory only; the call records fold into the session JSONL.
+	for _, t := range []Tool{TodoWriteTool(), TodoReadTool()} {
+		if !registry.Has(t.Name) {
+			if err := registry.Add(t); err != nil {
+				return fmt.Errorf("register %s: %w", t.Name, err)
+			}
+		}
+	}
 
 	warn := func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) }
 	closers := LoadMCP(ctx, cfg.MCPServers, registry, warn)
@@ -377,11 +387,11 @@ func dispatchTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey
 	var err error
 	switch modelTransport(cfg.Model) {
 	case "messages":
-		msg, usage, err = runMessagesTurn(ctx, cfg, apiKey, hc, registry, history, onEvent)
+		msg, usage, err = runMessagesTurn(ctx, cfg, client, apiKey, hc, registry, history, onEvent)
 	case "responses":
-		msg, usage, err = runResponsesTurn(ctx, cfg, apiKey, hc, registry, history, onEvent)
+		msg, usage, err = runResponsesTurn(ctx, cfg, client, apiKey, hc, registry, history, onEvent)
 	default:
-		msg, usage, err = runChatTurn(ctx, cfg, apiKey, hc, registry, history, onEvent)
+		msg, usage, err = runChatTurn(ctx, cfg, client, apiKey, hc, registry, history, onEvent)
 	}
 	return msg, usage, err
 }
@@ -534,7 +544,7 @@ func runToolCallsSerial(ctx context.Context, registry *Registry, calls []openai.
 }
 
 // runChatTurn is the /chat/completions tool loop, streaming each round.
-func runChatTurn(ctx context.Context, cfg Config, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
+func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
 	var usage openai.Usage
 	for round := 0; round < cfg.MaxRounds; round++ {
 		if err := checkContextBudget(cfg, *history); err != nil {
@@ -569,6 +579,10 @@ func runChatTurn(ctx context.Context, cfg Config, apiKey string, hc *http.Client
 		}
 
 		*history = append(*history, runToolCalls(ctx, registry, msg.ToolCalls, onEvent)...)
+		// Keep long turns lean between rounds, not just between user turns:
+		// prune collapses older reads/outputs every round so the next send
+		// stays small; a summary fires past the threshold.
+		leanHistoryForNextRound(ctx, cfg, client, apiKey, hc, history)
 	}
 	return openai.ChatCompletionMessage{}, usage, fmt.Errorf("stopped after %d rounds without a final answer", cfg.MaxRounds)
 }
@@ -734,6 +748,7 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 
 // chat is the headless one-shot path: one prompt, one answer, stdout.
 func chat(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, prompt string, stdout, stderr io.Writer) error {
+	resetTodos()
 	history := make([]openai.ChatCompletionMessage, 0, 8)
 	history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: effectiveSystem(cfg)})
 	history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: prompt})

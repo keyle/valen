@@ -901,6 +901,7 @@ func (m *tuiModel) handleCommand(text string) tea.Cmd {
 	switch cmd {
 	case "/clear":
 		m.history = seedHistory(m.cfg)
+		resetTodos()
 		if m.session != nil {
 			m.session.Turns = nil
 			m.session.TotalUsage = Usage{}
@@ -990,6 +991,7 @@ func (m *tuiModel) startFreshSession() {
 	}
 	m.session = s
 	m.history = seedHistory(m.cfg)
+	resetTodos()
 	// SessionID is stamped per-request by headerTransport, so rebuild the
 	// clients around the new ID; otherwise turns would keep attributing
 	// to the old session server-side.
@@ -2266,6 +2268,7 @@ func (m *tuiModel) resumeSessionPath(path string) {
 			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: t.Prompt},
 			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: t.Reply})
 	}
+	restoreTodosFromTurns(turns)
 	if meta, err := loadSessionMeta(metaPath(path)); err == nil {
 		m.session.Title, m.session.Model, m.session.Effort = meta.Title, meta.Model, meta.Effort
 	}
@@ -2488,6 +2491,7 @@ func runTUI(ctx context.Context, cfg Config, cfgPath string, client *openai.Clie
 	if err != nil {
 		return fmt.Errorf("session: %w", err)
 	}
+	resetTodos()
 	m := newTUIModel(cfg, client, registry, session)
 	m.ctx = ctx
 	m.cfgPath = cfgPath

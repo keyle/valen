@@ -200,6 +200,8 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
   every tool record with status.
   Errors view: turns with `Error`. Enter opens full detail; Esc returns.
 - `/clear` resets in-memory history and turns; the disk log is never deleted.
+  `/clear` and `/new` also reset the session todo list; resuming a session
+  restores its last `todowrite` plan.
   `/new` (ctrl+n) mints a fresh `ses-<unixnano>` session with its own JSONL:
   history reseeds, pending/live state and render cache drop, `x-opencode-session`
   clients rebuild around the new id, and the old file stays resumable via

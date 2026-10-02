@@ -53,7 +53,7 @@ func TestChatStreamsTextDeltas(t *testing.T) {
 			deltas = append(deltas, ev.Text)
 		}
 	}
-	reply, usage, err := runChatTurn(context.Background(), cfg, "key", srv.Client(), registry, &history, onEvent)
+	reply, usage, err := runChatTurn(context.Background(), cfg, nil, "key", srv.Client(), registry, &history, onEvent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestChatStreamsToolCalls(t *testing.T) {
 			results = append(results, ev)
 		}
 	}
-	reply, _, err := runChatTurn(context.Background(), cfg, "key", srv.Client(), registry, &history, onEvent)
+	reply, _, err := runChatTurn(context.Background(), cfg, nil, "key", srv.Client(), registry, &history, onEvent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestChatFallsBackWhenStreamRejected(t *testing.T) {
 	registry.LoadBuiltins([]string{"shell"})
 	cfg := newTestConfig(srv.URL)
 	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}
-	reply, _, err := runChatTurn(context.Background(), cfg, "key", srv.Client(), registry, &history, nil)
+	reply, _, err := runChatTurn(context.Background(), cfg, nil, "key", srv.Client(), registry, &history, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestMessagesStreamsTextAndUsage(t *testing.T) {
 			deltas = append(deltas, ev.Text)
 		}
 	}
-	reply, usage, err := runMessagesTurn(context.Background(), cfg, "key", srv.Client(), registry, &history, onEvent)
+	reply, usage, err := runMessagesTurn(context.Background(), cfg, nil, "key", srv.Client(), registry, &history, onEvent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestMessagesStreamsToolUse(t *testing.T) {
 	registry.LoadBuiltins([]string{"shell"})
 	cfg := messagesTestConfig(srv.URL)
 	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}
-	reply, _, err := runMessagesTurn(context.Background(), cfg, "key", srv.Client(), registry, &history, nil)
+	reply, _, err := runMessagesTurn(context.Background(), cfg, nil, "key", srv.Client(), registry, &history, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestResponsesStreamsTextAndUsage(t *testing.T) {
 			deltas = append(deltas, ev.Text)
 		}
 	}
-	reply, usage, err := runResponsesTurn(context.Background(), cfg, "key", srv.Client(), registry, &history, onEvent)
+	reply, usage, err := runResponsesTurn(context.Background(), cfg, nil, "key", srv.Client(), registry, &history, onEvent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestResponsesStreamsFunctionCall(t *testing.T) {
 	registry.LoadBuiltins([]string{"shell"})
 	cfg := responsesTestConfig(srv.URL)
 	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}
-	reply, _, err := runResponsesTurn(context.Background(), cfg, "key", srv.Client(), registry, &history, nil)
+	reply, _, err := runResponsesTurn(context.Background(), cfg, nil, "key", srv.Client(), registry, &history, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

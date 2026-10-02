@@ -34,6 +34,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `errors.go` | Friendly one-line errors mapped from status codes/causes (ctrl+x has details) |
 | `think.go` | Splits `<think>` blocks out of replies so the UI can collapse them |
 | `tools.go` | Tool contract, ordered registry, builtin loader, output limits, `shell` |
+| `todos.go` | Session plan (`todowrite`/`todoread`, opencode schema, in-memory + session fold) |
 | `files.go` | File builtins (`read`, `write`, `edit`, `glob`, `grep`): workdir sandbox, outside-access approval, glob matching |
 | `ask.go` | `AskUserQuestion` contract, headless prompting/confirmation, answer formatting |
 | `search.go` | `web_search` (DuckDuckGo HTML) and `web_fetch` (HTML → text) |
@@ -55,7 +56,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `temperature` | float | unset | Pointer semantics: unset omits the field, `0.0` sends zero |
 | `compaction` | table | `auto=true, keep_tokens=15000, buffer=10%` | Summary-mode, send-side only (disk JSONL stays lossless): `auto` compacts before send when over budget and retries once after a too-long 400; `keep_tokens` recent tail kept verbatim beside the summary; `buffer` headroom below `max_context_tokens`; `model` cheap summarizer override (empty = session model with minimal thinking) |
 | `[input]` | table | `blink=true, height=3` | Chatbox chrome (TUI only): block-cursor blink plus input box height in lines |
-| `tools` | string[] | empty | Subset of `shell`, `web_search`, `web_fetch`, `read`, `write`, `edit`, `glob`, `grep`, `AskUserQuestion`. `AskUserQuestion` is also registered automatically when absent, so model-driven questions work in every frontend |
+| `tools` | string[] | empty | Subset of `shell`, `web_search`, `web_fetch`, `read`, `write`, `edit`, `glob`, `grep`, `AskUserQuestion`, `todowrite`, `todoread`. `AskUserQuestion` plus `todowrite`/`todoread` are also registered automatically when absent, so model-driven questions and the session plan work in every frontend |
 | `mcp` | table[] | empty | Each entry needs `name` + `cmd`; optional `args`, `env` |
 
 Validation errors (missing `model`, MCP entry without `cmd`, unreadable file)
@@ -166,7 +167,11 @@ error: "stopped after N rounds without a final answer"
   is summarized past the threshold (`max_context_tokens` minus `buffer`, or
   `keep_tokens`×3 on huge budgets so sessions compact early and often) beside
   the verbatim `keep_tokens` tail — via the cheap `[compaction] model` when
-  set, else the session model at minimal thinking, no tools. A too-long 400/413
+  set, else the session model at minimal thinking, no tools. The same lean
+  runs between tool rounds inside all three transports (`leanHistoryForNextRound`):
+  prune every round plus a summary past the threshold, so a chunky single turn
+  stops resending rounds × history and the turn after a huge upload starts
+  small. A too-long 400/413
   compacts once and retries the turn; the second failure is terminal. The summary
   updates in place on repeats, and `/compact` (`/summarize`) forces the same path
   manually from the TUI. Compaction is send-side only: the JSONL log keeps
@@ -206,6 +211,8 @@ Rules the registry enforces:
 | `glob` | `pattern`, `path` | Recursive file list supporting `*`/`?`/`[...]`/`**`; top-level subtrees walk in parallel, results sorted; skips `.git` |
 | `grep` | `pattern`, `path`, `include` | Go regexp content search as `file:line: text`, sorted by file then line; directory walk collects candidates while file reads/matches run on a bounded worker pool (8); skips `.git`/binaries/>1 MiB files, capped at 100 matches (max 20 per file, so one noisy file can't starve others) |
 | `AskUserQuestion` | `questions[]` | Presents each question with options plus type-your-own, confirms all answers, and returns `User has answered your questions: ...` |
+| `todowrite` | `todos[]` (`content`, `status`: `pending`/`in_progress`/`completed`/`cancelled`, `priority`: `high`/`medium`/`low`) | Replaces the in-memory session plan (opencode schema); the call records fold into the session JSONL, `/clear`/`/new` reset it, resume restores the last plan. For multi-step work: plan first, one `in_progress` at a time, mark `completed` only after verification |
+| `todoread` | — | Returns the current session plan as JSON (`[]` when empty) |
 
 File tools and `shell` share one sandbox root: the startup directory,
 `-dir <path>`, or a positional directory in TUI mode
@@ -275,6 +282,10 @@ deterministic. Tools are registered as
   type-your-own, confirmation/edit, the TUI overlay state machine, and one
   `AskUserQuestion` round trip per transport (`tool`, `tool_result`,
   `function_call_output`).
+- `todos_test.go` — `todowrite`/`todoread` round trip (opencode schema),
+  validation rejects, empty/reset, restore-from-turns; `lean_test.go` —
+  per-round prune without network, over-threshold mid-turn summary, auto-off
+  no-op.
 
 ## Usage
 

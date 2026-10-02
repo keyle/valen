@@ -289,7 +289,7 @@ func messagesReplyToOpenAI(resp messagesResponse) (openai.ChatCompletionMessage,
 // stays OpenAI-shaped (so the TUI/session layers are untouched); each round
 // converts to Anthropic wire format and folds the reply back. Rounds stream
 // SSE when the provider accepts it, else fall back to one unary call.
-func runMessagesTurn(ctx context.Context, cfg Config, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
+func runMessagesTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
 	var usage openai.Usage
 	tools := registry.MessagesTools()
 	thinking := messagesThinking(cfg.Thinking)
@@ -347,6 +347,9 @@ func runMessagesTurn(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 			return msg, usage, nil
 		}
 		*history = append(*history, runToolCalls(ctx, registry, msg.ToolCalls, onEvent)...)
+		// Same per-round lean as the chat loop: prune every round, summarize
+		// past the threshold, so deep turns don't resend rounds × history.
+		leanHistoryForNextRound(ctx, cfg, client, apiKey, hc, history)
 	}
 	return openai.ChatCompletionMessage{}, usage, fmt.Errorf("stopped after %d rounds without a final answer", cfg.MaxRounds)
 }
