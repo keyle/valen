@@ -67,7 +67,8 @@ Chat requests are `POST {base_url}/chat/completions` with
 request:
 
 - `x-opencode-session: <stable id>` — routing and prompt-cache affinity
-- `User-Agent: mods/1.0` — a client identity, not a generic SDK string
+- `User-Agent: <iPad Safari>` — a browser identity, not a generic SDK string
+  (providers return fuller, cleaner responses to it; one const in `main.go`)
 
 On chat both are stamped by `headerTransport` in `main.go`, so they survive
 retries and apply to every call the OpenAI client makes. The `messages` and

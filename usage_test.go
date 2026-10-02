@@ -37,7 +37,7 @@ func TestFetchGoUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotPath != "/usage" || gotAuth != "Bearer key" || gotSession != "ses-usage" || gotUA != "mods/1.0" {
+	if gotPath != "/usage" || gotAuth != "Bearer key" || gotSession != "ses-usage" || gotUA != userAgent {
 		t.Fatalf("request: path=%q auth=%q session=%q ua=%q", gotPath, gotAuth, gotSession, gotUA)
 	}
 	if u.Rolling.Percent != 90 || u.Weekly.Percent != 36 || u.Monthly.Status != "rate-limited" {

@@ -30,7 +30,10 @@ const (
 	// history. Assumption (reversible via max_context_tokens): well under
 	// the smallest catalog model's limit, over any healthy session.
 	defaultMaxContextTokens = 300000
-	userAgent               = "Mozilla/5.0 (iPad; CPU OS 18_7_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1"
+	// userAgent rides as iPad Safari, not a bot/generic SDK string.
+	// Assumption (reversible by editing one const): providers return fuller,
+	// cleaner responses to a browser UA than to an automation identity.
+	userAgent = "Mozilla/5.0 (iPad; CPU OS 18_7_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1"
 	// defaultSystem applies when `system` is unset in config.toml. It keeps
 	// the agent MCP-capable with a fast tool loopback and points blank
 	// sessions at AGENTS.md first.

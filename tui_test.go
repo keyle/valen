@@ -212,7 +212,7 @@ func TestTUISubmitTurnCompletes(t *testing.T) {
 	if !strings.Contains(m.renderChat(), "ping") {
 		t.Fatal("user prompt missing from transcript")
 	}
-	if gotAuth != "Bearer key" || gotSession != "ses-tui" || gotUA != "mods/1.0" {
+	if gotAuth != "Bearer key" || gotSession != "ses-tui" || gotUA != userAgent {
 		t.Fatalf("headers: %q %q %q", gotAuth, gotSession, gotUA)
 	}
 	if m.session.TotalUsage.Total != 3 {
