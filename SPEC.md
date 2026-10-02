@@ -157,14 +157,16 @@ error: "stopped after N rounds without a final answer"
   (estimated as runes/4, no tokenizer dep) instead of sending a doomed
   request into a 429; `doomLoopTool` aborts the turn when the same single
   tool call repeats a third consecutive time (multi-call batches break the
-  chain). `maybeAutoCompact` runs before send when over the compaction
-  threshold (`max_context_tokens` minus `buffer`): older tool output is
-  pruned in place (newest 40k tokens protected, the rest shortened to 2000
-  chars), then the head is summarized beside the verbatim `keep_tokens`
-  tail — via the cheap `[compaction] model` when set, else the session
-  model at minimal thinking, no tools. A too-long 400/413 compacts once
-  and retries the turn; the second failure is terminal. The summary updates
-  in place on repeats, and `/compact` (`/summarize`) forces the same path
+  chain). `maybeAutoCompact` keeps every send lean: prune runs unconditionally
+  (cheap, local — file reads are disposable since tools re-read them, so all
+  but the newest 2 collapse to path/range descriptors while user decisions
+  never shrink and other outputs keep the newest 40k tokens), then the head
+  is summarized past the threshold (`max_context_tokens` minus `buffer`, or
+  `keep_tokens`×3 on huge budgets so sessions compact early and often) beside
+  the verbatim `keep_tokens` tail — via the cheap `[compaction] model` when
+  set, else the session model at minimal thinking, no tools. A too-long 400/413
+  compacts once and retries the turn; the second failure is terminal. The summary
+  updates in place on repeats, and `/compact` (`/summarize`) forces the same path
   manually from the TUI. Compaction is send-side only: the JSONL log keeps
   every turn. Both keep history and surface as friendly errors, so the user can
   redirect or `/clear`.

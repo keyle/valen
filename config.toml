@@ -1,7 +1,7 @@
 # mods harness config. See SPEC.md for the full schema.
 
 model = "muse-spark-1.3-contributor"
-thinking = "xhigh"
+thinking = "minimal"
 # thinking = "high"            # optional reasoning level; omit for provider default.
                                # Per-model (/effort picker, ctrl+t cycles low→high, wraps):
                                # muse-spark: minimal, low, medium, high, xhigh.
@@ -16,7 +16,7 @@ base_url = "https://opencode.ai/zen/go/v1"
 api_key_env = "OPENCODE_GO_API_KEY"
 # session_id = "ses-stable-id"   # optional, generated per run when omitted
 
-system = "You are a professional programming service. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it. Work fast and multithreaded."
+system = "You are a professional programming service. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it. Work fast and multithreaded. Agressively prune irrelevant context to the task at hand to keep the tokens reasonable; not for cost but for speed and lean approach."
                                 # default system prompt (same as the built-in); set to override.
 # max_rounds = 100 
 
@@ -28,8 +28,8 @@ system = "You are a professional programming service. You are an MCP-capable thi
 # temperature = 0.2               # omit entirely for provider defaults
 
 # [compaction]                    # summary-mode, send-side only (disk JSONL stays lossless).
-# auto = true                     # compact before send when over budget; retry once after a too-long 400.
-# keep_tokens = 15000             # recent tail kept verbatim beside the summary.
+# auto = true                     # prune every send; summarize past the threshold; retry once after a too-long 400.
+# keep_tokens = 15000             # recent tail kept verbatim beside the summary; also sets the early threshold (keep×3).
 # buffer = 30000                  # headroom below max_context_tokens; default 10% of the budget.
 # model = "glm-5.3-flash"         # cheap summarizer for the session model; empty means the session model itself.
 

@@ -174,7 +174,7 @@ JSONL, swaps in the grown history, and goes idle. `AskUserQuestion` blocks the
 background turn on `askPrompter`; the UI thread serves `questionMsg` in the
 question overlay and replies with confirmed answers, leaving history and the
 transport converters unchanged. Slash commands
-(`/clear` `/think` `/save` `/help` `/history` `/tools` `/errors` `/model`
+(`/clear` `/think` `/save` `/help` `/history` `/sessions` `/tools` `/errors` `/model`
 `/effort` `/quit`) resolve inside `submit`/`handleCommand`; `/model` fetches
 the catalog asynchronously via `modelsLoadedMsg`. The footer quota refreshes
 via `usageMsg` from `Init`, a one-minute `usageTickMsg`, and each `turnDoneMsg`.
@@ -188,7 +188,12 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
 - Same `Turn` model + JSONL log at
   `$XDG_DATA_HOME/mods/sessions/<session_id>.jsonl`.
 - History view: one row per turn (time, prompt snippet, tokens) plus older
-  saved session files read-only. Tools view: every tool record with status.
+  saved session files read-only. Sessions view (Ctrl+L): every saved session
+  with its title (first prompt, 60 runes), model/effort, turn count — Enter
+  resumes it (transcript + history rebuilt, same file continues). Titles and
+  the model/effort in use live in `<id>.jsonl.meta.json` next to the
+  append-only JSONL plus per-turn `model`/`effort`. Tools view (Ctrl+U):
+  every tool record with status.
   Errors view: turns with `Error`. Enter opens full detail; Esc returns.
 - `/clear` resets in-memory history and turns; the disk log is never deleted.
 
@@ -245,15 +250,15 @@ ready, input focused. `/clear` resets intentionally.
 
 ## Keybindings
 
-| Key | Chat | Overlays (history/tools/errors/help/detail) |
+| Key | Chat | Overlays (history/sessions/tools/errors/help/detail) |
 | --- | --- | --- |
-| Enter | send turn | open selected row |
+| Enter | send turn | open selected row / resume session |
 | Esc | cancel run / clear input / back | back to chat |
 | Ctrl+C / Ctrl+D | cancel (busy) / quit (idle) | quit |
 | Ctrl+J / Alt+Enter / Shift+Enter | newline in input (shift+enter where the terminal supports it) | — |
-| PgUp/PgDn | scroll transcript | scroll view |
+| PgUp/PgDn / Ctrl+D | scroll transcript | scroll view |
 | Ctrl+G | help | help |
-| Ctrl+R / Ctrl+L / Ctrl+X | history / tools / errors | same |
+| Ctrl+R / Ctrl+L / Ctrl+U / Ctrl+X | history / sessions / tools / errors | same |
 | Ctrl+Y | toggle thinking display | toggle thinking display |
 | Ctrl+T | thinking level cycle low→high, wraps to low | same |
 | Ctrl+O | toggle status details | toggle status details |
@@ -266,7 +271,7 @@ ready, input focused. `/clear` resets intentionally.
 Function keys are gone; the footer only points at `/help`, which lists every
 shortcut (and the shortcut line above).
 
-Slash commands: `/help` `/history` `/tools` `/errors` `/think` `/save`
+Slash commands: `/help` `/history` `/sessions` (`/resume`, `/continue` — resume most recent) `/tools` `/errors` `/think` `/save`
 `/clear` `/compact` (`/summarize` alias) `/model [filter]` `/effort [level]` (`/thinking` alias) `/quit`.
 
 ## Streaming (live)

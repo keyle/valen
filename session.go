@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -32,6 +33,16 @@ type Turn struct {
 	Tools    []ToolRecord   `json:"tools,omitempty"`
 	Usage    Usage          `json:"usage"`
 	Error    *FriendlyError `json:"error,omitempty"`
+	Model    string         `json:"model,omitempty"`
+	Effort   string         `json:"effort,omitempty"`
+}
+
+// SessionMeta is the sidecar alongside the append-only JSONL: title from the
+// first prompt plus the model/thinking level in use at the time.
+type SessionMeta struct {
+	Title  string `json:"title,omitempty"`
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
 }
 
 // Session accumulates turns and appends them to a JSONL log on disk.
@@ -40,6 +51,9 @@ type Session struct {
 	Path       string
 	Turns      []Turn
 	TotalUsage Usage
+	Title      string
+	Model      string
+	Effort     string
 }
 
 func sessionsDir() (string, error) {
@@ -61,7 +75,73 @@ func newSession(cfg Config) (*Session, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	return &Session{ID: cfg.SessionID, Path: filepath.Join(dir, cfg.SessionID+".jsonl")}, nil
+	s := &Session{ID: cfg.SessionID, Path: filepath.Join(dir, cfg.SessionID+".jsonl")}
+	if meta, err := loadSessionMeta(metaPath(s.Path)); err == nil {
+		s.Title, s.Model, s.Effort = meta.Title, meta.Model, meta.Effort
+	}
+	return s, nil
+}
+
+func metaPath(jsonlPath string) string {
+	return jsonlPath + ".meta.json"
+}
+
+func loadSessionMeta(path string) (SessionMeta, error) {
+	var meta SessionMeta
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return meta, err
+	}
+	if err := json.Unmarshal(b, &meta); err != nil {
+		return meta, err
+	}
+	return meta, nil
+}
+
+func saveSessionMeta(path string, meta SessionMeta) error {
+	b, err := json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(b, '\n'), 0o600)
+}
+
+// sessionTitle truncates the first prompt to 60 runes, single-line.
+func sessionTitle(prompt string) string {
+	t := prompt
+	for _, sep := range []string{"\n", "\r"} {
+		if j := strings.Index(t, sep); j >= 0 {
+			t = t[:j]
+		}
+	}
+	r := []rune(strings.TrimSpace(t))
+	if len(r) > 60 {
+		r = r[:60]
+	}
+	return string(r)
+}
+
+func (s *Session) ensureMeta(model, effort string) {
+	if s == nil {
+		return
+	}
+	if len(s.Turns) > 0 && s.Title != "" {
+		return
+	}
+	prompt := ""
+	if len(s.Turns) > 0 {
+		prompt = s.Turns[len(s.Turns)-1].Prompt
+	}
+	if s.Title == "" && prompt != "" {
+		s.Title = sessionTitle(prompt)
+	}
+	if s.Model == "" {
+		s.Model = model
+	}
+	if s.Effort == "" {
+		s.Effort = effort
+	}
+	_ = saveSessionMeta(metaPath(s.Path), SessionMeta{Title: s.Title, Model: s.Model, Effort: s.Effort})
 }
 
 func (s *Session) append(t Turn) error {

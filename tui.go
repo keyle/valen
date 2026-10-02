@@ -133,6 +133,7 @@ const (
 	viewChat viewMode = iota
 	viewHistory
 	viewTools
+	viewSessions
 	viewErrors
 	viewHelp
 	viewDetail
@@ -206,6 +207,15 @@ type historyItem struct {
 type toolItem struct {
 	turnIdx int
 	record  ToolRecord
+}
+
+type sessionItem struct {
+	path   string
+	title  string
+	model  string
+	effort string
+	when   time.Time
+	turns  int
 }
 
 // modelChoice is one row in the /model picker.
@@ -894,6 +904,9 @@ func (m *tuiModel) handleCommand(text string) tea.Cmd {
 	case "/history":
 		m.show(viewHistory)
 		return nil
+	case "/sessions", "/resume", "/continue":
+		m.show(viewSessions)
+		return nil
 	case "/tools":
 		m.show(viewTools)
 		return nil
@@ -1288,6 +1301,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		turn := Turn{
 			At: msg.promptAt(), Prompt: msg.prompt, Thinking: msg.thinking, Reply: msg.answer, Tools: msg.tools,
 			Usage: Usage{Prompt: msg.usage.PromptTokens, Completion: msg.usage.CompletionTokens, Total: msg.usage.TotalTokens},
+			Model: m.cfg.Model, Effort: m.cfg.Thinking,
 		}
 		if msg.err != nil {
 			fe := friendlyError(msg.err)
@@ -1314,6 +1328,8 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if err := m.session.append(turn); err != nil {
 				m.notice = "Session save failed: " + err.Error()
 				m.noticeErr = true
+			} else {
+				m.session.ensureMeta(m.cfg.Model, m.cfg.Thinking)
 			}
 		}
 		if m.done != nil {
@@ -1451,6 +1467,9 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.show(viewHistory)
 		return m, nil
 	case "ctrl+l":
+		m.show(viewSessions)
+		return m, nil
+	case "ctrl+u":
 		m.show(viewTools)
 		return m, nil
 	case "ctrl+x":
@@ -1510,7 +1529,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// modifier-newlines today; shift+enter stays for Kitty-capable ones.
 		m.insertInputNewline()
 		return m, nil
-	case "pgup", "pgdown", "ctrl+u", "ctrl+d":
+	case "pgup", "pgdown", "ctrl+d":
 		var vcmd tea.Cmd
 		m.viewport, vcmd = m.viewport.Update(msg)
 		return m, vcmd
@@ -1544,7 +1563,7 @@ func (m *tuiModel) handleOverlayKey(s string) (tea.Model, tea.Cmd) {
 	case "enter", " ":
 		m.openSelected()
 		return m, nil
-	case "pgup", "pgdown", "ctrl+u", "ctrl+d":
+	case "pgup", "pgdown", "ctrl+d":
 		// Paging scrolls the viewport; cursor moves with j/k.
 		if s == "pgup" || s == "ctrl+u" {
 			m.viewport.PageUp()
@@ -1594,6 +1613,12 @@ func (m *tuiModel) openSelected() {
 		m.detailTitle = "Tool " + r.Name
 		m.detailBody = fmt.Sprintf("args:\n%s\n\noutput:\n%s", r.Args, r.Output)
 		m.show(viewDetail)
+	case viewSessions:
+		items := m.sessionItems()
+		if m.cursor < 0 || m.cursor >= len(items) {
+			return
+		}
+		m.resumeSessionPath(items[m.cursor].path)
 	case viewErrors:
 		idx := m.errorTurnIdx()
 		if m.cursor < 0 || m.cursor >= len(idx) {
@@ -1632,6 +1657,8 @@ func (m *tuiModel) headerView() string {
 	switch m.mode {
 	case viewHistory:
 		mode = headerDimStyle.Render("  ·  history")
+	case viewSessions:
+		mode = headerDimStyle.Render("  ·  sessions")
 	case viewTools:
 		mode = headerDimStyle.Render("  ·  tools")
 	case viewErrors:
@@ -1748,6 +1775,8 @@ func (m *tuiModel) renderViewportContent() string {
 	switch m.mode {
 	case viewHistory:
 		return m.renderHistoryList()
+	case viewSessions:
+		return m.renderSessionsList()
 	case viewTools:
 		return m.renderToolsList()
 	case viewErrors:
@@ -2097,6 +2126,120 @@ func (m *tuiModel) renderToolsList() string {
 	return b.String()
 }
 
+func (m *tuiModel) sessionItems() []sessionItem {
+	paths, _ := listSessions()
+	var items []sessionItem
+	for _, p := range paths {
+		info, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		it := sessionItem{path: p, when: info.ModTime()}
+		if meta, err := loadSessionMeta(metaPath(p)); err == nil {
+			it.title, it.model, it.effort = meta.Title, meta.Model, meta.Effort
+		}
+		if turns, err := loadSession(p); err == nil && len(turns) > 0 {
+			it.turns = len(turns)
+			if it.title == "" {
+				it.title = sessionTitle(turns[0].Prompt)
+			}
+			// Backfill titles on first listing so old JSONLs show names.
+			if it.title != "" {
+				if meta, err := loadSessionMeta(metaPath(p)); err != nil || meta.Title == "" {
+					model, effort := it.model, it.effort
+					if model == "" {
+						model = turns[0].Model
+					}
+					if effort == "" {
+						effort = turns[0].Effort
+					}
+					_ = saveSessionMeta(metaPath(p), SessionMeta{Title: it.title, Model: model, Effort: effort})
+					it.model, it.effort = model, effort
+				}
+			}
+		}
+		if it.title == "" {
+			it.title = strings.TrimSuffix(filepath.Base(p), ".jsonl")
+		}
+		items = append(items, it)
+	}
+	return items
+}
+
+// resumeSessionPath loads path into the current TUI state: turns become the
+// transcript and history is rebuilt so the resumed conversation continues.
+func (m *tuiModel) resumeSessionPath(path string) {
+	turns, err := loadSession(path)
+	if err != nil {
+		m.notice = "Could not load session: " + err.Error()
+		m.noticeErr = true
+		return
+	}
+	m.session.Path = path
+	m.session.ID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	m.session.Turns = turns
+	m.session.TotalUsage = Usage{}
+	for _, t := range turns {
+		m.session.TotalUsage.Prompt += t.Usage.Prompt
+		m.session.TotalUsage.Completion += t.Usage.Completion
+		m.session.TotalUsage.Total += t.Usage.Total
+	}
+	m.history = seedHistory(m.cfg)
+	for _, t := range turns {
+		m.history = append(m.history,
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: t.Prompt},
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: t.Reply})
+	}
+	if meta, err := loadSessionMeta(metaPath(path)); err == nil {
+		m.session.Title, m.session.Model, m.session.Effort = meta.Title, meta.Model, meta.Effort
+	}
+	m.notice = "Resumed " + m.session.ID + " (" + itoa(len(turns)) + " turns)."
+	m.noticeErr = false
+	m.show(viewChat)
+}
+
+func itoa(n int) string { return fmt.Sprintf("%d", n) }
+
+func (m *tuiModel) renderSessionsList() string {
+	items := m.sessionItems()
+	if len(items) == 0 {
+		return emptyStyle.Render("No saved sessions yet.")
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	if m.cursor >= len(items) {
+		m.cursor = len(items) - 1
+	}
+	var b strings.Builder
+	b.WriteString(metaStyle.Render("Sessions — enter resumes · esc back") + "\n\n")
+	cw := m.contentWidth()
+	for i, it := range items {
+		tag := it.model
+		if it.effort != "" {
+			tag += " · " + it.effort
+		}
+		line := fmt.Sprintf("%2d  %s  %s", i+1, it.when.Format("01-02 15:04"), it.title)
+		if tag != "" {
+			line += "  [" + tag + "]"
+		}
+		if it.turns > 0 {
+			line += fmt.Sprintf("  (%d)", it.turns)
+		}
+		cur := ""
+		if m.session != nil && it.path == m.session.Path {
+			cur = "  ● current"
+		}
+		line = truncateRunes(line+cur, cw)
+		if i == m.cursor {
+			b.WriteString(selectedStyle.Width(cw).Render(line) + "\n")
+		} else {
+			b.WriteString("  " + line + "\n")
+		}
+	}
+	return b.String()
+}
+
 func (m *tuiModel) errorTurnIdx() []int {
 	var idx []int
 	if m.session == nil {
@@ -2211,12 +2354,12 @@ func (m *tuiModel) renderHelp() string {
 
 Keys
   enter send · shift+enter/alt+enter/ctrl+j newline · esc cancel/back · pgup/pgdn scroll
-  ctrl+g help · ctrl+r history · ctrl+l tools · ctrl+x errors · ctrl+y thinking display
+  ctrl+g help · ctrl+r history · ctrl+l sessions · ctrl+u tools · ctrl+x errors · ctrl+y thinking display
   ctrl+o details · ctrl+p model · ctrl+t thinking level (cycles low→high, wraps) · ctrl+s save · ctrl+q quit · ctrl+c cancel/quit
   in lists: ↑↓ move · enter open · esc back
 
 Commands
-  /help /history /tools /errors /think /save /clear /quit
+  /help /history /sessions (/resume) /tools /errors /think /save /clear /quit
   /compact (/summarize) — prune + summarize older history with the cheap model; disk log untouched
   /model [filter] — list OpenCode Go models and switch (ctrl+p does the same)
   /effort [level] — thinking level for the current model (/thinking is an alias)
@@ -2234,7 +2377,7 @@ Unset thinking means the provider default. ctrl+t cycles the list low→high
 and wraps to low; unknown models learn valid levels from the provider 400
 and cache them on disk.
 
-Thinking is shown by default (ctrl+y hides). Tools render inline; ctrl+l shows full output.`) + "\n"
+Thinking is shown by default (ctrl+y hides). Tools render inline; ctrl+u shows full output.`) + "\n"
 }
 
 func (m *tuiModel) renderDetail() string {

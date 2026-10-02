@@ -11,9 +11,15 @@ import (
 )
 
 // compaction.go: summary-mode compaction, send-side only (disk JSONL stays
-// lossless). Mirrors opencode: everything except the recent keep.tokens tail
-// is replaced by a short summary beside the verbatim tail, so stateless
-// transports stop resending rounds × history every round.
+// lossless). Everything except the recent keep.tokens tail is replaced by a
+// short summary beside the verbatim tail, so stateless transports stop
+// resending rounds × history every round. Summaries also fire early (keep*3)
+// on huge budgets so sessions compact often, not just near the limit.
+//
+// Pruning runs on every send: file reads are disposable (tools re-read them),
+// so older reads collapse to path/range descriptors while user decisions
+// never shrink. The summary keeps file identities + decisions verbatim and
+// forgets code content.
 //
 // The summary itself runs through the existing runTurn loop on a cheap model
 // ([compaction] model, default = session model with minimal thinking), so all
@@ -27,7 +33,14 @@ const (
 	// Newest tool-output tokens protected from pruning; older outputs are
 	// shortened in place. Matches opencode's PRUNE_PROTECT semantics.
 	compactionPruneProtectTokens = 40000
-	compactionSummaryPrefix      = "[Session summary — older history compressed, recent turns follow verbatim]:\n"
+	// Newest read outputs kept intact: file content is freshest right after
+	// the read, and anything older re-reads cheaply via read {path, offset}.
+	compactionKeepReadsIntact = 2
+	// Auto-compaction also triggers at keep*this even on huge budgets, so big
+	// sessions compact early and often instead of resending rounds × history
+	// all the way to the fail-fast limit.
+	compactionSoftThresholdFactor = 3
+	compactionSummaryPrefix       = "[Session summary — older history compressed, recent turns follow verbatim]:\n"
 )
 
 const compactionSummarizerSystem = "You compress coding-session history into a short handoff summary so another agent can continue the work. Be terse and factual. No tools, no questions, summary text only."
@@ -56,14 +69,23 @@ func compactionAuto(cfg Config) bool {
 	return cfg.Compaction.Auto != nil && *cfg.Compaction.Auto
 }
 
-// compactionThreshold is the pre-send estimate that triggers compaction:
-// budget headroom (buffer) stays free below the fail-fast limit.
+// compactionThreshold is the pre-send estimate that triggers a summary:
+// budget headroom (buffer) stays free below the fail-fast limit, and on huge
+// budgets keep*3 fires much earlier so sessions compact often instead of
+// resending a 40k+ history every round.
 func compactionThreshold(cfg Config) int {
 	budget := contextBudget(cfg)
+	hard := budget
 	if cfg.Compaction.Buffer > 0 {
-		return budget - cfg.Compaction.Buffer
+		hard = budget - cfg.Compaction.Buffer
+	} else {
+		hard = budget - budget/10
 	}
-	return budget - budget/10
+	soft := cfg.Compaction.KeepTokens * compactionSoftThresholdFactor
+	if soft < hard {
+		return soft
+	}
+	return hard
 }
 
 // compactionModel selects the summarizer: cheap [compaction] override when
@@ -95,9 +117,10 @@ func truncateHead(s string, max int) string {
 	return string(r[:max]) + "\n[truncated]"
 }
 
-// serializeForSummary renders history as summarizer text with each tool
-// output capped at 2000 chars. Attachment/image data degrades to a short
-// descriptor instead of raw bytes.
+// serializeForSummary renders history as summarizer text. File reads degrade
+// to path/range descriptors (content re-reads cheaply); user decisions stay
+// fuller; everything else caps at 2000 chars. Attachment/image data degrades
+// to a short descriptor instead of raw bytes.
 func serializeForSummary(history []openai.ChatCompletionMessage) string {
 	var b strings.Builder
 	for _, m := range history {
@@ -117,10 +140,50 @@ func serializeForSummary(history []openai.ChatCompletionMessage) string {
 				b.WriteString("[Assistant tool call]: " + tc.Function.Name + "(" + args + ")\n")
 			}
 		case openai.ChatMessageRoleTool:
+			if d, ok := readDescriptor(m.Content); ok {
+				b.WriteString("[Tool result]: " + d + "\n")
+				continue
+			}
+			if isDecisionOutput(m.Content) {
+				b.WriteString("[Tool result]: " + truncateHead(describeForSummary(m.Content), compactionToolOutputMaxChars*2) + "\n")
+				continue
+			}
 			b.WriteString("[Tool result]: " + truncateHead(describeForSummary(m.Content), compactionToolOutputMaxChars) + "\n")
 		}
 	}
 	return b.String()
+}
+
+// readDescriptor spots a `read` tool result and keeps only its identity
+// lines verbatim: path, total lines, shown range, next-offset hint. The code
+// itself is bloat — the model re-reads it with read {path, offset} whenever
+// it matters. It returns false for non-read output.
+func readDescriptor(content string) (string, bool) {
+	t := strings.TrimSpace(content)
+	if !strings.HasPrefix(t, "File ") {
+		return "", false
+	}
+	lines := strings.Split(t, "\n")
+	if len(lines) == 0 || !strings.Contains(lines[0], "showing") || !strings.Contains(lines[0], "lines") {
+		return "", false
+	}
+	out := lines[0]
+	if last := strings.TrimSpace(lines[len(lines)-1]); strings.HasPrefix(last, "...[") && strings.Contains(last, "offset") {
+		out += "\n" + last
+	}
+	return out + "\n[content dropped — re-read with read {path, offset} to restore]", true
+}
+
+// isReadOutput is readDescriptor's boolean form for prune selection.
+func isReadOutput(content string) bool {
+	_, ok := readDescriptor(content)
+	return ok
+}
+
+// isDecisionOutput reports tool results that must never shrink: user answers
+// (AskUserQuestion) are decisions the summary must keep verbatim.
+func isDecisionOutput(content string) bool {
+	return strings.HasPrefix(strings.TrimSpace(content), "User has answered")
 }
 
 // describeForSummary replaces bulky attachment/image blobs with a short
@@ -181,16 +244,40 @@ func splitForCompaction(history []openai.ChatCompletionMessage, keepTokens int) 
 	return body[:split], body[split:]
 }
 
-// pruneOldToolOutputs shortens older tool results in place, protecting the
-// newest 40k tokens of tool output. It returns reclaimed token estimate.
-// The call record (assistant tool_call) stays, only bulky results shrink.
+// pruneOldToolOutputs shrinks older tool results in place and returns the
+// reclaimed token estimate. Policy: file reads are disposable (tools re-read
+// them) — only the newest 2 stay intact, older ones collapse to path/range
+// descriptors. User decisions (AskUserQuestion answers) never shrink. Other
+// outputs keep the newest 40k tokens and shorten to 2000 chars past that.
+// The call record (assistant tool_call) always stays.
 func pruneOldToolOutputs(history []openai.ChatCompletionMessage) int {
+	reclaimed := 0
+	// Phase 1: older reads collapse to descriptors, newest stay intact.
+	seenReads := 0
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role != openai.ChatMessageRoleTool || !isReadOutput(history[i].Content) {
+			continue
+		}
+		seenReads++
+		if seenReads <= compactionKeepReadsIntact {
+			continue
+		}
+		d, ok := readDescriptor(history[i].Content)
+		if !ok || d == history[i].Content {
+			continue
+		}
+		before := estimateTokens(history[i : i+1])
+		history[i].Content = d
+		reclaimed += before - estimateTokens(history[i:i+1])
+	}
+	// Phase 2: other shrinkable outputs share the 40k newest-tokens shield.
 	protect := compactionPruneProtectTokens
 	var idx []int
 	for i := range history {
-		if history[i].Role == openai.ChatMessageRoleTool {
-			idx = append(idx, i)
+		if history[i].Role != openai.ChatMessageRoleTool || isReadOutput(history[i].Content) || isDecisionOutput(history[i].Content) {
+			continue
 		}
+		idx = append(idx, i)
 	}
 	kept := 0
 	prunedFrom := -1
@@ -202,19 +289,17 @@ func pruneOldToolOutputs(history []openai.ChatCompletionMessage) int {
 		}
 		kept += t
 	}
-	if prunedFrom < 0 {
-		return 0
-	}
-	reclaimed := 0
-	for _, k := range idx[:prunedFrom+1] {
-		m := history[k]
-		before := estimateTokens([]openai.ChatCompletionMessage{m})
-		short := truncateHead(describeForSummary(m.Content), compactionToolOutputMaxChars)
-		if short == m.Content {
-			continue
+	if prunedFrom >= 0 {
+		for _, k := range idx[:prunedFrom+1] {
+			m := history[k]
+			before := estimateTokens([]openai.ChatCompletionMessage{m})
+			short := truncateHead(describeForSummary(m.Content), compactionToolOutputMaxChars)
+			if short == m.Content {
+				continue
+			}
+			history[k].Content = short + "\n[pruned: older tool output shortened]"
+			reclaimed += before - estimateTokens(history[k:k+1])
 		}
-		history[k].Content = short + "\n[pruned: older tool output shortened]"
-		reclaimed += before - estimateTokens(history[k:k+1])
 	}
 	return reclaimed
 }
@@ -337,20 +422,17 @@ func compactHistory(ctx context.Context, cfg Config, client *openai.Client, apiK
 	return summary, true, nil
 }
 
-// maybeAutoCompact prunes then summarizes when history exceeds the
-// compaction threshold. It returns true when history shrank. Cheap and local
-// (prune) runs before any network (summary).
+// maybeAutoCompact keeps every send lean: prune runs unconditionally (cheap,
+// local — old reads collapse to descriptors every turn), then a summary fires
+// past the threshold. It returns true when history shrank by either path.
 func maybeAutoCompact(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, history *[]openai.ChatCompletionMessage) bool {
 	if !compactionAuto(cfg) {
 		return false
 	}
+	pruned := pruneOldToolOutputs(*history) > 0
 	if estimateTokens(*history) <= compactionThreshold(cfg) {
-		return false
-	}
-	pruneOldToolOutputs(*history)
-	if estimateTokens(*history) <= compactionThreshold(cfg) {
-		return true
+		return pruned
 	}
 	_, ok, err := compactHistory(ctx, cfg, client, apiKey, hc, history)
-	return err == nil && ok
+	return pruned || (err == nil && ok)
 }

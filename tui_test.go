@@ -44,6 +44,88 @@ func runSubmit(t *testing.T, m *tuiModel, prompt string) {
 	_, _ = m.Update(msg)
 }
 
+func TestTUISessionsListShowsTitlesAndResumes(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	// Seed two other sessions directly on disk.
+	mk := func(id, prompt, model, effort string) {
+		s, err := newSession(Config{SessionID: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.append(Turn{At: time.Now(), Prompt: prompt, Reply: "r", Model: model, Effort: effort}); err != nil {
+			t.Fatal(err)
+		}
+		s.ensureMeta(model, effort)
+	}
+	mk("ses-alpha", "fix the login redirect bug on retry", "glm-5.3", "high")
+	mk("ses-beta", "second session prompt here", "kimi-k3", "max")
+
+	m.show(viewSessions)
+	text := m.renderSessionsList()
+	for _, want := range []string{"fix the login redirect bug", "second session prompt", "glm-5.3", "high", "kimi-k3"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sessions list missing %q:\n%s", want, text)
+		}
+	}
+	items := m.sessionItems()
+	if len(items) != 2 {
+		t.Fatalf("want 2 other sessions, got %d", len(items))
+	}
+	// Resume the older one: transcript + history rebuilt, mode back to chat.
+	var idx int = -1
+	for i, it := range items {
+		if strings.Contains(it.title, "login redirect") {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("title backfill missing: %+v", items)
+	}
+	m.cursor = idx
+	m.openSelected()
+	if m.mode != viewChat {
+		t.Fatalf("resume: mode=%v", m.mode)
+	}
+	if len(m.session.Turns) != 1 || m.session.Turns[0].Prompt != "fix the login redirect bug on retry" {
+		t.Fatalf("resume turns: %+v", m.session.Turns)
+	}
+	if len(m.history) != 3 { // system + user + assistant
+		t.Fatalf("resume history: %d msgs", len(m.history))
+	}
+}
+
+func TestSessionTitleCapturedOnce(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmp)
+	s, err := newSession(Config{SessionID: "ses-title"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.append(Turn{Prompt: "first prompt names the session\nsecond line dropped"}); err != nil {
+		t.Fatal(err)
+	}
+	s.ensureMeta("m", "low")
+	if s.Title != "first prompt names the session" {
+		t.Fatalf("title=%q", s.Title)
+	}
+	// Second turn must not rename; title stays put.
+	if err := s.append(Turn{Prompt: "a different later prompt"}); err != nil {
+		t.Fatal(err)
+	}
+	s.ensureMeta("m", "low")
+	if s.Title != "first prompt names the session" {
+		t.Fatalf("title changed: %q", s.Title)
+	}
+	long := strings.Repeat("x", 100)
+	if got := sessionTitle(long); len([]rune(got)) != 60 {
+		t.Fatalf("title must truncate to 60 runes, got %d", len([]rune(got)))
+	}
+	meta, err := loadSessionMeta(metaPath(s.Path))
+	if err != nil || meta.Title != s.Title || meta.Model != "m" || meta.Effort != "low" {
+		t.Fatalf("meta round trip: %+v %v", meta, err)
+	}
+}
+
 func TestTUIRendersConversationWithoutRolePrefixes(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	m.session.Turns = []Turn{{At: time.Now(), Prompt: "hi", Reply: "hello", Thinking: "secret plan", Usage: Usage{Prompt: 1, Completion: 2, Total: 3}}}
@@ -224,8 +306,8 @@ func TestTUICtrlShortcuts(t *testing.T) {
 	if help := m.renderHelp(); !strings.Contains(help, "ctrl+g help") || strings.Contains(help, "F1 help") {
 		t.Fatalf("help must list the ctrl shortcuts:\n%s", help)
 	}
-	if help := m.renderHelp(); !strings.Contains(help, "ctrl+t thinking") || !strings.Contains(help, "ctrl+l tools") {
-		t.Fatalf("help must list ctrl+t thinking and ctrl+l tools:\n%s", help)
+	if help := m.renderHelp(); !strings.Contains(help, "ctrl+t thinking") || !strings.Contains(help, "ctrl+l sessions") || !strings.Contains(help, "ctrl+u tools") {
+		t.Fatalf("help must list ctrl+t thinking, ctrl+l sessions and ctrl+u tools:\n%s", help)
 	}
 
 	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlG})
@@ -237,8 +319,13 @@ func TestTUICtrlShortcuts(t *testing.T) {
 		t.Fatalf("ctrl+r: mode=%v", m.mode)
 	}
 	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlL})
-	if m.mode != viewTools {
+	if m.mode != viewSessions {
 		t.Fatalf("ctrl+l: mode=%v", m.mode)
+	}
+	m.show(viewChat)
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlU})
+	if m.mode != viewTools {
+		t.Fatalf("ctrl+u: mode=%v", m.mode)
 	}
 	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlX})
 	if m.mode != viewErrors {

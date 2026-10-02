@@ -18,7 +18,9 @@ retrying a too-long request once after compacting.
    the big model).
 2. Send-side only: disk JSONL keeps everything (recall lossless); the kept
    window shortens long tool output and replaces attachment data with a
-   description.
+   description. File reads are disposable (tools re-read them): all but the
+   newest 2 collapse to path/range descriptors, while user decisions never
+   shrink — important context stays verbatim, code bloat is forgotten.
 3. `/compact` (`/summarize` alias) forces it; auto triggers on too-long 400
    or estimated over-limit before send.
 

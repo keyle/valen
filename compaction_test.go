@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,6 +29,132 @@ func longHistory() []openai.ChatCompletionMessage {
 	}
 	h = append(h, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: "recent question"})
 	return h
+}
+
+func readOutput(path string, total, start, end int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "File %s (%d lines, showing %d-%d):\n", path, total, start, end)
+	for i := start; i <= end; i++ {
+		fmt.Fprintf(&b, "%d: some code line number %d with identifiers\n", i, i)
+	}
+	fmt.Fprintf(&b, "...[%d more lines, read with offset %d]", total-end, end+1)
+	return b.String()
+}
+
+func TestReadDescriptorKeepsIdentity(t *testing.T) {
+	out := readOutput("a.go", 100, 1, 50)
+	d, ok := readDescriptor(out)
+	if !ok {
+		t.Fatalf("read output not recognized:\n%s", out[:120])
+	}
+	if !strings.Contains(d, "File a.go (100 lines, showing 1-50)") {
+		t.Fatalf("identity must stay verbatim: %q", d)
+	}
+	if !strings.Contains(d, "offset 51") {
+		t.Fatalf("next-offset hint must survive: %q", d)
+	}
+	if strings.Contains(d, "some code line") {
+		t.Fatalf("code content must be dropped: %q", d[:200])
+	}
+	if _, ok := readDescriptor("just some shell output\nline2"); ok {
+		t.Fatal("non-read output must not match")
+	}
+}
+
+func TestPruneKeepsNewestReads(t *testing.T) {
+	h := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleSystem, Content: "sys"}}
+	for i := 0; i < 4; i++ {
+		h = append(h,
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{openaiToolCall("id", "read")}},
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: "id", Content: readOutput(fmt.Sprintf("f%d.go", i), 500, 1, 200)},
+		)
+	}
+	if got := pruneOldToolOutputs(h); got <= 0 {
+		t.Fatalf("expected reclaim, got %d", got)
+	}
+	// Newest two reads stay intact; older two collapse to descriptors.
+	for i, wantIntact := range []bool{false, false, true, true} {
+		content := h[2+i*2].Content
+		if wantIntact && !strings.Contains(content, "some code line") {
+			t.Fatalf("read %d must stay intact", i)
+		}
+		if !wantIntact && strings.Contains(content, "some code line") {
+			t.Fatalf("read %d must collapse to a descriptor", i)
+		}
+		if !wantIntact && !strings.Contains(content, "re-read with read") {
+			t.Fatalf("read %d descriptor missing re-read hint", i)
+		}
+	}
+}
+
+func TestPruneProtectsDecisions(t *testing.T) {
+	decision := "User has answered your questions: color=blue"
+	h := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleSystem, Content: "sys"}}
+	for i := 0; i < 10; i++ {
+		h = append(h,
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{openaiToolCall("id", "shell")}},
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: "id", Content: strings.Repeat("log line output ", 2000)},
+		)
+	}
+	h = append(h,
+		openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{openaiToolCall("q", "AskUserQuestion")}},
+		openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: "q", Content: decision},
+	)
+	// Push the decision far from the tip so phase-2 would eat it if unprotected.
+	for i := 0; i < 10; i++ {
+		h = append(h,
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{openaiToolCall("id", "shell")}},
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: "id", Content: strings.Repeat("more logs ", 2000)},
+		)
+	}
+	pruneOldToolOutputs(h)
+	for _, m := range h {
+		if strings.Contains(m.Content, "color=blue") && m.Content != decision {
+			t.Fatalf("decision must stay verbatim: %q", m.Content)
+		}
+	}
+	found := false
+	for _, m := range h {
+		if m.Content == decision {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("decision output went missing")
+	}
+}
+
+func TestCompactionThresholdOften(t *testing.T) {
+	cfg := Config{MaxContextTokens: 300000}
+	cfg.Compaction = normalizeCompactionConfig(CompactionConfig{}, cfg.MaxContextTokens)
+	if got := compactionThreshold(cfg); got != defaultCompactionKeepTokens*compactionSoftThresholdFactor {
+		t.Fatalf("huge budgets must compact at keep*3 (%d), got %d", defaultCompactionKeepTokens*compactionSoftThresholdFactor, got)
+	}
+	small := Config{MaxContextTokens: 20000}
+	small.Compaction = normalizeCompactionConfig(CompactionConfig{}, small.MaxContextTokens)
+	if got := compactionThreshold(small); got != 20000-2000 {
+		t.Fatalf("small budgets stay near the fail-fast limit, got %d", got)
+	}
+}
+
+// TestAutoCompactsOften: history past the soft threshold shrinks via the
+// cheap summarizer without any provider overflow.
+func TestAutoCompactsOften(t *testing.T) {
+	srv, _ := fakeServer(t, completion(nil, "EARLY SUMMARY"))
+	cfg := compactTestConfig(srv.URL)
+	h := longHistory()
+	if !maybeAutoCompact(context.Background(), cfg, newClient(cfg, "key"), "key", nil, &h) {
+		t.Fatal("history over threshold must compact")
+	}
+	found := false
+	for _, m := range h {
+		if strings.HasPrefix(m.Content, compactionSummaryPrefix) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("summary missing after auto-compact")
+	}
 }
 
 func TestCompactionConfigDefaults(t *testing.T) {
@@ -165,8 +292,10 @@ func TestCompactUpdatesInPlace(t *testing.T) {
 
 // TestCompactAutoRetry: provider 400s the turn as too-long, the cheap model
 // summarizes, the retried turn succeeds — offline, one model per role.
+// History sits between keep_tokens (head exists) and the soft threshold (no
+// pre-send compact), so only the 400-recovery path fires.
 func TestCompactAutoRetry(t *testing.T) {
-	var calls int
+	var mainCalls int
 	var models []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
@@ -177,13 +306,13 @@ func TestCompactAutoRetry(t *testing.T) {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		models = append(models, body.Model)
-		calls++
 		w.Header().Set("Content-Type", "application/json")
 		if body.Model == "cheap-flash" {
 			w.Write(completion(nil, "CHEAP SUMMARY"))
 			return
 		}
-		if calls == 1 {
+		mainCalls++
+		if mainCalls == 1 {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte(`{"error":{"message":"This model's maximum context length is exceeded","type":"invalid_request"}}`))
 			return
@@ -194,8 +323,17 @@ func TestCompactAutoRetry(t *testing.T) {
 
 	cfg := newTestConfig(srv.URL)
 	cfg.MaxContextTokens = 100000
-	cfg.Compaction = normalizeCompactionConfig(CompactionConfig{KeepTokens: 200, Model: "cheap-flash"}, cfg.MaxContextTokens)
-	h := longHistory()
+	cfg.Compaction = normalizeCompactionConfig(CompactionConfig{KeepTokens: 2000, Model: "cheap-flash"}, cfg.MaxContextTokens)
+	h := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleSystem, Content: "sys"}}
+	for i := 0; i < 20; i++ {
+		h = append(h,
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: "question " + strings.Repeat("q", 400)},
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: "answer " + strings.Repeat("a", 400)},
+		)
+	}
+	if est := estimateTokens(h); est <= 2000 || est >= 6000 {
+		t.Fatalf("fixture must sit between keep and threshold, est=%d", est)
+	}
 	reply, _, err := runTurn(context.Background(), cfg, newClient(cfg, "key"), "key", nil, NewRegistry(), &h, nil)
 	if err != nil {
 		t.Fatalf("err=%v", err)

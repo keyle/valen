@@ -23,6 +23,11 @@ regresses `project.md` caps.
   overlay resume/fork on seeded JSONLs.
 - [ ] S.1 Flags + title capture (first prompt, 60 runes); JSONL stays
   append-only, fork copies history under a new ID.
+- [x] S.1a Title (first prompt, 60 runes) + model/effort captured per turn
+  and in a `.jsonl.meta.json` sidecar; Ctrl+L `/sessions` overlay lists
+  titles with model/effort and resumes on Enter; tool-call log moved to
+  Ctrl+U (`/tools`). (`TestSessionTitleCapturedOnce`,
+  `TestTUISessionsListShowsTitlesAndResumes`.)
 - [ ] S.2 `/sessions` (`/resume`|`/continue`) overlay reusing history view:
   Enter resumes, `f` forks.
 
