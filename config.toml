@@ -42,7 +42,6 @@ system = "You are a professional programming service. You are an MCP-capable thi
 # height = 3                      # input box height in lines; default 3.
 [input]
 blink = false
-height = 2
 
 # AskUserQuestion is always registered, so models can ask clarifying questions
 # in TUI and headless runs.
