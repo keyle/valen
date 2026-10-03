@@ -32,9 +32,9 @@ func friendlyError(err error) FriendlyError {
 		return FriendlyError{"Couldn't reach the provider. Check network/VPN and resend.", msg}
 	case strings.Contains(lower, "is not set"):
 		if strings.Contains(lower, "openrouter") {
-			return FriendlyError{"OpenRouter key not found — export the env var named by openrouter_api_key_env.", msg}
+			return FriendlyError{"OpenRouter key not found — set openrouter_key in config or export OPENROUTER_API_KEY.", msg}
 		}
-		return FriendlyError{"OpenCode Go API key not found — set the env var named by api_key_env.", msg}
+		return FriendlyError{"OpenCode Go API key not found — set opencode_go_key in config or export OPENCODE_GO_API_KEY.", msg}
 	case strings.Contains(lower, "empty choices"):
 		return FriendlyError{"The model returned an empty reply. Try rephrasing or resending.", msg}
 	case strings.Contains(lower, "stopped after"):
@@ -69,7 +69,7 @@ func friendlyError(err error) FriendlyError {
 		if te.Transport == "openrouter" {
 			switch te.Status {
 			case 401:
-				fe.Title = "OpenRouter rejected the key. Check the env var named by openrouter_api_key_env."
+				fe.Title = "OpenRouter rejected the key. Check openrouter_key or OPENROUTER_API_KEY."
 				// Provisioning/management keys administer keys and
 				// guardrails but can't run inference: OpenRouter answers
 				// them on /chat/completions with 401 "User not found"
@@ -166,7 +166,7 @@ func singleLine(s string, n int) string {
 func friendlyStatus(code int, detail string) FriendlyError {
 	switch code {
 	case 401, 403:
-		return FriendlyError{"The API rejected the key. Check the env var named by api_key_env.", fmt.Sprintf("HTTP %d: %s", code, detail)}
+		return FriendlyError{"The API rejected the key. Check opencode_go_key or OPENCODE_GO_API_KEY.", fmt.Sprintf("HTTP %d: %s", code, detail)}
 	case 402:
 		return FriendlyError{"Out of credits on the OpenCode Go account. Add balance or switch model.", fmt.Sprintf("HTTP %d: %s", code, detail)}
 	case 404:

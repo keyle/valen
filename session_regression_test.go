@@ -14,7 +14,7 @@ import (
 )
 
 func testConfig(url string) Config {
-	return Config{Model: "m", BaseURL: url, APIKeyEnv: "TEST_KEY", SessionID: "ses-tui", MaxRounds: 4}
+	return Config{Model: "m", BaseURL: url, SessionID: "ses-tui", MaxRounds: 4}
 }
 
 func newTestModel(t *testing.T, cfg Config) *tuiModel {

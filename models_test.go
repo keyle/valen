@@ -377,8 +377,8 @@ func TestFetchOpenRouterModels(t *testing.T) {
 }
 
 // TestOpenRouterAuthFailureBlamesRightKey: a 401 on OpenRouter traffic must
-// name the OpenRouter env var (and the transport in details), never the Go
-// api_key_env. Regression: the turn path once labeled everything "chat".
+// name the OpenRouter key (and the transport in details), never the Go
+// opencode_go_key. Regression: the turn path once labeled everything "chat".
 func TestOpenRouterAuthFailureBlamesRightKey(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -398,10 +398,10 @@ func TestOpenRouterAuthFailureBlamesRightKey(t *testing.T) {
 		t.Fatal("expected 401")
 	}
 	fe := friendlyError(err)
-	if !strings.Contains(fe.Title, "openrouter_api_key_env") {
+	if !strings.Contains(fe.Title, "openrouter_key") {
 		t.Fatalf("title blames wrong key: %q", fe.Title)
 	}
-	if strings.Contains(fe.Title, "api_key_env.") && !strings.Contains(fe.Title, "openrouter_") {
+	if strings.Contains(fe.Title, "opencode_go_key") && !strings.Contains(fe.Title, "openrouter_") {
 		t.Fatalf("title still points at the Go env: %q", fe.Title)
 	}
 	if !strings.Contains(fe.Details, "openrouter") {

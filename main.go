@@ -25,8 +25,8 @@ import (
 
 const (
 	defaultBaseURL               = "https://opencode.ai/zen/go/v1"
-	defaultAPIKeyEnv             = "OPENCODE_GO_API_KEY"
-	defaultOpenRouterKeyEnv      = "OPENROUTER_API_KEY"
+	goKeyEnv                     = "OPENCODE_GO_API_KEY"
+	openRouterKeyEnv             = "OPENROUTER_API_KEY"
 	defaultMaxRounds             = 100
 	defaultMaxTokens             = 16384
 	defaultRequestTimeoutSeconds = 300
@@ -72,16 +72,15 @@ func seedHistory(cfg Config) []openai.ChatCompletionMessage {
 
 // Config mirrors config.toml. See SPEC.md for the full schema.
 type Config struct {
-	Model            string `toml:"model"`
-	Thinking         string `toml:"thinking"`
-	BaseURL          string `toml:"base_url"`
-	APIKeyEnv        string `toml:"api_key_env"`
-	OpenRouterKeyEnv string `toml:"openrouter_api_key_env"`
-	// OpenRouterKey is in-memory only (toml:"-" never persists): the
-	// OpenRouter credential read from OpenRouterKeyEnv at boot. Kept out
-	// of the file like the Go key — persistModelSelection only writes
-	// model/thinking lines, and nothing logs it.
-	OpenRouterKey         string `toml:"-"`
+	Model    string `toml:"model"`
+	Thinking string `toml:"thinking"`
+	BaseURL  string `toml:"base_url"`
+	// OpenCodeGoKey / OpenRouterKey are the API keys themselves. Empty by
+	// default: the OPENCODE_GO_API_KEY / OPENROUTER_API_KEY env vars are
+	// used instead. persistModelSelection only writes model/thinking
+	// lines, and nothing logs these.
+	OpenCodeGoKey         string `toml:"opencode_go_key"`
+	OpenRouterKey         string `toml:"openrouter_key"`
 	SessionID             string `toml:"session_id"`
 	System                string `toml:"system"`
 	MaxRounds             int    `toml:"max_rounds"`
@@ -171,12 +170,6 @@ func loadConfig(path string) (Config, error) {
 	}
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultBaseURL
-	}
-	if cfg.APIKeyEnv == "" {
-		cfg.APIKeyEnv = defaultAPIKeyEnv
-	}
-	if cfg.OpenRouterKeyEnv == "" {
-		cfg.OpenRouterKeyEnv = defaultOpenRouterKeyEnv
 	}
 	if cfg.MaxRounds == 0 {
 		cfg.MaxRounds = defaultMaxRounds
@@ -321,12 +314,12 @@ func start() error {
 		cfg.Plan = true
 	}
 
-	apiKey := strings.TrimSpace(os.Getenv(cfg.APIKeyEnv))
+	apiKey := effectiveGoKey(cfg, "")
 	// Missing keys never fail boot: the TUI still opens so the user can
 	// browse /model, and the missing key surfaces when a model needing it
 	// is picked or a turn is sent (see missingKeyError + dispatchTurn).
 	// Trimmed: pasted keys with stray whitespace 401 otherwise.
-	cfg.OpenRouterKey = strings.TrimSpace(os.Getenv(cfg.OpenRouterKeyEnv))
+	cfg.OpenRouterKey = effectiveOpenRouterKey(cfg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -516,12 +509,16 @@ func runTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey stri
 }
 
 // effectiveGoKey resolves the Go credential: the boot snapshot first, then
-// a live env read so an export after boot still works without a restart.
+// the opencode_go_key setting, then a live env read so an export after boot
+// still works without a restart.
 func effectiveGoKey(cfg Config, apiKey string) string {
 	if k := strings.TrimSpace(apiKey); k != "" {
 		return k
 	}
-	return strings.TrimSpace(os.Getenv(goKeyEnvName(cfg)))
+	if k := strings.TrimSpace(cfg.OpenCodeGoKey); k != "" {
+		return k
+	}
+	return strings.TrimSpace(os.Getenv(goKeyEnv))
 }
 
 // effectiveOpenRouterKey resolves the OpenRouter credential the same way.
@@ -529,23 +526,7 @@ func effectiveOpenRouterKey(cfg Config) string {
 	if k := strings.TrimSpace(cfg.OpenRouterKey); k != "" {
 		return k
 	}
-	return strings.TrimSpace(os.Getenv(openRouterKeyEnvName(cfg)))
-}
-
-// goKeyEnvName reports the configured Go env var for error messages.
-func goKeyEnvName(cfg Config) string {
-	if cfg.APIKeyEnv != "" {
-		return cfg.APIKeyEnv
-	}
-	return defaultAPIKeyEnv
-}
-
-// openRouterKeyEnvName reports the configured OpenRouter env var.
-func openRouterKeyEnvName(cfg Config) string {
-	if cfg.OpenRouterKeyEnv != "" {
-		return cfg.OpenRouterKeyEnv
-	}
-	return defaultOpenRouterKeyEnv
+	return strings.TrimSpace(os.Getenv(openRouterKeyEnv))
 }
 
 // missingKeyError is nil when the model in cfg can be called; otherwise an
@@ -555,12 +536,12 @@ func openRouterKeyEnvName(cfg Config) string {
 func missingKeyError(cfg Config, apiKey string) error {
 	if modelProvider(cfg.Model) == ProviderOpenRouter {
 		if effectiveOpenRouterKey(cfg) == "" {
-			return fmt.Errorf("%s is not set (required by model %q)", openRouterKeyEnvName(cfg), cfg.Model)
+			return fmt.Errorf("%s is not set (required by model %q)", openRouterKeyEnv, cfg.Model)
 		}
 		return nil
 	}
 	if effectiveGoKey(cfg, apiKey) == "" {
-		return fmt.Errorf("%s is not set (required by model %q)", goKeyEnvName(cfg), cfg.Model)
+		return fmt.Errorf("%s is not set (required by model %q)", goKeyEnv, cfg.Model)
 	}
 	return nil
 }

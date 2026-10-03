@@ -924,9 +924,9 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	m.cfg.OpenRouterKey = effectiveOpenRouterKey(m.cfg)
 	if err := missingKeyError(m.cfg, m.apiKey); err != nil {
 		if modelProvider(m.cfg.Model) == ProviderOpenRouter {
-			m.notice = fmt.Sprintf("OpenRouter key not found — export %s=... to use %s.", openRouterKeyEnvName(m.cfg), m.cfg.Model)
+			m.notice = fmt.Sprintf("OpenRouter key not found — export %s=... to use %s.", openRouterKeyEnv, m.cfg.Model)
 		} else {
-			m.notice = fmt.Sprintf("OpenCode Go API key not found — set %s=... to use %s.", goKeyEnvName(m.cfg), m.cfg.Model)
+			m.notice = fmt.Sprintf("OpenCode Go API key not found — set %s=... to use %s.", goKeyEnv, m.cfg.Model)
 		}
 		m.noticeErr = true
 		m.refreshViewport()
@@ -1287,9 +1287,9 @@ func (m *tuiModel) applyModelSwitch(id string) {
 	}
 	if err := missingKeyError(m.cfg, m.apiKey); err != nil {
 		if modelProvider(id) == ProviderOpenRouter {
-			m.notice = fmt.Sprintf("Switched to %s. OpenRouter key not found — export %s=... to use it.", id, openRouterKeyEnvName(m.cfg))
+			m.notice = fmt.Sprintf("Switched to %s. OpenRouter key not found — export %s=... to use it.", id, openRouterKeyEnv)
 		} else {
-			m.notice = fmt.Sprintf("Switched to %s. OpenCode Go API key not found — set %s=... to use it.", id, goKeyEnvName(m.cfg))
+			m.notice = fmt.Sprintf("Switched to %s. OpenCode Go API key not found — set %s=... to use it.", id, goKeyEnv)
 		}
 		m.noticeErr = true
 	}
@@ -3515,9 +3515,9 @@ func runTUI(ctx context.Context, cfg Config, statePath string, client *openai.Cl
 	// configured model needs so /model has context before first send.
 	if err := missingKeyError(m.cfg, m.apiKey); err != nil {
 		if modelProvider(m.cfg.Model) == ProviderOpenRouter {
-			m.notice = fmt.Sprintf("OpenRouter key not found — export %s=... to use %s. /model still lists both providers.", openRouterKeyEnvName(m.cfg), m.cfg.Model)
+			m.notice = fmt.Sprintf("OpenRouter key not found — export %s=... to use %s. /model still lists both providers.", openRouterKeyEnv, m.cfg.Model)
 		} else {
-			m.notice = fmt.Sprintf("OpenCode Go API key not found — set %s=... to use %s. /model still lists both providers.", goKeyEnvName(m.cfg), m.cfg.Model)
+			m.notice = fmt.Sprintf("OpenCode Go API key not found — set %s=... to use %s. /model still lists both providers.", goKeyEnv, m.cfg.Model)
 		}
 		m.noticeErr = true
 		m.refreshViewport()

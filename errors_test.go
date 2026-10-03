@@ -33,7 +33,7 @@ func TestFriendlyError(t *testing.T) {
 		{"mcp", errors.New("transport error: transport closed"), "MCP server"},
 		{"messages 429", &transportError{Transport: "messages", Status: 429, Message: "slow down"}, "Rate limited"},
 		{"responses 401", &transportError{Transport: "responses", Status: 401, Message: "bad key"}, "rejected the key"},
-		{"openrouter 401", &transportError{Transport: "openrouter", Status: 401, Message: "No auth credentials found"}, "openrouter_api_key_env"},
+		{"openrouter 401", &transportError{Transport: "openrouter", Status: 401, Message: "No auth credentials found"}, "openrouter_key"},
 		{"openrouter 402", &transportError{Transport: "openrouter", Status: 402, Message: "Insufficient credits"}, "OpenRouter account"},
 		{"openrouter provisioning 401", &transportError{Transport: "openrouter", Status: 401, Message: "User not found."}, "provisioning/management"},
 		{"openrouter 403 attestation", &transportError{Transport: "openrouter", Status: 403, Message: "This model requires you to complete the following before use: 18+ age confirmation. Confirm at https://openrouter.ai/settings/preferences."}, "18+ age confirmation"},

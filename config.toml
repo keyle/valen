@@ -16,8 +16,11 @@ model = "openrouter/anthropic/claude-sonnet-5.5"
 thinking = "high"
 tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "grep"]
 base_url = "https://opencode.ai/zen/go/v1"
-api_key_env = "OPENCODE_GO_API_KEY"
-# openrouter_api_key_env = "OPENROUTER_API_KEY"  # second provider (no boot crash when unset):
+# API keys: empty by default, falling back to the env vars
+# OPENCODE_GO_API_KEY / OPENROUTER_API_KEY. Set a value here to override.
+opencode_go_key = ""
+openrouter_key = ""
+# Second provider (no boot crash when unset):
 #   /model always lists OpenRouter models as openrouter/<vendor>/<model>
 #   (recent flagships in the fallback when offline/unkeyed), served via
 #   OpenRouter's OpenAI-compatible chat endpoint with reasoning_effort for
