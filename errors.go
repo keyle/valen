@@ -59,8 +59,13 @@ func friendlyError(err error) FriendlyError {
 	if errors.As(err, &te) {
 		fe := friendlyStatus(te.Status, te.Message)
 		// Details always name the transport: with two providers a bare
-		// "HTTP 401" no longer says whose key was rejected.
+		// "HTTP 401" no longer says whose key was rejected. The raw
+		// provider body follows so ctrl+x shows the full JSON, not just
+		// the extracted message.
 		fe.Details = fmt.Sprintf("%s HTTP %d: %s", te.Transport, te.Status, te.Message)
+		if raw := strings.TrimSpace(te.Raw); raw != "" {
+			fe.Details += "\n\nRaw response:\n" + raw
+		}
 		if te.Transport == "openrouter" {
 			switch te.Status {
 			case 401:
@@ -71,6 +76,17 @@ func friendlyError(err error) FriendlyError {
 				// while they look valid in the dashboard.
 				if strings.Contains(strings.ToLower(te.Message), "user not found") {
 					fe.Title = "That OpenRouter key can't run inference — provisioning/management keys only manage keys/guardrails. Create a regular API key at openrouter.ai/settings/keys and export it."
+				}
+			case 400:
+				// 400 on OpenRouter is a rejected request (bad model
+				// ID, unsupported param like reasoning_effort,
+				// provider downtime routing). The message names the
+				// exact cause, so surface it in the transcript title;
+				// the full JSON stays in Details.
+				if msg := singleLine(te.Message, 200); msg != "" {
+					fe.Title = "OpenRouter refused the request (400): " + msg
+				} else {
+					fe.Title = "OpenRouter refused the request (400)."
 				}
 			case 403:
 				// 403 on OpenRouter is authorization, never authentication:
@@ -85,11 +101,51 @@ func friendlyError(err error) FriendlyError {
 				}
 			case 402:
 				fe.Title = "Out of credits on the OpenRouter account. Top up at openrouter.ai, then resend."
+			default:
+				// Other OpenRouter 4xx/5xx: keep friendlyStatus wording
+				// but prefix the transport so the transcript never reads
+				// as a Go failure.
+				if te.Status >= 400 && te.Status < 600 {
+					if msg := singleLine(te.Message, 200); msg != "" && !strings.Contains(fe.Title, msg) {
+						fe.Title += " " + msg
+					}
+				}
 			}
 		}
 		return fe
 	}
 	return FriendlyError{"Something went wrong.", msg}
+}
+
+// rawBodyCap bounds the provider body kept for ctrl+x details: large
+// enough to hold the full error JSON (message + code + metadata), small
+// enough to stay readable in the detail view.
+const rawBodyCap = 4000
+
+// capRawBody keeps the trimmed provider body for Details. Empty bodies
+// yield "" so callers can skip the raw section.
+func capRawBody(body []byte) string {
+	msg := strings.TrimSpace(string(body))
+	if msg == "" {
+		return ""
+	}
+	if len(msg) > rawBodyCap {
+		msg = msg[:rawBodyCap] + "…"
+	}
+	return msg
+}
+
+// rawDiff returns raw unless it is identical to msg, in which case ""
+// avoids duplicating the same line in Details. When the body was JSON the
+// raw block is always kept — even though it contains the extracted message
+// — because code/metadata/provider fields are what diagnose a 400.
+func rawDiff(raw, msg string) string {
+	raw = strings.TrimSpace(raw)
+	msg = strings.TrimSpace(msg)
+	if raw == "" || raw == msg {
+		return ""
+	}
+	return raw
 }
 
 // singleLine collapses a provider message to one rune-capped line for use
@@ -122,6 +178,12 @@ func friendlyStatus(code int, detail string) FriendlyError {
 	case 0:
 		return FriendlyError{"No response from the provider.", detail}
 	default:
+		// Generic codes (notably 400): surface the provider message in
+		// the transcript title so the failure is actionable without
+		// opening ctrl+x; the full text stays in Details.
+		if msg := singleLine(detail, 200); msg != "" {
+			return FriendlyError{fmt.Sprintf("Provider error (HTTP %d): %s", code, msg), fmt.Sprintf("HTTP %d: %s", code, detail)}
+		}
 		return FriendlyError{fmt.Sprintf("Provider error (HTTP %d).", code), detail}
 	}
 }

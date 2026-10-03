@@ -57,3 +57,17 @@ func TestFriendlyErrorNil(t *testing.T) {
 		t.Fatalf("expected zero value, got %+v", fe)
 	}
 }
+
+func TestOpenRouter400KeepsRawJSON(t *testing.T) {
+	body := `{"error":{"message":"No endpoints found for deepseek/deepseek-v4.1-flash","code":400,"metadata":{"provider_name":"DeepSeek"}}}`
+	fe := friendlyError(parseTransportError("openrouter", 400, []byte(body)))
+	if !strings.Contains(fe.Title, "No endpoints found") {
+		t.Fatalf("title must surface the provider message: %q", fe.Title)
+	}
+	if !strings.Contains(fe.Details, "openrouter HTTP 400") {
+		t.Fatalf("details must name the transport: %q", fe.Details)
+	}
+	if !strings.Contains(fe.Details, `"provider_name":"DeepSeek"`) {
+		t.Fatalf("details must keep the raw JSON: %q", fe.Details)
+	}
+}

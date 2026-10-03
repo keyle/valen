@@ -26,10 +26,13 @@ func messagesMaxTokens(cfg Config) int {
 
 // transportError carries an HTTP failure from a non-chat transport so
 // friendlyError can map status codes the same way it maps OpenAI errors.
+// Raw keeps the capped provider body so ctrl+x details can show the full
+// JSON, not just the extracted message.
 type transportError struct {
 	Transport string
 	Status    int
 	Message   string
+	Raw       string
 }
 
 func (e *transportError) Error() string {
@@ -269,6 +272,7 @@ func stampLastBlockCache(msgs []messagesMessage) {
 }
 
 func parseMessagesError(status int, body []byte) *transportError {
+	raw := capRawBody(body)
 	var anth struct {
 		Error struct {
 			Type    string `json:"type"`
@@ -276,7 +280,7 @@ func parseMessagesError(status int, body []byte) *transportError {
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(body, &anth); err == nil && anth.Error.Message != "" {
-		return &transportError{Transport: "messages", Status: status, Message: anth.Error.Message}
+		return &transportError{Transport: "messages", Status: status, Message: anth.Error.Message, Raw: rawDiff(raw, anth.Error.Message)}
 	}
 	var oa struct {
 		Error struct {
@@ -285,7 +289,7 @@ func parseMessagesError(status int, body []byte) *transportError {
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(body, &oa); err == nil && oa.Error.Message != "" {
-		return &transportError{Transport: "messages", Status: status, Message: oa.Error.Message}
+		return &transportError{Transport: "messages", Status: status, Message: oa.Error.Message, Raw: rawDiff(raw, oa.Error.Message)}
 	}
 	msg := strings.TrimSpace(string(body))
 	if len(msg) > 500 {
@@ -294,7 +298,7 @@ func parseMessagesError(status int, body []byte) *transportError {
 	if msg == "" {
 		msg = http.StatusText(status)
 	}
-	return &transportError{Transport: "messages", Status: status, Message: msg}
+	return &transportError{Transport: "messages", Status: status, Message: msg, Raw: rawDiff(raw, msg)}
 }
 
 func callMessagesOnce(ctx context.Context, hc *http.Client, cfg Config, apiKey string, req messagesRequest) (messagesResponse, error) {

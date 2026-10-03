@@ -240,7 +240,8 @@ func parseResponsesError(status int, body []byte) *transportError {
 	var decoded any
 	if err := json.Unmarshal(body, &decoded); err == nil {
 		if msg := detail(decoded); msg != "" {
-			return &transportError{Transport: "responses", Status: status, Message: msg}
+			raw := capRawBody(body)
+			return &transportError{Transport: "responses", Status: status, Message: msg, Raw: rawDiff(raw, msg)}
 		}
 	}
 	msg := strings.TrimSpace(string(body))
@@ -250,7 +251,7 @@ func parseResponsesError(status int, body []byte) *transportError {
 	if msg == "" {
 		msg = http.StatusText(status)
 	}
-	return &transportError{Transport: "responses", Status: status, Message: msg}
+	return &transportError{Transport: "responses", Status: status, Message: msg, Raw: rawDiff(capRawBody(body), msg)}
 }
 
 func responsesResponseError(resp responsesResponse) error {

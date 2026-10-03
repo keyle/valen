@@ -2460,7 +2460,7 @@ func (m *tuiModel) renderTurn(t *Turn, w int) string {
 	}
 
 	if t.Error != nil {
-		parts = append(parts, errorTitleSty.Width(min(w-4, 120)).Render(breakLongWords("✗ "+t.Error.Title, min(w-6, 118)))+"\n"+metaStyle.Render("  ctrl+x for details"))
+		parts = append(parts, errorTitleSty.Width(min(w-4, 120)).Render(breakLongWords("✗ "+t.Error.Title, min(w-6, 118)))+"\n"+metaStyle.Render("  ctrl+x, enter for details"))
 	}
 
 	if t.Usage.Total > 0 {

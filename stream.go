@@ -137,14 +137,17 @@ func postAPI(ctx context.Context, hc *http.Client, cfg Config, url string, body 
 
 // parseTransportError maps a non-200 body the same way across transports,
 // trying the OpenAI error shape, then the Anthropic shape, then raw text.
+// The capped raw body is kept on Raw so ctrl+x details can show the full
+// JSON even when only the message is extracted here.
 func parseTransportError(transport string, status int, body []byte) *transportError {
+	raw := capRawBody(body)
 	var oa struct {
 		Error struct {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(body, &oa); err == nil && oa.Error.Message != "" {
-		return &transportError{Transport: transport, Status: status, Message: oa.Error.Message}
+		return &transportError{Transport: transport, Status: status, Message: oa.Error.Message, Raw: rawDiff(raw, oa.Error.Message)}
 	}
 	var anth struct {
 		Error struct {
@@ -152,7 +155,7 @@ func parseTransportError(transport string, status int, body []byte) *transportEr
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(body, &anth); err == nil && anth.Error.Message != "" {
-		return &transportError{Transport: transport, Status: status, Message: anth.Error.Message}
+		return &transportError{Transport: transport, Status: status, Message: anth.Error.Message, Raw: rawDiff(raw, anth.Error.Message)}
 	}
 	msg := strings.TrimSpace(string(body))
 	if len(msg) > 500 {
@@ -161,7 +164,7 @@ func parseTransportError(transport string, status int, body []byte) *transportEr
 	if msg == "" {
 		msg = http.StatusText(status)
 	}
-	return &transportError{Transport: transport, Status: status, Message: msg}
+	return &transportError{Transport: transport, Status: status, Message: msg, Raw: rawDiff(raw, msg)}
 }
 
 // isStreamRejected reports a 400 that blames streaming, the signal to retry
