@@ -10,6 +10,7 @@
 - [ ] when working, page up/down temporarly jumps and then gets smashed back down.
 - [ ] related: the wheelmouse should scroll the scrollback, it does not. add this. Scrolling up should go through the history.
 - [ ] show live errors such as backend overloaded, rate limiting, etc. in the thinking but in red?
+- [ ] when 'working' we want the user to press ESC twice to stop, 1 can be hit by mistake. Add a debounce and check for 2 ESC key sequential within 2 seconds, otherwise go back to working state. Do not interrupt the process until 2 ESC confirmed.
 
 ## Medium
 
