@@ -437,21 +437,15 @@ func maybeAutoCompact(ctx context.Context, cfg Config, client *openai.Client, ap
 	return pruned || (err == nil && ok)
 }
 
-// leanHistoryForNextRound keeps a long tool loop's per-round sends lean, not
-// just the turn's first send. Without it a chunky single turn resends rounds
-// × history every round (quadratic burn, each round slower than the last)
-// and the turn after a 500k upload starts from the same bloat. Prune runs
-// unconditionally (cheap, local — the same collapse maybeAutoCompact applies
-// between turns); a full summary fires only past the threshold. Failures are
-// ignored so a failed compact never kills the turn: the next round's budget
-// check still fail-fasts with guidance.
-func leanHistoryForNextRound(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, history *[]openai.ChatCompletionMessage) {
+// leanHistoryForNextRound keeps a long tool loop's per-round sends lean with
+// a cheap local prune only (no network): older reads collapse to descriptors
+// every round. Summaries fire between turns via maybeAutoCompact and on
+// overflow retry, never blocking the hot tool loop with an extra LLM call.
+// This keeps prefix-cache affinity (bytes stay stable) and avoids doubling
+// latency once past the soft threshold.
+func leanHistoryForNextRound(cfg Config, history *[]openai.ChatCompletionMessage) {
 	if !compactionAuto(cfg) {
 		return
 	}
 	pruneOldToolOutputs(*history)
-	if estimateTokens(*history) <= compactionThreshold(cfg) {
-		return
-	}
-	_, _, _ = compactHistory(ctx, cfg, client, apiKey, hc, history)
 }

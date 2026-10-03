@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -23,7 +22,7 @@ func TestLeanPrunesBetweenRounds(t *testing.T) {
 			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: "id", Content: readOutput(fmt.Sprintf("f%d.go", i), 500, 1, 200)},
 		)
 	}
-	leanHistoryForNextRound(context.Background(), cfg, nil, "key", nil, &h)
+	leanHistoryForNextRound(cfg, &h)
 	for i, wantIntact := range []bool{false, false, true, true} {
 		content := h[2+i*2].Content
 		if wantIntact && !strings.Contains(content, "some code line") {
@@ -35,22 +34,18 @@ func TestLeanPrunesBetweenRounds(t *testing.T) {
 	}
 }
 
-// TestLeanCompactsPastThreshold: over the threshold the per-round lean
-// summarizes via the cheap model, so a chunky turn shrinks mid-loop instead
-// of resending the bloat every round.
-func TestLeanCompactsPastThreshold(t *testing.T) {
-	srv, _ := fakeServer(t, completion(nil, "MID-TURN SUMMARY"))
-	cfg := compactTestConfig(srv.URL)
+// TestLeanNeverSummarizesMidTurn: even over the soft threshold the per-round
+// lean stays prune-only with no network call, so the hot tool loop never
+// blocks on an extra LLM summary. Summaries fire between turns via
+// maybeAutoCompact and on overflow retry.
+func TestLeanNeverSummarizesMidTurn(t *testing.T) {
+	cfg := compactTestConfig("http://127.0.0.1:1")
 	h := longHistory()
-	leanHistoryForNextRound(context.Background(), cfg, newClient(cfg, "key"), "key", nil, &h)
-	found := false
+	leanHistoryForNextRound(cfg, &h)
 	for _, m := range h {
 		if strings.HasPrefix(m.Content, compactionSummaryPrefix) {
-			found = true
+			t.Fatal("per-round lean must not summarize mid-turn")
 		}
-	}
-	if !found {
-		t.Fatal("over-threshold lean must summarize mid-turn")
 	}
 }
 
@@ -67,7 +62,7 @@ func TestLeanRespectsAutoOff(t *testing.T) {
 		)
 	}
 	before := h[2].Content
-	leanHistoryForNextRound(context.Background(), cfg, nil, "key", nil, &h)
+	leanHistoryForNextRound(cfg, &h)
 	if h[2].Content != before {
 		t.Fatal("auto off must leave history untouched")
 	}

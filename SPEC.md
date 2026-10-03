@@ -50,7 +50,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `base_url` | string | `https://opencode.ai/zen/go/v1` | API base; the transport path (`/chat/completions`, `/messages`, `/responses`) is appended per model |
 | `api_key_env` | string | `OPENCODE_GO_API_KEY` | Name of the env var holding the key, not the key itself |
 | `session_id` | string | `ses-<unixnano>` | Stable per conversation; sent as `x-opencode-session` |
-| `system` | string | built-in default (mirrors `config.toml`) | System prompt; empty uses the built-in default (helpful assistant, MCP-capable thinking agent with fast tool loopback, check AGENTS.md first). The shipped `config.toml` sets it explicitly — edit there to override |
+| `system` | string | built-in default (mirrors `config.toml`) | System prompt; empty uses the built-in default (helpful assistant, MCP-capable thinking agent with fast tool loopback, batch independent calls in one block, check AGENTS.md first). The shipped `config.toml` sets it explicitly — edit there to override |
 | `max_rounds` | int | `8` | Hard stop on tool-loop iterations |
 | `max_context_tokens` | int | `200000` | Fail-fast budget per round (est. runes/4): over-budget history aborts the turn with guidance instead of a doomed send |
 | `temperature` | float | unset | Pointer semantics: unset omits the field, `0.0` sends zero |
@@ -144,6 +144,8 @@ error: "stopped after N rounds without a final answer"
   stderr, so `valen "..." > out.md` stays clean.
 - `resp.Choices` empty is an error, not a panic.
 - API errors are returned wrapped (`api: ...`) with the provider's message.
+  Transient 429/502/503/504 and network errors retry with backoff (3 attempts)
+  before surfacing, so overloads back off instead of failing the turn.
 - Ctrl-C cancels the request context and unwinds MCP closers.
 - Every round requests `stream: true` SSE. Text/thinking deltas stream to the
   frontend via `onEvent` (`text_delta`, `thinking_delta`) while tool calls
@@ -167,11 +169,11 @@ error: "stopped after N rounds without a final answer"
   is summarized past the threshold (`max_context_tokens` minus `buffer`, or
   `keep_tokens`×3 on huge budgets so sessions compact early and often) beside
   the verbatim `keep_tokens` tail — via the cheap `[compaction] model` when
-  set, else the session model at minimal thinking, no tools. The same lean
-  runs between tool rounds inside all three transports (`leanHistoryForNextRound`):
-  prune every round plus a summary past the threshold, so a chunky single turn
-  stops resending rounds × history and the turn after a huge upload starts
-  small. A too-long 400/413
+  set (shipped `config.toml` sets `glm-5.3-flash`), else the session model at
+  minimal thinking, no tools. Between tool rounds all three transports run a
+  prune-only lean (`leanHistoryForNextRound`): older reads/outputs collapse
+  every round with no network call, so the hot loop never blocks on an extra
+  LLM summary; summaries fire between turns and on overflow retry. A too-long 400/413
   compacts once and retries the turn; the second failure is terminal. The summary
   updates in place on repeats, and `/compact` (`/summarize`) forces the same path
   manually from the TUI. Compaction is send-side only: the JSONL log keeps

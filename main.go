@@ -36,8 +36,9 @@ const (
 	userAgent = "Mozilla/5.0 (iPad; CPU OS 18_7_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1"
 	// defaultSystem applies when `system` is unset in config.toml. It keeps
 	// the agent MCP-capable with a fast tool loopback and points blank
-	// sessions at AGENTS.md first.
-	defaultSystem = "You are a helpful assistant. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, todowrite, todoread, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it. For multi-step work, plan with todowrite first (one in_progress at a time, mark completed as you go) and keep each round lean: re-read files instead of resending them."
+	// sessions at AGENTS.md first. Batching guidance is explicit so the model
+	// emits parallel calls in one block instead of one tool per round.
+	defaultSystem = "You are a helpful assistant. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, todowrite, todoread, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it. Work fast: batch all independent tool calls in the same block (parallel read/glob/grep/shell); prefer grep/glob to locate before reading. For multi-step work, plan with todowrite first (one in_progress at a time, mark completed as you go) and keep each round lean: re-read files instead of resending them."
 )
 
 // effectiveSystem returns the configured system prompt, or the built-in
@@ -579,10 +580,9 @@ func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey 
 		}
 
 		*history = append(*history, runToolCalls(ctx, registry, msg.ToolCalls, onEvent)...)
-		// Keep long turns lean between rounds, not just between user turns:
-		// prune collapses older reads/outputs every round so the next send
-		// stays small; a summary fires past the threshold.
-		leanHistoryForNextRound(ctx, cfg, client, apiKey, hc, history)
+		// Keep long turns lean between rounds: prune-only, no blocking
+		// summary in the hot loop (summaries fire between turns).
+		leanHistoryForNextRound(cfg, history)
 	}
 	return openai.ChatCompletionMessage{}, usage, fmt.Errorf("stopped after %d rounds without a final answer", cfg.MaxRounds)
 }

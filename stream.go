@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Shared streaming layer for the three transports.
@@ -18,6 +19,68 @@ import (
 // parsers; otherwise the body is server-sent events parsed incrementally so
 // text/thinking deltas reach the UI live. A 400 that complains about
 // streaming falls back to one unary retry per round.
+//
+// Transient 429/502/503/504 responses and network errors retry with backoff
+// (up to 3 attempts) so overloads back off instead of failing the turn.
+const (
+	retryMaxAttempts = 3
+	retryDelayFirst  = 300 * time.Millisecond
+	retryDelaySecond = 800 * time.Millisecond
+)
+
+func retryDelay(attempt int) time.Duration {
+	if attempt == 0 {
+		return retryDelayFirst
+	}
+	return retryDelaySecond
+}
+
+func isRetryableStatus(status int) bool {
+	return status == http.StatusTooManyRequests ||
+		status == http.StatusBadGateway ||
+		status == http.StatusServiceUnavailable ||
+		status == http.StatusGatewayTimeout
+}
+
+// clientDoWithRetry executes req, retrying transient statuses and network
+// errors with backoff. Retryable responses are drained and closed before the
+// next attempt so connections reuse. Non-retryable responses return as-is
+// for the caller to parse (including SSE streams).
+func clientDoWithRetry(ctx context.Context, client *http.Client, req *http.Request) (*http.Response, error) {
+	for attempt := 0; attempt < retryMaxAttempts; attempt++ {
+		if attempt > 0 && req.GetBody != nil {
+			body, err := req.GetBody()
+			if err != nil {
+				return nil, err
+			}
+			req.Body = body
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			if ctx.Err() != nil || attempt+1 >= retryMaxAttempts {
+				return nil, err
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(retryDelay(attempt)):
+			}
+			continue
+		}
+		if !isRetryableStatus(resp.StatusCode) || attempt+1 >= retryMaxAttempts {
+			return resp, nil
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+		resp.Body.Close()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(retryDelay(attempt)):
+		}
+	}
+	return nil, errors.New("api: retry exhausted")
+}
+
 func postAPI(ctx context.Context, hc *http.Client, cfg Config, url string, body any, headers map[string]string) (*http.Response, error) {
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -39,7 +102,7 @@ func postAPI(ctx context.Context, hc *http.Client, cfg Config, url string, body 
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return client.Do(req)
+	return clientDoWithRetry(ctx, client, req)
 }
 
 // parseTransportError maps a non-200 body the same way across transports,

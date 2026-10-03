@@ -216,7 +216,7 @@ func callMessagesOnce(ctx context.Context, hc *http.Client, cfg Config, apiKey s
 	if client == nil {
 		client = http.DefaultClient
 	}
-	resp, err := client.Do(httpReq)
+	resp, err := clientDoWithRetry(ctx, client, httpReq)
 	if err != nil {
 		return out, err
 	}
@@ -347,9 +347,8 @@ func runMessagesTurn(ctx context.Context, cfg Config, client *openai.Client, api
 			return msg, usage, nil
 		}
 		*history = append(*history, runToolCalls(ctx, registry, msg.ToolCalls, onEvent)...)
-		// Same per-round lean as the chat loop: prune every round, summarize
-		// past the threshold, so deep turns don't resend rounds × history.
-		leanHistoryForNextRound(ctx, cfg, client, apiKey, hc, history)
+		// Same per-round lean as the chat loop: prune-only, no blocking summary.
+		leanHistoryForNextRound(cfg, history)
 	}
 	return openai.ChatCompletionMessage{}, usage, fmt.Errorf("stopped after %d rounds without a final answer", cfg.MaxRounds)
 }

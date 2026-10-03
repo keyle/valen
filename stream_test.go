@@ -306,3 +306,58 @@ func TestTUIPendingTextDeltasRenderOnOwnLines(t *testing.T) {
 		t.Fatalf("pending deltas should render on separate lines:\n%s", out)
 	}
 }
+
+// TestPostAPIRetriesTransientThenSucceeds: a 429 followed by 200 returns the
+// 200 without surfacing the transient failure, proving backoff retry.
+func TestPostAPIRetriesTransientThenSucceeds(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error":{"message":"slow down"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	cfg := newTestConfig(srv.URL)
+	resp, err := postAPI(context.Background(), srv.Client(), cfg, srv.URL+"/chat/completions", map[string]any{"model": "m"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	if calls != 2 {
+		t.Fatalf("calls=%d, want 1 retry then success", calls)
+	}
+}
+
+// TestPostAPINoRetryOn400: client errors other than 429/5xx return
+// immediately so stream-rejection fallback still sees a single 400.
+func TestPostAPINoRetryOn400(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":{"message":"streaming is not supported"}}`))
+	}))
+	defer srv.Close()
+
+	cfg := newTestConfig(srv.URL)
+	resp, err := postAPI(context.Background(), srv.Client(), cfg, srv.URL+"/chat/completions", map[string]any{"model": "m"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	if calls != 1 {
+		t.Fatalf("calls=%d, 400 must not retry", calls)
+	}
+}

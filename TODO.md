@@ -15,6 +15,7 @@
 
 - [x] M.1 operations that take the model more than 30 seconds need to be investigated as either we're sending too large data in the window or something has gone wrong. How can we handle this? this is a bigger todo that may require soul searching so to speak.
 		fixed: per-round lean (`leanHistoryForNextRound` in all 3 transports — prune every round, summarize past the threshold; previously only between turns) + `todowrite`/`todoread` session plan so chunky work runs as small verified steps. Diagnosis: single turns resent rounds × history every round (quadratic), and no plan surface meant sprawling loops.
+		perf: per-round lean is now prune-only (no blocking summary in the hot loop; summaries fire between turns via maybeAutoCompact and on overflow retry) + `[compaction] model=glm-5.3-flash` + `thinking=medium` + 429/5xx backoff retry. Rationale: mid-turn summaries doubled latency past 45k and busted prefix-cache; prune keeps bytes stable.
 		note: I feel maybe we need to check whether we get clogged down, maybe we need more turns? Big task may need to automatically be done as multiple turn TODO written in memory like opencode does? 'Updating Todos' which are only for this session. This might be the key!
 		note2: I am not sure we're actually compacting between tool calls, only between turns, and that may not be often enough? thoughts?
 - [ ] M.2 are different sessions trully independent? I feel running more than 2 can lead to a major slowdown, maybe backend is doing it?
