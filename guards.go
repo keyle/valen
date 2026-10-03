@@ -27,6 +27,11 @@ const (
 	// Below the default limit; limits at or under it skip straight to the stop.
 	actNudgeStagnant = 15
 	actNudgeText     = "[ephemeral nudge — not part of the task] You have explored for many rounds without calling write/edit/task. You likely already hold what you need: make the change now, or call AskUserQuestion to state what blocks you."
+	// stallRecoveryText is the last-chance instruction appended when the
+	// stall limit trips: instead of dying, the turn runs one final round
+	// and finishes with whatever text the model produces. Like the nudges
+	// it strips at turn end, so the next turn starts with a clean slate.
+	stallRecoveryText = "[ephemeral — not part of the task] Stop calling tools now. Based on everything gathered so far, write your final answer: summarize findings and state exactly what edits remain. Do not emit any more tool calls."
 )
 
 // isActingTool reports calls that change code or delegate work: the only
@@ -105,7 +110,7 @@ func stripNudges(history *[]openai.ChatCompletionMessage) {
 	out := h[:0]
 	for _, m := range h {
 		if m.Role == openai.ChatMessageRoleUser {
-			if c := strings.TrimSpace(m.Content); c == batchNudgeText || c == actNudgeText {
+			if c := strings.TrimSpace(m.Content); c == batchNudgeText || c == actNudgeText || c == stallRecoveryText {
 				continue
 			}
 		}

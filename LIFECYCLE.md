@@ -248,8 +248,10 @@ missing feature.
 - `doomLoopTool` — same single tool+args a third consecutive time →
   abort with guidance. Multi-call batches don't count (parallel unit).
 - Stall guard — `max_stagnant_rounds` (default 25) rounds with tool calls but
-  no `write`/`edit`/`task` → abort ("exploring without acting"). Shell
-  doesn't reset it. Raise for long research turns.
+  no `write`/`edit`/`task` → one final round under a no-tools instruction
+  instead of dying: text finishes the turn (attached calls declined), an
+  empty answer still aborts. Shell doesn't reset it. Raise for long research
+  turns.
 - Batching nudge — 3 consecutive single-call rounds append one ephemeral
   user reminder to batch independent calls; stripped at turn end.
 - Act nudge — at 15 stagnant rounds one ephemeral reminder invites the model

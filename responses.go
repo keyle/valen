@@ -291,6 +291,7 @@ func runResponsesTurn(ctx context.Context, cfg Config, client *openai.Client, ap
 	tools := registry.ResponsesTools()
 	reasoning := responsesReasoning(cfg.Thinking)
 	guards := newLoopGuards(cfg)
+	recovering := false
 	defer stripNudges(history)
 	for round := 0; round < cfg.MaxRounds; round++ {
 		toolsTok := requestToolsTokens(registry)
@@ -364,12 +365,31 @@ func runResponsesTurn(ctx context.Context, cfg Config, client *openai.Client, ap
 		if len(msg.ToolCalls) == 0 {
 			return msg, usage, nil
 		}
+		if recovering {
+			// Recovery round answered with tools attached: take the text,
+			// leave the calls unexecuted, and finish the turn instead of
+			// dying on the stall.
+			if strings.TrimSpace(msg.Content) == "" {
+				return openai.ChatCompletionMessage{}, usage, stagnantError(guards.stagnant)
+			}
+			(*history)[len(*history)-1].ToolCalls = nil
+			dlogf("stall recovery: finishing with text, %d tool call(s) declined", len(msg.ToolCalls))
+			final := msg
+			final.ToolCalls = nil
+			return final, usage, nil
+		}
 		*history = append(*history, runToolCalls(ctx, registry, msg.ToolCalls, onEvent)...)
 		// Same per-round lean as the chat loop: prune-only, no blocking summary.
 		leanHistoryForNextRound(cfg, history)
 		if nudge, act, stop := guards.note(msg.ToolCalls); stop != nil {
 			dlogf("stall guard tripped after %d stagnant rounds", guards.stagnant)
-			return openai.ChatCompletionMessage{}, usage, stop
+			if recovering {
+				return openai.ChatCompletionMessage{}, usage, stop
+			}
+			recovering = true
+			dlogf("stall recovery: one final round under no-tools instruction")
+			*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: stallRecoveryText})
+			continue
 		} else {
 			if nudge {
 				dlogf("batch nudge appended after single-call streak")

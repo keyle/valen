@@ -176,14 +176,17 @@ error: "stopped after N rounds without a final answer"
   JSON envelope per message, no tokenizer dep) instead of sending a doomed
   request into a 429; `doomLoopTool` aborts the turn when the same single
   tool call repeats a third consecutive time (multi-call batches break the
-     chain). A stall guard (`loopGuards`) aborts the turn after
-   `max_stagnant_rounds` rounds with tool calls but no `write`/`edit`/`task`
-   (shell probing doesn't count — it looks busy while changing nothing).
-   Before that, it appends ephemeral reminders: a batching nudge after 3
-   consecutive single-call rounds, and an act-now nudge at 15 stagnant rounds
-   inviting the model to advance (skipped when the limit is 15 or less).
-   Both strip at turn end, so later turns stay clean; question rounds pause
-   all counters. `maybeAutoCompact` keeps every send lean: prune runs unconditionally
+     chain). A stall guard (`loopGuards`) watches rounds with tool calls but no
+   `write`/`edit`/`task` (shell probing doesn't count — it looks busy while
+   changing nothing). Before the limit, it appends ephemeral reminders: a
+   batching nudge after 3 consecutive single-call rounds, and an act-now
+   nudge at 15 stagnant rounds inviting the model to advance (skipped when
+   the limit is 15 or less). At `max_stagnant_rounds` the turn doesn't die:
+   it appends a final no-tools instruction and runs one last round — text
+   finishes the turn with any attached calls declined unexecuted, while an
+   empty answer still aborts. All three notices strip at turn end, so later
+   turns stay clean; question rounds pause all counters. `maybeAutoCompact`
+   keeps every send lean: prune runs unconditionally
   (cheap, local — file reads are disposable since tools re-read them, so all
   but the newest 2 collapse to path/range descriptors while user decisions
   never shrink and other outputs keep the newest 40k tokens), then the head
