@@ -156,9 +156,11 @@ error: "stopped after N rounds without a final answer"
   parallel.
 - Wire copies stay small while stored history stays full: every transport
   converter shrinks tool results to a 2k send budget (`sendToolOutputChars`;
-  decisions exempt) so stateless replays stop re-uploading rounds × 16k
-  outputs. The `task` subagent (explore/general, foreground-only, depth ≤2)
-  keeps research out of main history: only its summary folds back.
+  decisions and file reads exempt — reads are the working set, already
+  tool-capped and pruned past the newest 2) so stateless replays stop
+  re-uploading rounds × 16k outputs. The `task` subagent (explore/general,
+  foreground-only, depth ≤2) keeps research out of main history: only its
+  summary folds back.
 
 - Assistant text goes to stdout; `[tool name]` traces and the token tally go to
   stderr, so `valen "..." > out.md` stays clean.
@@ -191,7 +193,10 @@ error: "stopped after N rounds without a final answer"
    the limit is 15 or less). At `max_stagnant_rounds` the turn doesn't die:
    it appends a final no-tools instruction and runs one last round — text
    finishes the turn with any attached calls declined unexecuted, while an
-   empty answer still aborts. All three notices strip at turn end, so later
+   empty answer still aborts. A finishing reply that claims a code change
+   (implemented/fixed/edited/…) with no write/edit/task behind it earns a
+   claim challenge instead (max 2 per turn): make the edit or restate
+   honestly. All four notices strip at turn end, so later
    turns stay clean; question rounds pause all counters. Plan mode (`plan`,
    `/plan`, `-plan`) flips the turn read-only instead: the plan overlay joins
    the system prompt, `write`/`edit`/`shell` refuse as tool output with

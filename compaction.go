@@ -153,14 +153,20 @@ func cheapestThinking(model string) string {
 // mirroring opencode's TOOL_OUTPUT_MAX_CHARS. Stored history keeps the full
 // 16k registry output (session log stays lossless); only the request copy
 // shrinks, so rounds stop re-uploading rounds × full results. User decisions
-// (AskUserQuestion answers) are exempt — the model must see them verbatim.
+// (AskUserQuestion answers) and file reads are exempt — decisions must be
+// seen verbatim, and reads are the model's working set (already tool-capped,
+// pruned to descriptors past the newest 2).
 const sendToolOutputChars = 2000
 
 // fitSendBudget cuts a tool result to the per-round send budget with a
-// marker telling the model how to see more (re-run narrower). Short results
-// and decision outputs pass through untouched.
+// marker telling the model how to see more (re-run narrower). Short results,
+// decision outputs, and file reads pass through untouched: reads are already
+// capped (~12KB) by the read tool and prune collapses all but the newest 2
+// to descriptors in stored history, so exempting them only ever sends the
+// fresh working set — truncating them is what strands the model re-reading
+// files it can never hold.
 func fitSendBudget(content string) string {
-	if isDecisionOutput(content) {
+	if isDecisionOutput(content) || isReadOutput(content) {
 		return content
 	}
 	r := []rune(content)

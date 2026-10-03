@@ -12,6 +12,7 @@ package guard
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/sashabaranov/go-openai"
@@ -38,6 +39,12 @@ const (
 	// and finishes with whatever text the model produces. Like the nudges
 	// it strips at turn end, so the next turn starts with a clean slate.
 	StallRecoveryText = "[ephemeral — not part of the task] Stop calling tools now. Based on everything gathered so far, write your final answer: summarize findings and state exactly what edits remain. Do not emit any more tool calls."
+	// MaxClaimChallenges caps claim-vs-action challenges per turn: a model
+	// that keeps claiming unmade changes finishes anyway after this many.
+	MaxClaimChallenges = 2
+	// ClaimChallengeText confronts a reply that claims a code change when no
+	// write/edit/task call succeeded this turn. Stripped at turn end.
+	ClaimChallengeText = "[ephemeral — not part of the task] You state a change was made, but no write/edit/task call succeeded this turn. Either make the edit now with write/edit, or restate honestly what you found and what remains — do not claim unmade changes."
 )
 
 // IsActingTool reports calls that change code or delegate work: the only
@@ -56,6 +63,7 @@ type Guards struct {
 	singleStreak int
 	stagnant     int
 	actNudged    bool
+	acted        bool
 }
 
 // New starts guards with the given stagnant limit (<=0 means the default).
@@ -72,6 +80,9 @@ func (g *Guards) Limit() int { return g.limit }
 // Stagnant reports rounds with tool calls but no acting call so far.
 func (g *Guards) Stagnant() int { return g.stagnant }
 
+// Acted reports whether any write/edit/task call ran this turn.
+func (g *Guards) Acted() bool { return g.acted }
+
 // Note consumes one round's tool calls. nudge asks the caller to append the
 // batching reminder, act asks for the act-now reminder; stop aborts the turn
 // when the stall limit trips.
@@ -87,6 +98,7 @@ func (g *Guards) Note(calls []openai.ToolCall) (nudge, act bool, stop error) {
 		}
 		if IsActingTool(tc.Function.Name) {
 			g.singleStreak, g.stagnant, g.actNudged = 0, 0, false
+			g.acted = true
 			return false, false, nil
 		}
 	}
@@ -115,6 +127,19 @@ func StagnantError(rounds int) error {
 	return fmt.Errorf("stopped: %d rounds with tool calls but no write/edit/task — the loop is exploring without acting; narrow the task, delegate exploration to task, or /clear (raise max_stagnant_rounds to allow longer research)", rounds)
 }
 
+// claimChangeRe spots replies that claim a code change was made. Deliberately
+// verb-only: bare "done"/"complete" also end research summaries, which must
+// finish untouched.
+var claimChangeRe = regexp.MustCompile(`(?i)\b(implemented|fixed|edited|updated|added|created|modified|refactor(?:ed|ing)?|applied)\b`)
+
+// FalseClaim reports a finishing reply that claims a code change when no
+// write/edit/task call succeeded this turn — the "says implemented, didn't"
+// failure. Turns that never ran tools (stagnant == 0) are exempt: pure
+// answers can't be false acts.
+func (g *Guards) FalseClaim(reply string) bool {
+	return !g.acted && g.stagnant > 0 && claimChangeRe.MatchString(reply)
+}
+
 // StripNudges removes ephemeral reminders at turn end so they never leak
 // into later turns, the session log, or token estimates. Exact match only —
 // user text mentioning batching is untouched.
@@ -123,7 +148,7 @@ func StripNudges(history *[]openai.ChatCompletionMessage) {
 	out := h[:0]
 	for _, m := range h {
 		if m.Role == openai.ChatMessageRoleUser {
-			if c := strings.TrimSpace(m.Content); c == BatchNudgeText || c == ActNudgeText || c == StallRecoveryText {
+			if c := strings.TrimSpace(m.Content); c == BatchNudgeText || c == ActNudgeText || c == StallRecoveryText || c == ClaimChallengeText {
 				continue
 			}
 		}

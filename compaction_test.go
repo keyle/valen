@@ -58,6 +58,16 @@ func TestFitSendBudget(t *testing.T) {
 	}
 }
 
+// TestFitSendBudgetKeepsReads: file reads pass through untouched even past
+// the budget — truncating them strands the model re-reading files it can
+// never hold (prune already bounds old reads to descriptors).
+func TestFitSendBudgetKeepsReads(t *testing.T) {
+	read := readOutput("TODO.md", 140, 1, 140) + strings.Repeat("x", sendToolOutputChars+500)
+	if got := fitSendBudget(read); got != read {
+		t.Fatalf("reads must stay verbatim: %d vs %d runes", len([]rune(got)), len([]rune(read)))
+	}
+}
+
 func TestReadDescriptorKeepsIdentity(t *testing.T) {
 	out := readOutput("a.go", 100, 1, 50)
 	d, ok := readDescriptor(out)

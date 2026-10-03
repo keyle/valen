@@ -705,6 +705,7 @@ func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey 
 	var usage openai.Usage
 	guards := guard.New(cfg.MaxStagnantRounds)
 	recovering := false
+	challenges := 0
 	defer guard.StripNudges(history)
 	for round := 0; round < cfg.MaxRounds; round++ {
 		toolsTok := requestToolsTokens(registry)
@@ -750,6 +751,15 @@ func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey 
 		}
 		*history = append(*history, msg)
 		if len(msg.ToolCalls) == 0 {
+			// Claim-vs-action check: tools ran but none acted, and the reply
+			// claims a code change — challenge once-ish instead of finishing
+			// on an unmade change. Recovery summaries are exempt by design.
+			if !recovering && challenges < guard.MaxClaimChallenges && guards.FalseClaim(msg.Content) {
+				challenges++
+				dvlog.Logf("claim challenge %d: reply claims a change with no acting call", challenges)
+				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: guard.ClaimChallengeText})
+				continue
+			}
 			return msg, usage, nil
 		}
 		if recovering {

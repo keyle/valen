@@ -62,19 +62,21 @@ round (assistant message + N tool results). So turn cost is roughly
 Worked example (chat transport, defaults). Prompt needs: 1 plan write +
 4 reads (10k each, stored) + 2 edits + final answer = ~8 rounds.
 
-| Round | History content (stored) | Wire send (with 2k budget) |
+| Round | History content (stored) | Wire send (reads exempt) |
 | --- | --- | --- |
 | 1 | system + prompt + schemas (~8k) | ~8k |
 | 2 | + todowrite result (~1k) | ~9k |
-| 3–6 | + 4 × 10k reads | ~13k, ~15k, ~17k, ~19k (each read contributes only 2k on wire) |
-| 7–8 | + edits + summary | ~21k, ~22k |
+| 3–6 | + 4 × 10k reads | ~21k, ~31k, ~32k, ~33k (newest 2 reads ride full; older prune to descriptors) |
+| 7–8 | + edits + summary | ~34k, ~35k |
 
-Total prefill ≈ 115k tokens. **Without** the send budget, rounds 3–8 would
-carry +8k extra each (≈ +48k prefill) — that is the A2 win in concrete
-terms. Without batching (1 tool/round → 12 rounds instead of 8), total
-prefill ≈ 200k+. Round count is the master lever: batching (§6) and the
-task subagent (§7) both work by cutting rounds, and every mechanism below
-is priced against this math.
+Total prefill ≈ 200k tokens. The 2k send budget still caps shell/grep-style
+outputs (that is the A2 win); file reads ride full while fresh so the model
+can act on whole files instead of re-reading fragments it can never hold —
+and prune bounds that cost to the newest 2 reads, older ones collapsing to
+path/range descriptors. Without batching (1 tool/round → 12 rounds instead
+of 8), total prefill ≈ 300k+. Round count is the master lever: batching (§6)
+and the task subagent (§7) both work by cutting rounds, and every mechanism
+below is priced against this math.
 
 Hard stops: `max_rounds` (default 100) ends a turn without an answer;
 `doomLoopTool` aborts when the *same single* tool call repeats a third
@@ -86,7 +88,8 @@ parallel unit, not a loop step).
 One round's prefill, largest-first:
 
 1. **History content** — all assistant text, user prompts, tool results
-   (each capped to 2k on the wire; decisions verbatim).
+   (non-read outputs capped to 2k on the wire; decisions and file reads
+   verbatim).
 2. **Tool schemas** — every builtin + every MCP server's tools, every round.
    Three builtins ≈ 300 tokens; a couple of MCP servers can be thousands.
    The budget guard counts this (`requestToolsTokens`); the old estimator
@@ -258,6 +261,10 @@ missing feature.
 - Act nudge — at 15 stagnant rounds one ephemeral reminder invites the model
   to make the change now or ask what blocks it; still stripped at turn end.
   Question rounds pause both counters.
+- Claim challenge — a finishing reply that claims a code change
+  (implemented/fixed/edited/…) with no `write`/`edit`/`task` behind it earns
+  a challenge round instead (max 2 per turn): make the edit or restate
+  honestly. Pure research summaries and tool-less answers are exempt.
 - Plan mode — `plan` / `/plan` / `-plan` flips the turn read-only instead of
   guarding it: the plan overlay joins the system prompt, `write`/`edit`/
   `shell` refuse as tool output, `task` only accepts `explore`. The model

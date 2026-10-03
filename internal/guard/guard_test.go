@@ -160,3 +160,63 @@ func TestStripNudges(t *testing.T) {
 		t.Fatalf("wrong survivors: %+v", h)
 	}
 }
+
+func TestFalseClaim(t *testing.T) {
+	// No tools ran: pure answers are never false acts.
+	g := New(25)
+	if g.FalseClaim("I implemented the fix") {
+		t.Fatal("tool-less turn must not challenge")
+	}
+	// Explored but never acted + change verb: challenge.
+	g = New(25)
+	g.Note(guardCalls("read"))
+	g.Note(guardCalls("grep", "glob"))
+	for _, claim := range []string{
+		"I implemented the timestamps",
+		"Fixed in tui.go",
+		"Applied the edit",
+		"Refactoring done",
+	} {
+		if !g.FalseClaim(claim) {
+			t.Fatalf("must challenge %q", claim)
+		}
+	}
+	// Research summaries finish untouched.
+	for _, ok := range []string{
+		"Here's what I found: three call sites",
+		"Done researching — edits remain in tui.go",
+		"Summary of findings above",
+		"",
+	} {
+		if g.FalseClaim(ok) {
+			t.Fatalf("must not challenge %q", ok)
+		}
+	}
+	// An acting call anywhere in the turn disarms the check, even with
+	// later exploration on top.
+	g = New(25)
+	g.Note(guardCalls("read"))
+	g.Note(guardCalls("edit"))
+	g.Note(guardCalls("grep"))
+	if !g.Acted() || g.FalseClaim("I implemented it") {
+		t.Fatal("acted turn must not challenge")
+	}
+}
+
+func TestStripClaimChallenge(t *testing.T) {
+	h := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "do the thing"},
+		{Role: openai.ChatMessageRoleAssistant, Content: "I implemented it"},
+		{Role: openai.ChatMessageRoleUser, Content: ClaimChallengeText},
+		{Role: openai.ChatMessageRoleAssistant, Content: "Here's what remains"},
+	}
+	StripNudges(&h)
+	if len(h) != 3 {
+		t.Fatalf("msgs=%d: %+v", len(h), h)
+	}
+	for _, m := range h {
+		if m.Content == ClaimChallengeText {
+			t.Fatal("challenge leaked past turn end")
+		}
+	}
+}

@@ -472,6 +472,21 @@ func TestChatSendMessagesBudget(t *testing.T) {
 	}
 }
 
+// TestChatSendMessagesKeepsReads: file reads ride the wire verbatim even
+// past the budget — the model needs the whole file to act on it.
+func TestChatSendMessagesKeepsReads(t *testing.T) {
+	read := "File TODO.md (140 lines, showing 1-140):\n" + strings.Repeat("x", sendToolOutputChars+500)
+	history := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "hi"},
+		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "call-1", Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "read", Arguments: `{"path":"TODO.md"}`}}}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "call-1", Content: read},
+	}
+	sent := chatSendMessages(history)
+	if sent[2].Content != read {
+		t.Fatalf("read must stay verbatim: %d vs %d runes", len([]rune(sent[2].Content)), len([]rune(read)))
+	}
+}
+
 // TestRunToolCallsParallel verifies one round's independent calls overlap:
 // 3×~100ms must finish well under the 350ms sequential sum, with history and
 // events in request order even when the first call is slowest.

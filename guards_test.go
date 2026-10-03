@@ -140,6 +140,63 @@ func TestChatStallRecoveryDeclinesTools(t *testing.T) {
 	}
 }
 
+// TestChatChallengesFalseClaim: exploring without acting, then finishing
+// with "implemented" and no edit, earns one challenge round instead of
+// finishing on the unmade change.
+func TestChatChallengesFalseClaim(t *testing.T) {
+	srv, calls := fakeServer(t,
+		completion(toolCall("shell", `{"command":"echo 1"}`), ""),
+		completion(toolCall("shell", `{"command":"echo 2"}`), ""),
+		completion(nil, "I implemented the timestamps in tui.go"),
+		completion(nil, "Here's what remains: edits in renderPending"),
+	)
+	registry := NewRegistry()
+	registry.LoadBuiltins([]string{"shell"})
+	cfg := newTestConfig(srv.URL)
+	cfg.MaxRounds = 10
+
+	history := guardTestHistory()
+	msg, _, err := runChatTurn(context.Background(), cfg, newClient(cfg, "key"), "key", nil, registry, &history, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.Content != "Here's what remains: edits in renderPending" {
+		t.Fatalf("reply=%q", msg.Content)
+	}
+	if *calls != 4 {
+		t.Fatalf("calls=%d, want 4 (2 exploring + claim + challenged answer)", *calls)
+	}
+	if historyHas(history, guard.ClaimChallengeText) {
+		t.Fatalf("challenge leaked past turn end: %+v", history)
+	}
+}
+
+// TestChatLeavesHonestSummary: the same exploration ending in a findings
+// summary finishes with no challenge round.
+func TestChatLeavesHonestSummary(t *testing.T) {
+	srv, calls := fakeServer(t,
+		completion(toolCall("shell", `{"command":"echo 1"}`), ""),
+		completion(toolCall("shell", `{"command":"echo 2"}`), ""),
+		completion(nil, "Here's what I found: three call sites"),
+	)
+	registry := NewRegistry()
+	registry.LoadBuiltins([]string{"shell"})
+	cfg := newTestConfig(srv.URL)
+	cfg.MaxRounds = 10
+
+	history := guardTestHistory()
+	msg, _, err := runChatTurn(context.Background(), cfg, newClient(cfg, "key"), "key", nil, registry, &history, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.Content != "Here's what I found: three call sites" {
+		t.Fatalf("reply=%q", msg.Content)
+	}
+	if *calls != 3 {
+		t.Fatalf("calls=%d, want 3 (no challenge)", *calls)
+	}
+}
+
 func TestChatNudgesSingleCallStreak(t *testing.T) {
 	var log strings.Builder
 	prev := dvlog.SetOutput(&log)
