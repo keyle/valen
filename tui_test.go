@@ -450,8 +450,11 @@ func TestTUICtrlShortcuts(t *testing.T) {
 	if help := m.renderHelp(); !strings.Contains(help, "ctrl+g help") || strings.Contains(help, "F1 help") {
 		t.Fatalf("help must list the ctrl shortcuts:\n%s", help)
 	}
-	if help := m.renderHelp(); !strings.Contains(help, "ctrl+t thinking") || !strings.Contains(help, "ctrl+l sessions") || !strings.Contains(help, "ctrl+u tools") {
-		t.Fatalf("help must list ctrl+t thinking, ctrl+l sessions and ctrl+u tools:\n%s", help)
+	// Phrases may wrap across lines at narrow widths; flatten before
+	// matching so wording checks don't depend on wrap points.
+	flatHelp := strings.Join(strings.Fields(m.renderHelp()), " ")
+	if !strings.Contains(flatHelp, "ctrl+t thinking") || !strings.Contains(flatHelp, "ctrl+l sessions") || !strings.Contains(flatHelp, "ctrl+u tools") {
+		t.Fatalf("help must list ctrl+t thinking, ctrl+l sessions and ctrl+u tools:\n%s", m.renderHelp())
 	}
 
 	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlG})
@@ -1234,6 +1237,84 @@ func TestTUIModelPickerListsAndSelects(t *testing.T) {
 	}
 }
 
+// TestTUICtrlMCSIParses: the disambiguated ctrl+m letter sequences open the
+// model picker; the bare mod-less form must keep typing (it is a plain "m").
+func TestTUICtrlMCSIParses(t *testing.T) {
+	if !ctrlMCSI([]byte("\x1b[109;5u")) || !ctrlMCSI([]byte("\x1b[109;5~")) {
+		t.Fatal("ctrl+m letter sequences must parse")
+	}
+	for _, seq := range [][]byte{
+		[]byte("\x1b[109u"),   // no modifier: plain "m"
+		[]byte("\x1b[109;2u"), // shift+m, not ours
+		[]byte("\x1b[13;5u"),  // ctrl+enter, handled by the enter path
+		[]byte("m"),
+	} {
+		if ctrlMCSI(seq) {
+			t.Fatalf("must not parse as ctrl+m: %q", seq)
+		}
+	}
+}
+
+func TestTUICtrlMOpensModelPicker(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	mm, cmd := m.Update([]byte("\x1b[109;5u"))
+	m = mm.(*tuiModel)
+	if cmd == nil {
+		t.Fatal("ctrl+m must start the model fetch")
+	}
+	if !strings.Contains(m.notice, "Loading models") {
+		t.Fatalf("notice=%q", m.notice)
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("ctrl+m leaked into input: %q", got)
+	}
+	// While a question overlay waits, ctrl+m stays swallowed like enter.
+	m2 := newTestModel(t, testConfig("https://unused"))
+	m2.ask = &askState{phase: "pick"}
+	mm, cmd = m2.Update([]byte("\x1b[109;5u"))
+	m2 = mm.(*tuiModel)
+	if cmd != nil || strings.Contains(m2.notice, "Loading models") {
+		t.Fatalf("ctrl+m must not hijack the ask overlay: cmd=%v notice=%q", cmd, m2.notice)
+	}
+}
+
+// TestTUIOverlayCursorScrollsViewport: cursoring past the visible page must
+// scroll the list with it, both directions, instead of losing the cursor.
+func TestTUIOverlayCursorScrollsViewport(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	var ids []string
+	for i := 0; i < 30; i++ {
+		ids = append(ids, fmt.Sprintf("model-%02d", i))
+	}
+	_, _ = m.Update(modelsLoadedMsg{ids: ids, filter: ""})
+	if m.mode != viewModels {
+		t.Fatalf("mode=%v", m.mode)
+	}
+	m.viewport.Height = 8
+	m.pinBottom() // cursor 0 is at top; re-pin to top for the downward run
+	m.viewport.GotoTop()
+	down := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}
+	for i := 0; i < 20; i++ {
+		mm, _ := m.Update(down)
+		m = mm.(*tuiModel)
+	}
+	visible := func() bool {
+		line := m.cursor + 2
+		return line >= m.viewport.YOffset && line < m.viewport.YOffset+m.viewport.Height
+	}
+	if m.cursor != 20 || !visible() {
+		t.Fatalf("cursor lost after paging down: cursor=%d yoff=%d h=%d", m.cursor, m.viewport.YOffset, m.viewport.Height)
+	}
+	up := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")}
+	for i := 0; i < 20; i++ {
+		mm, _ := m.Update(up)
+		m = mm.(*tuiModel)
+	}
+	if m.cursor != 0 || !visible() {
+		t.Fatalf("cursor lost paging back up: cursor=%d yoff=%d", m.cursor, m.viewport.YOffset)
+	}
+}
+
 func TestTUIModelPickerFallbackOnError(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	_, _ = m.Update(modelsLoadedMsg{err: fmt.Errorf("boom"), filter: ""})
@@ -1242,6 +1323,72 @@ func TestTUIModelPickerFallbackOnError(t *testing.T) {
 	}
 	if !strings.Contains(m.notice, "known models") {
 		t.Fatalf("notice=%q", m.notice)
+	}
+}
+
+// TestTUIModelPickerMergesProviders: with the OpenRouter key configured the
+// picker lists both catalogs, every row prefixed with its provider, while
+// stored IDs stay bare (Go) or openrouter/-prefixed.
+func TestTUIModelPickerMergesProviders(t *testing.T) {
+	goSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"object":"list","data":[{"id":"glm-5.3-flash","object":"model"}]}`)
+	}))
+	defer goSrv.Close()
+	orSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"id":"moonshotai/kimi-k3"}]}`)
+	}))
+	defer orSrv.Close()
+	oldBase := openRouterBaseURL
+	openRouterBaseURL = orSrv.URL
+	defer func() { openRouterBaseURL = oldBase }()
+
+	m := newTestModel(t, testConfig(goSrv.URL))
+	m.cfg.OpenRouterKey = "or-key"
+	msg := m.openModelPicker("")()
+	loaded, ok := msg.(modelsLoadedMsg)
+	if !ok {
+		t.Fatalf("msg=%T", msg)
+	}
+	if len(loaded.ids) != 2 || loaded.ids[0] != "glm-5.3-flash" || loaded.ids[1] != "openrouter/moonshotai/kimi-k3" {
+		t.Fatalf("merged ids=%v", loaded.ids)
+	}
+	_, _ = m.Update(loaded)
+	text := m.renderViewportContent()
+	if !strings.Contains(text, "go/glm-5.3-flash") || !strings.Contains(text, "openrouter/moonshotai/kimi-k3") {
+		t.Fatalf("rows must carry provider prefixes:\n%s", text)
+	}
+}
+
+// TestTUIModelPickerOpenRouterFallback: an unreachable OpenRouter catalog
+// falls back to the curated list instead of dropping the provider.
+func TestTUIModelPickerOpenRouterFallback(t *testing.T) {
+	goSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"object":"list","data":[{"id":"glm-5.3-flash","object":"model"}]}`)
+	}))
+	defer goSrv.Close()
+	oldBase := openRouterBaseURL
+	openRouterBaseURL = "http://127.0.0.1:1"
+	defer func() { openRouterBaseURL = oldBase }()
+
+	m := newTestModel(t, testConfig(goSrv.URL))
+	m.cfg.OpenRouterKey = "or-key"
+	msg := m.openModelPicker("")()
+	loaded := msg.(modelsLoadedMsg)
+	found := false
+	for _, id := range loaded.ids {
+		if id == "glm-5.3-flash" {
+			continue
+		}
+		if modelProvider(id) != ProviderOpenRouter {
+			t.Fatalf("non-go row %q must be openrouter-prefixed", id)
+		}
+		found = true
+	}
+	if !found {
+		t.Fatalf("fallback must keep openrouter rows: %v", loaded.ids)
 	}
 }
 

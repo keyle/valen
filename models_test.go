@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -324,5 +325,236 @@ func TestMessagesThinkingBudgets(t *testing.T) {
 	}
 	if got := messagesThinking("bogus"); got != nil {
 		t.Fatalf("unknown should omit, got=%v", got)
+	}
+}
+
+func TestModelProviderForms(t *testing.T) {
+	for id, want := range map[string]string{
+		"glm-5.3-flash":                    ProviderGo,
+		"muse-spark-1.3-contributor":       ProviderGo,
+		"openrouter/moonshotai/kimi-k3":    ProviderOpenRouter,
+		"OpenRouter/anthropic/claude-x":    ProviderOpenRouter,
+		"  openrouter/z-ai/glm-5.3-flash ": ProviderOpenRouter,
+	} {
+		if got := modelProvider(id); got != want {
+			t.Fatalf("%q provider=%s want %s", id, got, want)
+		}
+	}
+	if got := wireModelID("openrouter/moonshotai/kimi-k3"); got != "moonshotai/kimi-k3" {
+		t.Fatalf("wire=%q", got)
+	}
+	if got := wireModelID("glm-5.3-flash"); got != "glm-5.3-flash" {
+		t.Fatalf("go wire must pass through: %q", got)
+	}
+	if got := displayModelID("glm-5.3-flash"); got != "go/glm-5.3-flash" {
+		t.Fatalf("go display must prefix: %q", got)
+	}
+	if got := displayModelID("openrouter/moonshotai/kimi-k3"); got != "openrouter/moonshotai/kimi-k3" {
+		t.Fatalf("openrouter display must stay: %q", got)
+	}
+	for id, want := range map[string]string{
+		"openrouter/moonshotai/kimi-k3": "kimi-k3",
+		"openrouter/z-ai/glm-5.3":       "glm-5.3",
+		"glm-5.3-flash":                 "glm-5.3-flash",
+	} {
+		if got := modelBaseID(id); got != want {
+			t.Fatalf("%q base=%q want %q", id, got, want)
+		}
+	}
+}
+
+func TestAvailableThinkingLevelsOpenRouter(t *testing.T) {
+	// Known families resolve through the vendor segment …
+	if got := AvailableThinkingLevels("openrouter/moonshotai/kimi-k3"); strings.Join(got, ",") != "max" {
+		t.Fatalf("kimi-k3 levels=%v", got)
+	}
+	if got := AvailableThinkingLevels("openrouter/moonshotai/kimi-k2.6"); strings.Join(got, ",") != "none,high" {
+		t.Fatalf("kimi-k2.6 levels=%v", got)
+	}
+	// … unknown vendors fall back to the standard vocabulary until a 400
+	// teaches the valid list.
+	if got := AvailableThinkingLevels("openrouter/anthropic/claude-opus-5.5"); len(got) == 0 {
+		t.Fatal("unknown openrouter models should get the standard set")
+	}
+	if got := modelTransport("openrouter/anthropic/claude-opus-5.5"); got != "chat" {
+		t.Fatalf("openrouter transport=%s want chat", got)
+	}
+}
+
+func TestLoadConfigProviderValidation(t *testing.T) {
+	if _, err := loadConfig(writeConfig(t, "model = \"openrouter/moonshotai/kimi-k3\"\nthinking = \"max\"\n")); err != nil {
+		t.Fatalf("openrouter model must load: %v", err)
+	}
+	if _, err := loadConfig(writeConfig(t, "model = \"anthropic/claude-x\"\n")); err == nil {
+		t.Fatal("bare vendor/model without the openrouter/ prefix must be rejected")
+	}
+}
+
+func TestMatchGoModelProviderForms(t *testing.T) {
+	ids := []string{"kimi-k3", "openrouter/moonshotai/kimi-k3", "glm-5.3-flash"}
+	if got := matchGoModel(ids, "kimi-k3"); len(got) != 1 || got[0] != "kimi-k3" {
+		t.Fatalf("bare exact must win: %v", got)
+	}
+	if got := matchGoModel(ids, "openrouter/moonshotai/kimi-k3"); len(got) != 1 || got[0] != "openrouter/moonshotai/kimi-k3" {
+		t.Fatalf("prefixed exact must resolve stored: %v", got)
+	}
+	// Substring sees display and wire forms: "moonshotai" only matches the
+	// OpenRouter row, "go/kimi" only the Go row via its display form.
+	if got := matchGoModel(ids, "moonshotai"); len(got) != 1 || got[0] != "openrouter/moonshotai/kimi-k3" {
+		t.Fatalf("vendor substring=%v", got)
+	}
+	if got := matchGoModel(ids, "go/kimi"); len(got) != 1 || got[0] != "kimi-k3" {
+		t.Fatalf("display substring=%v", got)
+	}
+}
+
+func TestFetchOpenRouterModels(t *testing.T) {
+	var gotAuth, gotTitle, gotUA string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		gotAuth, gotTitle, gotUA = r.Header.Get("Authorization"), r.Header.Get("X-Title"), r.Header.Get("User-Agent")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[
+			{"id":"moonshotai/kimi-k3"},
+			{"id":"b-model"},
+			{"id":"a-model"},
+			{"id":"x/y:batch"},
+			{"id":"~alias"},
+			{"id":""},
+			{"id":"keep/free"}
+		]}`)
+	}))
+	defer srv.Close()
+	ids, err := fetchOpenRouterModels(context.Background(), srv.Client(), srv.URL, "or-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(ids, ",") != "openrouter/a-model,openrouter/b-model,openrouter/keep/free,openrouter/moonshotai/kimi-k3" {
+		t.Fatalf("ids=%v", ids)
+	}
+	if gotAuth != "Bearer or-key" || gotTitle != "valen" || gotUA != userAgent {
+		t.Fatalf("headers auth=%q title=%q ua=%q", gotAuth, gotTitle, gotUA)
+	}
+	if len(prefixedOpenRouterFallback()) == 0 {
+		t.Fatal("fallback list must not be empty")
+	}
+	for _, id := range prefixedOpenRouterFallback() {
+		if modelProvider(id) != ProviderOpenRouter {
+			t.Fatalf("fallback %q must be stored prefixed", id)
+		}
+	}
+}
+
+// TestOpenRouterAuthFailureBlamesRightKey: a 401 on OpenRouter traffic must
+// name the OpenRouter env var (and the transport in details), never the Go
+// api_key_env. Regression: the turn path once labeled everything "chat".
+func TestOpenRouterAuthFailureBlamesRightKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":{"message":"No auth credentials found","code":401}}`))
+	}))
+	defer srv.Close()
+
+	oldBase := openRouterBaseURL
+	openRouterBaseURL = srv.URL
+	defer func() { openRouterBaseURL = oldBase }()
+
+	cfg := newTestConfig(srv.URL)
+	cfg.Model = "openrouter/moonshotai/kimi-k3"
+	cfg.OpenRouterKey = "bad-key"
+	err := chat(context.Background(), cfg, newClient(cfg, "go-key"), "go-key", srv.Client(), NewRegistry(), "hi", io.Discard, io.Discard)
+	if err == nil {
+		t.Fatal("expected 401")
+	}
+	fe := friendlyError(err)
+	if !strings.Contains(fe.Title, "openrouter_api_key_env") {
+		t.Fatalf("title blames wrong key: %q", fe.Title)
+	}
+	if strings.Contains(fe.Title, "api_key_env.") && !strings.Contains(fe.Title, "openrouter_") {
+		t.Fatalf("title still points at the Go env: %q", fe.Title)
+	}
+	if !strings.Contains(fe.Details, "openrouter") {
+		t.Fatalf("details must name the transport: %q", fe.Details)
+	}
+}
+
+// TestOpenRouterGateSurfacesProviderMessage: when OpenRouter refuses with a
+// requirement (attestation, guardrail), the transcript title must carry the
+// provider's message — it names the fix — instead of a generic line.
+func TestOpenRouterGateSurfacesProviderMessage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"error":{"message":"This model requires you to complete the following before use: 18+ age confirmation. Confirm at https://openrouter.ai/settings/preferences.","code":403}}`))
+	}))
+	defer srv.Close()
+
+	oldBase := openRouterBaseURL
+	openRouterBaseURL = srv.URL
+	defer func() { openRouterBaseURL = oldBase }()
+
+	cfg := newTestConfig(srv.URL)
+	cfg.Model = "openrouter/meta/muse-spark-1.3-contributor"
+	cfg.OpenRouterKey = "good-key"
+	err := chat(context.Background(), cfg, newClient(cfg, "go-key"), "go-key", srv.Client(), NewRegistry(), "hi", io.Discard, io.Discard)
+	if err == nil {
+		t.Fatal("expected 403")
+	}
+	fe := friendlyError(err)
+	if !strings.Contains(fe.Title, "18+ age confirmation") || !strings.Contains(fe.Title, "openrouter.ai/settings/preferences") {
+		t.Fatalf("transcript must show the provider message: %q", fe.Title)
+	}
+	if strings.Contains(fe.Title, "rejected the key") {
+		t.Fatalf("must not blame the key: %q", fe.Title)
+	}
+}
+
+// TestOpenRouterChatWire pins the OpenRouter request shape: stripped
+// vendor/model on the wire, OpenRouter key (not the Go key), no Go session
+// header, and the configured effort as reasoning_effort.
+func TestOpenRouterChatWire(t *testing.T) {
+	var gotBody map[string]any
+	var gotAuth, gotSession, gotTitle string
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth, gotSession, gotTitle = r.Header.Get("Authorization"), r.Header.Get("x-opencode-session"), r.Header.Get("X-Title")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decode: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(completion(nil, "ok"))
+	}))
+	defer srv.Close()
+
+	oldBase := openRouterBaseURL
+	openRouterBaseURL = srv.URL
+	defer func() { openRouterBaseURL = oldBase }()
+
+	cfg := newTestConfig(srv.URL)
+	cfg.Model = "openrouter/moonshotai/kimi-k3"
+	cfg.Thinking = "max"
+	cfg.OpenRouterKey = "or-key"
+	if err := chat(context.Background(), cfg, newClient(cfg, "go-key"), "go-key", srv.Client(), NewRegistry(), "hi", io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/chat/completions" {
+		t.Fatalf("path=%s", gotPath)
+	}
+	if gotBody["model"] != "moonshotai/kimi-k3" {
+		t.Fatalf("wire model=%v", gotBody["model"])
+	}
+	if gotBody["reasoning_effort"] != "max" {
+		t.Fatalf("reasoning_effort=%v", gotBody["reasoning_effort"])
+	}
+	if gotAuth != "Bearer or-key" {
+		t.Fatalf("auth=%q (Go key must never ride OpenRouter traffic)", gotAuth)
+	}
+	if gotSession != "" {
+		t.Fatalf("session=%q (Go routing header must not leak to OpenRouter)", gotSession)
+	}
+	if gotTitle != "valen" {
+		t.Fatalf("title=%q", gotTitle)
 	}
 }

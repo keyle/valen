@@ -261,9 +261,14 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
 
 ## Model switching
 
-- `/model` (ctrl+p) fetches the live OpenCode Go catalog (`GET {base_url}/models`)
-  and opens a picker: ↑↓ move, Enter switches, Esc backs out. Transports
-  (`/chat`, `/responses`, `/messages`) are marked; all three converse.
+- `/model` (ctrl+p, or ctrl+m where the terminal sends disambiguated ctrl+m)
+  fetches the live catalogs — always OpenCode Go
+  (`GET {base_url}/models`), plus OpenRouter (`GET
+  https://openrouter.ai/api/v1/models`) when its key env is set — and opens
+  a picker: ↑↓ move, Enter switches, Esc backs out. Every row carries its
+  provider prefix (`go/…`, `openrouter/…`); Go transports (`/chat`,
+  `/responses`, `/messages`) are marked, OpenRouter rows always converse
+  over its OpenAI-compatible chat endpoint.
 - `/model <filter>` switches directly on an exact or unique-substring match,
   otherwise opens the filtered picker. `/model <known-id>` works offline.
 - Switching keeps the conversation history; an incompatible thinking level
@@ -309,10 +314,10 @@ ready, input focused. `/clear` resets intentionally.
 | Ctrl+N | new blank session (fresh id + file; blocked while busy) | same |
 | Ctrl+T | thinking level cycle low→high, wraps to low | same |
 | Ctrl+O | toggle status details | toggle status details |
-| Ctrl+P | model picker | model picker |
+| Ctrl+P / Ctrl+M | model picker | model picker |
 | Ctrl+S | save transcript | save transcript |
 | Ctrl+Q | quit | quit |
-| ↑↓ / j/k | textarea cursor (PgUp scrolls) | move selection |
+| ↑↓ / j/k | textarea cursor (PgUp scrolls) | move selection (view scrolls to follow) |
 | Space / Enter / Esc | — | question overlay: toggle / select+confirm / dismiss |
 
 Function keys are gone; the footer only points at `/help`, which lists every

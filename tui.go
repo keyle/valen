@@ -1132,18 +1132,30 @@ func (m *tuiModel) compactCmd() tea.Cmd {
 	}
 }
 
-// openModelPicker fetches the live OpenCode Go catalog off the UI thread.
-// With a filter, an exact or unique-substring match switches directly;
-// otherwise the filtered picker opens.
+// openModelPicker fetches the live catalogs off the UI thread: always Go,
+// plus OpenRouter when its key is configured (models arrive stored with
+// their provider prefix). With a filter, an exact or unique-substring match
+// switches directly; otherwise the filtered picker opens.
 func (m *tuiModel) openModelPicker(filter string) tea.Cmd {
 	m.notice = "Loading models…"
 	m.noticeErr = false
 	m.modelFilter = filter
 	client := m.client
+	orKey := m.cfg.OpenRouterKey
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		ids, err := fetchGoModels(ctx, client)
+		if err != nil || len(ids) == 0 {
+			ids = append([]string(nil), fallbackGoModels...)
+		}
+		if orKey != "" {
+			orIDs, orErr := fetchOpenRouterModels(ctx, nil, openRouterBaseURL, orKey)
+			if orErr != nil || len(orIDs) == 0 {
+				orIDs = prefixedOpenRouterFallback()
+			}
+			ids = append(ids, orIDs...)
+		}
 		return modelsLoadedMsg{ids: ids, err: err, filter: filter}
 	}
 }
@@ -1195,7 +1207,7 @@ func (m *tuiModel) applyModelSwitch(id string) {
 	}
 	m.show(viewChat)
 	if _, ok := cachedThinkingLevels(id); !ok {
-		if _, ok := lookupKnownLevels(normalizeModelID(id)); !ok && m.httpClient != nil && m.apiKey != "" {
+		if _, ok := lookupKnownLevels(modelBaseID(id)); !ok && m.httpClient != nil && m.apiKey != "" {
 			cfg, apiKey, hc := m.cfg, m.apiKey, m.httpClient
 			base := m.ctx
 			if base == nil {
@@ -1318,6 +1330,16 @@ func (m *tuiModel) exportTranscript() (string, bool) {
 // Update drives the Bubble Tea loop. Single in-process runtime, no server.
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+
+	// Disambiguated ctrl+m (the letter form terminals send once a
+	// disambiguating mode is on) opens the model picker from anywhere an
+	// overlay question is not waiting for its keys.
+	if ctrlMCSI(msg) {
+		if m.ask != nil {
+			return m, nil
+		}
+		return m, m.openModelPicker("")
+	}
 
 	// CSI-u / modifyOtherKeys enter: shift+enter (and friends) that legacy
 	// terminals collapse into plain enter. mod 1 is unmodified enter, so it
@@ -1653,6 +1675,30 @@ func parseEnterCSI(seq []byte) (mod int, ok bool) {
 	return 0, false
 }
 
+// ctrlMCSI reports whether msg carries a disambiguated ctrl+m letter
+// sequence (CSI 109;5u or CSI 109;5~). Like enterCSIMod, the message is an
+// unexported unknown-CSI []byte-kind value, so kind+content matching is
+// precise without naming that type. Only the ctrl form (mod 5) counts: a
+// bare CSI 109u would be a plain "m" keystroke, which must keep typing.
+// Byte-13 ctrl+m can never arrive here — legacy terminals collapse it into
+// plain enter by design — so there is deliberately no handleKey "ctrl+m"
+// case (bubbletea aliases KeyCtrlM to KeyEnter and stringifies it "enter").
+func ctrlMCSI(msg tea.Msg) bool {
+	v := reflect.ValueOf(msg)
+	if !v.IsValid() || v.Kind() != reflect.Slice || v.Type().Elem().Kind() != reflect.Uint8 {
+		return false
+	}
+	seq := v.Bytes()
+	// ESC [ 1 0 9 ; 5 (u | ~), exact length: longer runs are not ours.
+	if len(seq) != 8 {
+		return false
+	}
+	if seq[0] != 0x1b || seq[1] != '[' || seq[2] != '1' || seq[3] != '0' || seq[4] != '9' || seq[5] != ';' || seq[6] != '5' {
+		return false
+	}
+	return seq[7] == 'u' || seq[7] == '~'
+}
+
 // enterCSIMod reports the CSI-u/modifyOtherKeys enter modifier for a message
 // carrying one of the parseEnterCSI sequences. Bubbletea reports those as an
 // unexported unknown-CSI message — the only []byte-kind message on the loop —
@@ -1948,6 +1994,19 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+// ensureCursorVisible scrolls the overlay viewport just enough to keep the
+// cursor row on screen. Every cursor list renders a two-line header
+// ("title\n\n") above one logical line per row (rows truncate, never wrap),
+// so the cursor sits on content line cursor+2.
+func (m *tuiModel) ensureCursorVisible() {
+	line := m.cursor + 2
+	if line < m.viewport.YOffset {
+		m.viewport.SetYOffset(line)
+	} else if bottom := m.viewport.YOffset + m.viewport.Height - 1; line > bottom {
+		m.viewport.SetYOffset(line - m.viewport.Height + 1)
+	}
+}
+
 func (m *tuiModel) handleOverlayKey(s string) (tea.Model, tea.Cmd) {
 	switch s {
 	case "q":
@@ -1957,11 +2016,13 @@ func (m *tuiModel) handleOverlayKey(s string) (tea.Model, tea.Cmd) {
 		if m.cursor > 0 {
 			m.cursor--
 			m.refreshViewport()
+			m.ensureCursorVisible()
 		}
 		return m, nil
 	case "down", "j":
 		m.cursor++
 		m.refreshViewport()
+		m.ensureCursorVisible()
 		return m, nil
 	case "enter", " ":
 		m.openSelected()
@@ -3130,7 +3191,7 @@ func (m *tuiModel) renderModelsList() string {
 	b.WriteString(metaStyle.Render(title) + "\n\n")
 	cw := m.contentWidth()
 	for i, c := range m.modelChoices {
-		line := c.id
+		line := displayModelID(c.id)
 		if c.current {
 			line += "  ● current"
 		}
@@ -3190,14 +3251,14 @@ Keys
   wheel/pgup pauses autoscroll until you reach the bottom again
    shift+drag (opt+drag in iTerm/Terminal) selects + copies natively · alt+m toggles plain-drag selection (wheel paused while off)
   ctrl+g help · ctrl+r history · ctrl+l sessions · ctrl+u tools · ctrl+x errors · ctrl+y thinking display
-  ctrl+o details · ctrl+p model · ctrl+n new session · ctrl+t thinking level (cycles low→high, wraps) · ctrl+s save · ctrl+q quit · ctrl+c cancel/quit
+  ctrl+o details · ctrl+p/ctrl+m model · ctrl+n new session · ctrl+t thinking level (cycles low→high, wraps) · ctrl+s save · ctrl+q quit · ctrl+c cancel/quit
   in lists: ↑↓ move · enter open · esc back
 
 Commands
    /help /history /sessions (/resume) /tools /errors /think /save /clear /new /plan /quit
    /compact (/summarize) — prune + summarize older history with the cheap model; disk log untouched
    /plan — toggle plan mode: read-only investigation, the reply is the plan (write/edit/shell blocked, task explore-only)
-  /model [filter] — list OpenCode Go models and switch (ctrl+p does the same)
+   /model [filter] — list models with provider prefixes (go/…, openrouter/… when keyed) and switch (ctrl+p/ctrl+m does the same)
   /effort [level] — thinking level for the current model (/thinking is an alias)
 
 When the model calls AskUserQuestion: ↑↓/jk move · enter select · space toggles multi-select · type your own when needed · enter confirms.

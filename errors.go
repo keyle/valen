@@ -54,9 +54,54 @@ func friendlyError(err error) FriendlyError {
 	}
 	var te *transportError
 	if errors.As(err, &te) {
-		return friendlyStatus(te.Status, te.Message)
+		fe := friendlyStatus(te.Status, te.Message)
+		// Details always name the transport: with two providers a bare
+		// "HTTP 401" no longer says whose key was rejected.
+		fe.Details = fmt.Sprintf("%s HTTP %d: %s", te.Transport, te.Status, te.Message)
+		if te.Transport == "openrouter" {
+			switch te.Status {
+			case 401:
+				fe.Title = "OpenRouter rejected the key. Check the env var named by openrouter_api_key_env (restart the TUI after exporting it)."
+				// Provisioning/management keys administer keys and
+				// guardrails but can't run inference: OpenRouter answers
+				// them on /chat/completions with 401 "User not found"
+				// while they look valid in the dashboard.
+				if strings.Contains(strings.ToLower(te.Message), "user not found") {
+					fe.Title = "That OpenRouter key can't run inference — provisioning/management keys only manage keys/guardrails. Create a regular API key at openrouter.ai/settings/keys and export it."
+				}
+			case 403:
+				// 403 on OpenRouter is authorization, never authentication:
+				// guardrail blocks, attestation gates (age confirmation),
+				// content filters. The provider message names the exact
+				// requirement — often with the URL that resolves it — so
+				// surface it instead of blaming the key.
+				if msg := singleLine(te.Message, 200); msg != "" {
+					fe.Title = "OpenRouter refused the request: " + msg
+				} else {
+					fe.Title = "OpenRouter refused the request (403)."
+				}
+			case 402:
+				fe.Title = "Out of credits on the OpenRouter account. Top up at openrouter.ai, then resend."
+			}
+		}
+		return fe
 	}
 	return FriendlyError{"Something went wrong.", msg}
+}
+
+// singleLine collapses a provider message to one rune-capped line for use
+// in a title. Provider messages sometimes carry newlines or long tails;
+// the full text stays in Details.
+func singleLine(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	if n <= 0 {
+		return "…"
+	}
+	return string(r[:n]) + "…"
 }
 
 func friendlyStatus(code int, detail string) FriendlyError {

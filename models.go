@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -51,11 +52,109 @@ var fallbackGoModels = []string{
 	"muse-spark-1.2-contributor",
 }
 
+// Providers. Go models are stored bare ("glm-5.3-flash"); OpenRouter models
+// carry an "openrouter/" prefix ("openrouter/moonshotai/kimi-k3") so the
+// stored model ID is self-describing: requests, thinking levels and the
+// picker all derive the provider from it, with no extra state to keep in
+// sync. Bare IDs always mean Go, so existing configs load unchanged.
+const (
+	ProviderGo         = "go"
+	ProviderOpenRouter = "openrouter"
+)
+
+// openRouterBaseURL is a var (not const) so offline tests can point it at a
+// fake server; production uses the OpenRouter v1 API.
+var openRouterBaseURL = "https://openrouter.ai/api/v1"
+
+// fallbackOpenRouterModels is a curated recent-flags list (from the live
+// /models catalog, Oct 2026) used when the live list cannot be reached.
+// Stored bare (no provider prefix); the picker prefixes them on merge.
+var fallbackOpenRouterModels = []string{
+	"anthropic/claude-opus-5.5",
+	"anthropic/claude-sonnet-5.5",
+	"openai/gpt-6.1-sol",
+	"openai/gpt-6.1-sol-pro",
+	"openai/gpt-6-luna",
+	"openai/gpt-6-sol",
+	"openai/gpt-6-astra",
+	"x-ai/grok-4.7",
+	"x-ai/grok-4.6",
+	"google/gemini-3.8-flash",
+	"google/gemini-3.7-flash",
+	"deepseek/deepseek-v4.1-flash",
+	"deepseek/deepseek-v4-pro-0813",
+	"z-ai/glm-5.3",
+	"z-ai/glm-5.3-flash",
+	"qwen/qwen3.8-max",
+	"qwen/qwen3.8-flash",
+	"meta/muse-spark-1.3",
+	"meta/muse-spark-1.2",
+	"moonshotai/kimi-k3",
+	"moonshotai/kimi-k2.7-code",
+	"moonshotai/kimi-k2.6",
+	"minimax/minimax-m3",
+	"z-ai/glm-5.2",
+	"meituan/longcat-2.0",
+	"nvidia/nemotron-3.5-lightning",
+	"arcee-ai/trinity-large-thinking",
+}
+
+// prefixedOpenRouterFallback returns the curated fallback list in stored
+// (provider-prefixed) form for picker merges.
+func prefixedOpenRouterFallback() []string {
+	out := make([]string, 0, len(fallbackOpenRouterModels))
+	for _, id := range fallbackOpenRouterModels {
+		out = append(out, ProviderOpenRouter+"/"+id)
+	}
+	return out
+}
+
+// modelProvider reports which provider serves a stored model ID.
+func modelProvider(id string) string {
+	if strings.HasPrefix(normalizeModelID(id), ProviderOpenRouter+"/") {
+		return ProviderOpenRouter
+	}
+	return ProviderGo
+}
+
+// wireModelID strips the provider prefix for the wire: OpenRouter expects
+// the full vendor/model ID, Go passes its bare ID through.
+func wireModelID(id string) string {
+	if modelProvider(id) == ProviderOpenRouter {
+		return strings.TrimSpace(id)[len(ProviderOpenRouter)+1:]
+	}
+	return strings.TrimSpace(id)
+}
+
+// displayModelID prefixes bare Go IDs so every picker row names its
+// provider; OpenRouter IDs already carry theirs.
+func displayModelID(id string) string {
+	if modelProvider(id) == ProviderGo {
+		return ProviderGo + "/" + strings.TrimSpace(id)
+	}
+	return strings.TrimSpace(id)
+}
+
+// modelBaseID folds a stored ID down to the family lookup key: provider
+// prefix off, then the vendor segment off ("openrouter/moonshotai/kimi-k3"
+// → "kimi-k3"). Bare Go IDs pass through untouched.
+func modelBaseID(id string) string {
+	base := wireModelID(id)
+	if i := strings.Index(base, "/"); i >= 0 {
+		base = base[i+1:]
+	}
+	return normalizeModelID(base)
+}
+
 // modelTransport reports which API transport serves a model ID, matching the
 // live Go endpoint table (Oct 2 2026): "chat" (/chat/completions, OpenAI
 // chat), "responses" (/responses, OpenAI Responses) or "messages" (/messages,
-// Anthropic Messages).
+// Anthropic Messages). OpenRouter models always ride OpenRouter's
+// OpenAI-compatible chat endpoint, whatever the upstream vendor.
 func modelTransport(id string) string {
+	if modelProvider(id) == ProviderOpenRouter {
+		return "chat"
+	}
 	l := strings.ToLower(strings.TrimSpace(id))
 	switch {
 	case strings.HasPrefix(l, "grok-"), strings.HasPrefix(l, "gpt-"), strings.HasPrefix(l, "muse-spark-"):
@@ -74,7 +173,7 @@ func chatCompatible(id string) bool { return modelTransport(id) == "chat" }
 // outbound: "effort" models take reasoning_effort, "toggle" models take
 // enable_thinking in chat template kwargs, "" means no thinking param.
 func thinkingFamily(model string) string {
-	l := normalizeModelID(model)
+	l := modelBaseID(model)
 	if levels, ok := lookupKnownLevels(l); ok {
 		if len(levels) == 0 {
 			return ""
@@ -184,11 +283,10 @@ func lookupKnownLevels(l string) ([]string, bool) {
 // Order is low to high for ctrl+t cycling. Disk-cached probe results win,
 // then the fixed well-known table, then the full standard vocabulary.
 func AvailableThinkingLevels(model string) []string {
-	l := normalizeModelID(model)
-	if lv, ok := cachedThinkingLevels(l); ok {
+	if lv, ok := cachedThinkingLevels(model); ok {
 		return append([]string(nil), lv...)
 	}
-	if lv, ok := lookupKnownLevels(l); ok {
+	if lv, ok := lookupKnownLevels(modelBaseID(model)); ok {
 		return append([]string(nil), lv...)
 	}
 	return append([]string(nil), standardThinkingLevels...)
@@ -332,30 +430,40 @@ func probeThinkingLevels(ctx context.Context, cfg Config, apiKey string, hc *htt
 	if lv, ok := cachedThinkingLevels(l); ok {
 		return lv, nil
 	}
-	if lv, ok := lookupKnownLevels(l); ok {
+	if lv, ok := lookupKnownLevels(modelBaseID(cfg.Model)); ok {
 		return append([]string(nil), lv...), nil
 	}
 	const probe = "__probe__"
 	var url string
 	var body any
-	switch modelTransport(cfg.Model) {
-	case "responses":
-		url = responsesEndpoint(cfg.BaseURL)
-		body = map[string]any{"model": cfg.Model, "input": []any{map[string]any{"role": "user", "content": "hi"}}, "reasoning": map[string]any{"effort": probe}, "store": false}
-	case "messages":
-		url = messagesEndpoint(cfg.BaseURL)
-		body = map[string]any{"model": cfg.Model, "max_tokens": 16, "messages": []any{map[string]any{"role": "user", "content": "hi"}}, "reasoning_effort": probe}
-	default:
-		url = chatEndpoint(cfg.BaseURL)
-		body = map[string]any{"model": cfg.Model, "messages": []any{map[string]any{"role": "user", "content": "hi"}}, "reasoning_effort": probe}
+	sendCfg := cfg
+	headers := chatHeaders(apiKey)
+	if modelProvider(cfg.Model) == ProviderOpenRouter {
+		// No Go session affinity on OpenRouter: the session header
+		// would be a meaningless foreign header upstream.
+		sendCfg.SessionID = ""
+		url = openRouterBaseURL + "/chat/completions"
+		body = map[string]any{"model": wireModelID(cfg.Model), "messages": []any{map[string]any{"role": "user", "content": "hi"}}, "reasoning_effort": probe}
+		headers = openRouterHeaders(cfg.OpenRouterKey)
+	} else {
+		switch modelTransport(cfg.Model) {
+		case "responses":
+			url = responsesEndpoint(cfg.BaseURL)
+			body = map[string]any{"model": cfg.Model, "input": []any{map[string]any{"role": "user", "content": "hi"}}, "reasoning": map[string]any{"effort": probe}, "store": false}
+		case "messages":
+			url = messagesEndpoint(cfg.BaseURL)
+			body = map[string]any{"model": cfg.Model, "max_tokens": 16, "messages": []any{map[string]any{"role": "user", "content": "hi"}}, "reasoning_effort": probe}
+		default:
+			url = chatEndpoint(cfg.BaseURL)
+			body = map[string]any{"model": cfg.Model, "messages": []any{map[string]any{"role": "user", "content": "hi"}}, "reasoning_effort": probe}
+		}
 	}
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 10*1000000000)
 		defer cancel()
 	}
-	headers := chatHeaders(apiKey)
-	resp, err := postAPI(ctx, hc, cfg, url, body, headers)
+	resp, err := postAPI(ctx, hc, sendCfg, url, body, headers)
 	if err != nil {
 		return nil, err
 	}
@@ -411,6 +519,65 @@ func applyThinkingToRequest(req *openai.ChatCompletionRequest, model, level stri
 	req.ReasoningEffort = level
 }
 
+// openRouterHeaders builds the auth headers for OpenRouter: bearer key plus
+// an honest app title. No session header — that's Go routing, meaningless
+// upstream of OpenRouter.
+func openRouterHeaders(apiKey string) map[string]string {
+	if apiKey == "" {
+		return nil
+	}
+	return map[string]string{"Authorization": "Bearer " + apiKey, "X-Title": "valen"}
+}
+
+// fetchOpenRouterModels returns the live OpenRouter model IDs in stored
+// (provider-prefixed) form, sorted. Batch variants (":batch") and routing
+// aliases ("~" prefix) are dropped: pricing/shape duplicates that would only
+// clutter the picker.
+func fetchOpenRouterModels(ctx context.Context, hc *http.Client, baseURL, apiKey string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range openRouterHeaders(apiKey) {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("User-Agent", userAgent)
+	client := hc
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := clientDoWithRetryTimeout(ctx, client, req, 30*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseTransportError("openrouter", resp.StatusCode, raw)
+	}
+	var list struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return nil, fmt.Errorf("api: openrouter: decode models: %w", err)
+	}
+	ids := make([]string, 0, len(list.Data))
+	for _, m := range list.Data {
+		id := strings.TrimSpace(m.ID)
+		if id == "" || strings.HasPrefix(id, "~") || strings.Contains(id, ":batch") {
+			continue
+		}
+		ids = append(ids, ProviderOpenRouter+"/"+id)
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
 // fetchGoModels returns the live OpenCode Go model IDs, sorted.
 func fetchGoModels(ctx context.Context, client *openai.Client) ([]string, error) {
 	list, err := client.ListModels(ctx)
@@ -437,19 +604,23 @@ func knownGoModel(id string) bool {
 	return false
 }
 
-// matchGoModel resolves arg against ids: exact (case-insensitive) match wins,
-// otherwise a case-insensitive substring search. It returns the matched IDs.
+// matchGoModel resolves arg against stored IDs: exact (case-insensitive)
+// match wins, otherwise a case-insensitive substring search. Matching also
+// sees the display ("go/…") and wire ("vendor/…") forms, so "kimi-k3" finds
+// both the Go model and "openrouter/moonshotai/kimi-k3". It returns stored IDs.
 func matchGoModel(ids []string, arg string) []string {
 	arg = strings.TrimSpace(arg)
 	for _, id := range ids {
-		if strings.EqualFold(id, arg) {
+		if strings.EqualFold(id, arg) || strings.EqualFold(displayModelID(id), arg) {
 			return []string{id}
 		}
 	}
 	var out []string
 	lower := strings.ToLower(arg)
 	for _, id := range ids {
-		if strings.Contains(strings.ToLower(id), lower) {
+		if strings.Contains(strings.ToLower(id), lower) ||
+			strings.Contains(strings.ToLower(displayModelID(id)), lower) ||
+			strings.Contains(strings.ToLower(wireModelID(id)), lower) {
 			out = append(out, id)
 		}
 	}

@@ -27,6 +27,7 @@ const (
 	defaultConfigPath            = "config.toml"
 	defaultBaseURL               = "https://opencode.ai/zen/go/v1"
 	defaultAPIKeyEnv             = "OPENCODE_GO_API_KEY"
+	defaultOpenRouterKeyEnv      = "OPENROUTER_API_KEY"
 	defaultMaxRounds             = 100
 	defaultMaxTokens             = 16384
 	defaultRequestTimeoutSeconds = 300
@@ -72,10 +73,16 @@ func seedHistory(cfg Config) []openai.ChatCompletionMessage {
 
 // Config mirrors config.toml. See SPEC.md for the full schema.
 type Config struct {
-	Model                 string `toml:"model"`
-	Thinking              string `toml:"thinking"`
-	BaseURL               string `toml:"base_url"`
-	APIKeyEnv             string `toml:"api_key_env"`
+	Model            string `toml:"model"`
+	Thinking         string `toml:"thinking"`
+	BaseURL          string `toml:"base_url"`
+	APIKeyEnv        string `toml:"api_key_env"`
+	OpenRouterKeyEnv string `toml:"openrouter_api_key_env"`
+	// OpenRouterKey is in-memory only (toml:"-" never persists): the
+	// OpenRouter credential read from OpenRouterKeyEnv at boot. Kept out
+	// of the file like the Go key — persistModelSelection only writes
+	// model/thinking lines, and nothing logs it.
+	OpenRouterKey         string `toml:"-"`
 	SessionID             string `toml:"session_id"`
 	System                string `toml:"system"`
 	MaxRounds             int    `toml:"max_rounds"`
@@ -156,6 +163,12 @@ func loadConfig(path string) (Config, error) {
 	if cfg.Model == "" {
 		return cfg, errors.New("model is required")
 	}
+	// Bare IDs ride Go; "openrouter/…" rides OpenRouter. Anything else with
+	// a slash is almost certainly a pasted OpenRouter ID missing its
+	// prefix — reject it explicitly rather than sending it somewhere odd.
+	if i := strings.Index(cfg.Model, "/"); i >= 0 && !strings.HasPrefix(normalizeModelID(cfg.Model), ProviderOpenRouter+"/") {
+		return cfg, fmt.Errorf("model %q has an unknown provider prefix (OpenRouter models need %q)", cfg.Model, ProviderOpenRouter+"/vendor/model")
+	}
 	cfg.Thinking = strings.ToLower(strings.TrimSpace(cfg.Thinking))
 	if !validThinkingLevel(cfg.Model, cfg.Thinking) {
 		return cfg, fmt.Errorf("thinking %q is not available for model %q (try: %s)", cfg.Thinking, cfg.Model, strings.Join(AvailableThinkingLevels(cfg.Model), ", "))
@@ -165,6 +178,9 @@ func loadConfig(path string) (Config, error) {
 	}
 	if cfg.APIKeyEnv == "" {
 		cfg.APIKeyEnv = defaultAPIKeyEnv
+	}
+	if cfg.OpenRouterKeyEnv == "" {
+		cfg.OpenRouterKeyEnv = defaultOpenRouterKeyEnv
 	}
 	if cfg.MaxRounds == 0 {
 		cfg.MaxRounds = defaultMaxRounds
@@ -296,6 +312,14 @@ func start() error {
 	apiKey := os.Getenv(cfg.APIKeyEnv)
 	if apiKey == "" {
 		return fmt.Errorf("%s is not set", cfg.APIKeyEnv)
+	}
+	// OpenRouter is opt-in: only when its key env is present do we list and
+	// serve its models. A configured openrouter/ model without the key is a
+	// boot error, not a first-turn 401. Trimmed: pasted keys with stray
+	// whitespace 401 otherwise.
+	cfg.OpenRouterKey = strings.TrimSpace(os.Getenv(cfg.OpenRouterKeyEnv))
+	if modelProvider(cfg.Model) == ProviderOpenRouter && cfg.OpenRouterKey == "" {
+		return fmt.Errorf("%s is not set (required by model %q)", cfg.OpenRouterKeyEnv, cfg.Model)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -829,7 +853,7 @@ func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey 
 	stream := true
 	tools := registry.OpenAITools()
 	return runModelTurn(ctx, cfg, registry, history, onEvent, func(ctx context.Context, history []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
-		req := openai.ChatCompletionRequest{Model: cfg.Model, Messages: chatSendMessages(history), Tools: tools, MaxTokens: outputTokens(cfg)}
+		req := openai.ChatCompletionRequest{Model: wireModelID(cfg.Model), Messages: chatSendMessages(history), Tools: tools, MaxTokens: outputTokens(cfg)}
 		if cfg.Temperature != nil {
 			req.Temperature = *cfg.Temperature
 		}
@@ -849,6 +873,33 @@ func chatEndpoint(baseURL string) string {
 	return strings.TrimRight(baseURL, "/") + "/chat/completions"
 }
 
+// openRouterHTTPClient is the sessionless client for OpenRouter traffic:
+// the shared keep-alive transport without the Go identity headers.
+var openRouterHTTPClient = &http.Client{Transport: sharedTransport}
+
+// chatTarget resolves where a chat turn is sent. Go models ride cfg.BaseURL
+// with the Go key and session affinity; OpenRouter models ride OpenRouter's
+// OpenAI-compatible chat endpoint with the OpenRouter key and no Go session
+// header. It returns the endpoint URL, headers, send config and client.
+func chatTarget(cfg Config, apiKey string, hc *http.Client) (string, map[string]string, Config, *http.Client) {
+	if modelProvider(cfg.Model) == ProviderOpenRouter {
+		sendCfg := cfg
+		sendCfg.SessionID = ""
+		return openRouterBaseURL + "/chat/completions", openRouterHeaders(cfg.OpenRouterKey), sendCfg, openRouterHTTPClient
+	}
+	return chatEndpoint(cfg.BaseURL), chatHeaders(apiKey), cfg, hc
+}
+
+// chatTransportLabel names the failing side for error mapping: OpenRouter
+// failures must not be reported as Go ("chat") ones, or the wrong env var
+// gets blamed.
+func chatTransportLabel(cfg Config) string {
+	if modelProvider(cfg.Model) == ProviderOpenRouter {
+		return "openrouter"
+	}
+	return "chat"
+}
+
 func chatHeaders(apiKey string) map[string]string {
 	if apiKey == "" {
 		return nil
@@ -860,7 +911,8 @@ func chatHeaders(apiKey string) map[string]string {
 // provider rejects `stream: true`.
 func chatRoundOnce(ctx context.Context, cfg Config, apiKey string, hc *http.Client, req openai.ChatCompletionRequest) (openai.ChatCompletionMessage, openai.Usage, error) {
 	var usage openai.Usage
-	resp, err := postAPI(ctx, hc, cfg, chatEndpoint(cfg.BaseURL), req, chatHeaders(apiKey))
+	endpoint, headers, sendCfg, httpClient := chatTarget(cfg, apiKey, hc)
+	resp, err := postAPI(ctx, httpClient, sendCfg, endpoint, req, headers)
 	if err != nil {
 		return openai.ChatCompletionMessage{}, usage, err
 	}
@@ -870,7 +922,7 @@ func chatRoundOnce(ctx context.Context, cfg Config, apiKey string, hc *http.Clie
 		return openai.ChatCompletionMessage{}, usage, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return openai.ChatCompletionMessage{}, usage, parseTransportError("chat", resp.StatusCode, raw)
+		return openai.ChatCompletionMessage{}, usage, parseTransportError(chatTransportLabel(cfg), resp.StatusCode, raw)
 	}
 	var out openai.ChatCompletionResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
@@ -908,7 +960,8 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 	var usage openai.Usage
 	req.Stream = true
 	req.StreamOptions = &openai.StreamOptions{IncludeUsage: true}
-	resp, err := postAPI(ctx, hc, cfg, chatEndpoint(cfg.BaseURL), req, chatHeaders(apiKey))
+	endpoint, headers, sendCfg, httpClient := chatTarget(cfg, apiKey, hc)
+	resp, err := postAPI(ctx, httpClient, sendCfg, endpoint, req, headers)
 	if err != nil {
 		return openai.ChatCompletionMessage{}, usage, err
 	}
@@ -919,7 +972,7 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 		if err != nil {
 			return openai.ChatCompletionMessage{}, usage, err
 		}
-		return openai.ChatCompletionMessage{}, usage, parseTransportError("chat", resp.StatusCode, raw)
+		return openai.ChatCompletionMessage{}, usage, parseTransportError(chatTransportLabel(cfg), resp.StatusCode, raw)
 	}
 	sse, raw, err := splitBodyMode(br)
 	if err != nil {
@@ -964,7 +1017,7 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 			return false
 		}
 		if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
-			eventErr = parseTransportError("chat", 0, []byte(ev.data))
+			eventErr = parseTransportError(chatTransportLabel(cfg), 0, []byte(ev.data))
 			return false
 		}
 		if chunk.Usage != nil {

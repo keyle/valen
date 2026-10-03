@@ -49,10 +49,11 @@ and exposes tools plus any number of stdio MCP servers to the model.
 
 | Key | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `model` | string | — | **required.** Model ID, e.g. `glm-5.3-flash`, `kimi-k3`. Switch live with `/model` (ctrl+p); persisted to `config.toml` |
+| `model` | string | — | **required.** Model ID, e.g. `glm-5.3-flash`, `kimi-k3`, or `openrouter/moonshotai/kimi-k3`. The `openrouter/` prefix selects the OpenRouter provider (needs its key, below); bare IDs ride OpenCode Go. Switch live with `/model` (ctrl+p); persisted to `config.toml` |
 | `thinking` | string | empty (provider default) | Reasoning level, per-model (see `/effort` picker): muse-spark `minimal`/`low`/`medium`/`high`/`xhigh`, gpt/grok `low`…`max` (+`none` on gpt), glm/deepseek `low`/`high`/`max` or `high`/`max`, kimi-k3 `max` only, toggle models `none`/`high`, fixed no-control models omit. Switch live with `/effort` (`/thinking` alias) or ctrl+t (cycles low→high, wraps); persisted to `config.toml`. Unknown models fall back to the full vocabulary until a 400 teaches the valid list, cached at `$XDG_DATA_HOME/valen/thinking_levels.json` |
 | `base_url` | string | `https://opencode.ai/zen/go/v1` | API base; the transport path (`/chat/completions`, `/messages`, `/responses`) is appended per model |
 | `api_key_env` | string | `OPENCODE_GO_API_KEY` | Name of the env var holding the key, not the key itself |
+| `openrouter_api_key_env` | string | `OPENROUTER_API_KEY` | Optional second provider: when this env var is set, `/model` also lists OpenRouter models (`openrouter/<vendor>/<model>`) served via OpenRouter's OpenAI-compatible chat endpoint. Unset means Go-only |
 | `session_id` | string | `ses-<unixnano>` | Stable per conversation; sent as `x-opencode-session` |
 | `system` | string | prompt files (per model family) | Agent guidelines; empty uses the harness prompt files (opencode-adapted, valen-tuned: muse→meta, claude→anthropic, old reasoning→beast, gpt-6→astra, gpt/grok→gpt, codex/copilot/gemini/kimi/trinity→their file, else default) plus a small `<env>` header (model, workdir, platform, date). Set to override entirely |
 | `plan` | bool | `false` | Plan mode: read-only investigation — the plan overlay joins the system prompt, `write`/`edit`/`shell` refuse with guidance, `task` is explore-only. TUI `/plan` toggles at runtime; `-plan` sets it headless |
@@ -98,6 +99,11 @@ Transport is selected per model by `modelTransport` (live Go table, Oct 2
 (`qwen3.8-max`, `qwen3.8-flash`, `qwen3.7-plus`) are `/messages`
 (`@ai-sdk/anthropic`); everything else (`glm-*`, `kimi-*`, `deepseek-*`,
 `mimo-*`, `longcat-*`, `hy*`, `space-bunny-free`) is `/chat/completions`.
+`openrouter/…` models always use OpenRouter's OpenAI-compatible
+`POST https://openrouter.ai/api/v1/chat/completions` (bearer key plus
+`X-Title: valen`, no Go session header) with the vendor/model ID on the
+wire and `reasoning_effort` for thinking; family levels resolve through
+the vendor segment (`openrouter/moonshotai/kimi-k3` → `kimi-k3` rules).
 History stays OpenAI-shaped in memory; the non-chat transports convert each
 round and fold the reply back, so the TUI, session log and tool registry are
 transport-agnostic.
@@ -325,7 +331,12 @@ deterministic. Tools are registered as
   function tools), 429 surfacing.
 - `models_test.go` — transport map per live Go table, per-model thinking
   levels, request wiring (`reasoning_effort` vs `enable_thinking`), config
-  persist round-trip, `thinking` validation in `loadConfig`.
+  persist round-trip, `thinking` validation in `loadConfig`, plus OpenRouter:
+  provider prefix/wire/display/base forms, family levels through the vendor
+  segment, provider validation in `loadConfig`, catalog fetch/filter,
+  and the OpenRouter chat wire shape (stripped model, OR key, no session
+  header, `reasoning_effort`). TUI picker merge/fallback across both
+  catalogs rides with the other picker tests.
 - `errors_test.go` — friendly mapping incl. `transportError` (messages 429,
   responses 401).
 - `transports_test.go` — one model per transport pinned to its endpoint path
