@@ -273,7 +273,7 @@ func TestTUIPendingShowsSequentialToolsAndStream(t *testing.T) {
 	if searchIdx < 0 || fetchIdx < 0 || searchIdx > fetchIdx {
 		t.Fatalf("tools not sequential:\n%s", out)
 	}
-	for _, want := range []string{`{"query":"go"}`, "1. release notes", "Checking ", "web_fetch"} {
+	for _, want := range []string{"web_search  go", "1. release notes", "Checking ", "web_fetch  https://x"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("pending missing %q:\n%s", want, out)
 		}

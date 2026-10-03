@@ -889,6 +889,93 @@ func TestThinkDurShowsSubSecond(t *testing.T) {
 	}
 }
 
+// TestPendingThinkingHeaderBeforeText: the live thinking header (with
+// elapsed) renders from turn start, before any thinking delta arrives, so a
+// long tool-only stretch never hides the elapsed. A blank line follows the
+// header even with no body yet.
+func TestPendingThinkingHeaderBeforeText(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.viewport.Width = 80
+	m.busy = true
+	m.pendingPrompt = "do the thing"
+	m.pendingSince = time.Now().Add(-63 * time.Second)
+	out := m.renderPending(80)
+	if !strings.Contains(out, "✦ thinking (1m3s)") {
+		t.Fatalf("live header must show elapsed before thinking text:\n%s", out)
+	}
+	head := strings.Index(out, "✦ thinking (1m3s)")
+	tool := strings.Index(out, "Reasoning…")
+	if head < 0 || tool < 0 || head > tool {
+		t.Fatalf("header/tool order wrong:\n%s", out)
+	}
+	// Line return after the thinking state: header and status line must not
+	// share one visual line.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "✦ thinking") && strings.Contains(line, "Reasoning…") {
+			t.Fatalf("thinking header glued to status line:\n%s", out)
+		}
+	}
+}
+
+// TestPendingThinkingHeaderHiddenStaysHidden: /think off keeps the live
+// thinking state (and its elapsed) out of the pending block.
+func TestPendingThinkingHeaderHiddenStaysHidden(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.viewport.Width = 80
+	m.busy = true
+	m.showThink = false
+	m.pendingPrompt = "do the thing"
+	m.pendingSince = time.Now().Add(-63 * time.Second)
+	m.pendingThinking = "secret plan"
+	if out := m.renderPending(80); strings.Contains(out, "✦ thinking") {
+		t.Fatalf("hidden thinking must stay out of live view:\n%s", out)
+	}
+}
+
+// TestCommittedToolOnlyShowsDuration: a turn with tools but no thinking text
+// still persists the wall time on a bare thinking header.
+func TestCommittedToolOnlyShowsDuration(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.viewport.Width = 80
+	m.session.Turns = []Turn{{
+		At: time.Now(), Prompt: "list it", DurMs: 63000,
+		Tools: []ToolRecord{{Name: "shell", Args: "ls", Output: "x"}},
+	}}
+	out := m.renderChat()
+	if !strings.Contains(out, "✦ thinking (1m3s)") {
+		t.Fatalf("tool-only turn must persist elapsed:\n%s", out)
+	}
+}
+
+// TestCommittedPlainTextNoBareHeader: a plain Q&A turn (no thinking, no
+// tools) must not gain a bare thinking header just for the timestamp.
+func TestCommittedPlainTextNoBareHeader(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.viewport.Width = 80
+	m.session.Turns = []Turn{{At: time.Now(), Prompt: "hi", Reply: "hello", DurMs: 2500}}
+	if out := m.renderChat(); strings.Contains(out, "✦ thinking") {
+		t.Fatalf("plain turn must not grow a bare thinking header:\n%s", out)
+	}
+}
+
+// TestTurnDoneFloorsDuration: even an instant turn commits DurMs >= 1 so the
+// persisted thinking header never drops its elapsed suffix.
+func TestTurnDoneFloorsDuration(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.pendingSince = time.Now()
+	m.session.Turns = nil
+	_, _ = m.Update(turnDoneMsg{prompt: "hi", thinking: "plan", answer: "ok"})
+	if len(m.session.Turns) != 1 {
+		t.Fatalf("turn not committed: %+v", m.session.Turns)
+	}
+	if m.session.Turns[0].DurMs < 1 {
+		t.Fatalf("DurMs must floor at 1, got %d", m.session.Turns[0].DurMs)
+	}
+	if got := thinkDurSuffix(m.session.Turns[0].DurMs); got == "" {
+		t.Fatal("floored duration must render a suffix")
+	}
+}
+
 // TestPendingToolMatchesByID: two parallel same-name calls keep their own
 // outputs — the first-started finishing first must not credit the later row.
 func TestPendingToolMatchesByID(t *testing.T) {
@@ -952,6 +1039,48 @@ func TestTUITodoChecklistInScrollback(t *testing.T) {
 	plain := m.renderToolLine(ToolRecord{Name: "shell", Args: `{"command":"ls"}`, Output: "main.go"})
 	if !strings.Contains(plain, "main.go") {
 		t.Fatalf("other tools must keep default preview:\n%s", plain)
+	}
+}
+
+// TestTUIToolSummariesInScrollback: file tools render plain-English headers
+// (no raw JSON); edits render the old/new pair as a -/+ diff.
+func TestTUIToolSummariesInScrollback(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.viewport.Width = 80
+
+	editArgs := `{"path":"foo.go","oldString":"a := 1\nb := 2","newString":"a := 1\nb := 3"}`
+	row := m.renderToolLine(ToolRecord{Name: "edit", Args: editArgs, Output: "edited foo.go"})
+	for _, want := range []string{"⏺ edit", "foo.go", "- b := 2", "+ b := 3"} {
+		if !strings.Contains(row, want) {
+			t.Fatalf("edit row must show diff %q:\n%s", want, row)
+		}
+	}
+	if strings.Contains(row, "oldString") {
+		t.Fatalf("edit row must not dump raw JSON:\n%s", row)
+	}
+
+	readRow := m.renderToolLine(ToolRecord{Name: "read", Args: `{"path":"foo.go","offset":10,"limit":5}`, Output: "File foo.go (20 lines, showing 10-14):\n10: x"})
+	if !strings.Contains(readRow, "foo.go") || strings.Contains(readRow, `"path"`) {
+		t.Fatalf("read row must summarize path, not JSON:\n%s", readRow)
+	}
+
+	grepRow := m.renderToolLine(ToolRecord{Name: "grep", Args: `{"pattern":"foo.*","path":"."}`, Output: "foo.go:1: foo bar"})
+	if !strings.Contains(grepRow, "foo.*") || strings.Contains(grepRow, `"pattern"`) {
+		t.Fatalf("grep row must show the pattern, not JSON:\n%s", grepRow)
+	}
+
+	// Live running edit shows the same diff under the spinner header.
+	m.busy = true
+	m.pendingPrompt = "fix it"
+	_, _ = m.Update(toolEventMsg{kind: "tool_start", text: "edit", args: editArgs})
+	live := m.renderPending(80)
+	for _, want := range []string{"edit", "· running", "- b := 2", "+ b := 3"} {
+		if !strings.Contains(live, want) {
+			t.Fatalf("live edit must diff %q:\n%s", want, live)
+		}
+	}
+	if strings.Contains(live, "oldString") {
+		t.Fatalf("live edit must not dump raw JSON:\n%s", live)
 	}
 }
 
@@ -1156,5 +1285,98 @@ func TestLoadConfigRejectsUnknownKeys(t *testing.T) {
 		t.Fatal("expected error for top-level blink/height")
 	} else if !strings.Contains(err.Error(), "unknown key") {
 		t.Fatalf("err=%v, want unknown key", err)
+	}
+}
+
+func TestTUIWheelScrollPausesAutoscrollUntilBottom(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	for i := 0; i < 10; i++ {
+		m.session.Turns = append(m.session.Turns, Turn{
+			At:     time.Now(),
+			Prompt: fmt.Sprintf("question %d with padding to fill lines", i),
+			Reply:  fmt.Sprintf("answer %d with padding to fill lines", i),
+		})
+	}
+	m.viewport.Width = 80
+	m.viewport.Height = 10
+	m.pinBottom()
+	if !m.follow {
+		t.Fatal("pinBottom should enable follow")
+	}
+	if !m.viewport.AtBottom() {
+		t.Fatal("pinBottom should land on the bottom")
+	}
+	top := m.viewport.YOffset
+
+	wheel := func(up bool) {
+		t.Helper()
+		btn := tea.MouseButtonWheelDown
+		if up {
+			btn = tea.MouseButtonWheelUp
+		}
+		_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: btn})
+	}
+
+	// Wheel up scrolls the scrollback and pauses autoscroll.
+	wheel(true)
+	if m.viewport.YOffset >= top {
+		t.Fatalf("wheel up did not scroll: yoff=%d top=%d", m.viewport.YOffset, top)
+	}
+	if m.follow {
+		t.Fatal("scrolling up should pause follow")
+	}
+
+	// A streaming flush while busy must not yank the view back down.
+	m.busy = true
+	m.pendingPrompt = "working"
+	m.pendingSince = time.Now()
+	m.lastStreamFlush = time.Time{}
+	held := m.viewport.YOffset
+	m.flushStream()
+	if m.viewport.YOffset != held {
+		t.Fatalf("stream flush smashed scrollback to bottom: %d -> %d", held, m.viewport.YOffset)
+	}
+	if m.viewport.AtBottom() {
+		t.Fatal("view should still be scrolled up")
+	}
+
+	// Wheeling back down to the bottom resumes autoscroll.
+	for i := 0; i < 100 && !m.viewport.AtBottom(); i++ {
+		wheel(false)
+	}
+	if !m.viewport.AtBottom() || !m.follow {
+		t.Fatalf("reaching bottom should resume follow: at=%v follow=%v", m.viewport.AtBottom(), m.follow)
+	}
+
+	// Committing a turn re-pins even after scrolling up again.
+	wheel(true)
+	if m.follow {
+		t.Fatal("scrolling up should pause follow again")
+	}
+	_, _ = m.Update(turnDoneMsg{prompt: "q", answer: "a", history: m.history, model: "m"})
+	if !m.follow || !m.viewport.AtBottom() {
+		t.Fatal("turn commit should re-pin to the bottom")
+	}
+}
+
+func TestTUIPgUpPausesAutoscroll(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	for i := 0; i < 10; i++ {
+		m.session.Turns = append(m.session.Turns, Turn{
+			At:     time.Now(),
+			Prompt: fmt.Sprintf("question %d with padding to fill lines", i),
+			Reply:  fmt.Sprintf("answer %d with padding to fill lines", i),
+		})
+	}
+	m.viewport.Width = 80
+	m.viewport.Height = 10
+	m.pinBottom()
+	top := m.viewport.YOffset
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.viewport.YOffset >= top {
+		t.Fatalf("pgup did not scroll: yoff=%d top=%d", m.viewport.YOffset, top)
+	}
+	if m.follow {
+		t.Fatal("pgup should pause follow")
 	}
 }

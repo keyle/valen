@@ -94,7 +94,12 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 - Thinking renders dim/italic with a left rule, shown by default; ctrl+y or
   `/think` collapses to `✦ thinking (N chars)`.
 - Tool calls render one compact cyan line plus a dim first-line preview;
-  full args/output live in the Tools view. `todowrite`/`todoread` rows render
+  full args/output live in the Tools view. Headers use plain English, not
+  raw JSON (`⏺ read foo.go`, `⏺ grep "pat" in src`, `⏺ edit foo.go`).
+  `edit` rows render the change as a `-`/`+` diff (old/new strings, capped
+  at 10 lines with a `+N more` tail), live from the call args while running
+  and committed on the stored args; `write` rows preview added `+` lines
+  the same way. `todowrite`/`todoread` rows render
   the session plan as a glyph checklist instead of raw JSON (`☑` completed,
   `◐` in progress, `☐` pending, `✕` cancelled; capped at 6 with a `+N more`
   tail), live from the call args while running and from the stored result on
@@ -106,7 +111,9 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   the footer hint line, refreshed at startup, every minute, and after each
   turn; yellow past 80%, pink at 100% or rate-limited, with a `↻` reset hint
   on hot windows. Hidden when `{base_url}/usage` is unavailable (non-Go keys).
-- Autoscroll follows new turns; PgUp/PgDn scrolls the viewport.
+- Autoscroll follows new turns while pinned to the bottom; PgUp/PgDn or the
+  mouse wheel scrolls the transcript, which pauses autoscroll until scrolled
+  back to the bottom (a new submit or committed turn re-pins).
 - Chatbox chrome is configurable via `[input]` in `config.toml`: `blink`
   (default `true`; `false` parks the block cursor steady with no blink
   timer) and `height` (default `3` box lines; the transcript viewport
@@ -284,7 +291,7 @@ ready, input focused. `/clear` resets intentionally.
 | Esc | cancel run / clear input / back | back to chat |
 | Ctrl+C / Ctrl+D | cancel (busy) / quit (idle) | quit |
 | Ctrl+J / Alt+Enter / Shift+Enter | newline in input (shift+enter where the terminal supports it) | — |
-| PgUp/PgDn / Ctrl+D | scroll transcript | scroll view |
+| PgUp/PgDn / wheel | scroll transcript (pauses autoscroll until back at bottom) | scroll view |
 | Ctrl+G | help | help |
 | Ctrl+R / Ctrl+L / Ctrl+U / Ctrl+X | history / sessions / tools / errors | same |
 | Ctrl+Y | toggle thinking display | toggle thinking display |

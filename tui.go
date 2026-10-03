@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -52,6 +53,8 @@ var (
 	toolLineStyle = lipgloss.NewStyle().Foreground(mkCyan).PaddingLeft(2)
 	toolErrStyle  = lipgloss.NewStyle().Foreground(mkPink).PaddingLeft(2).Bold(true)
 	toolDimStyle  = lipgloss.NewStyle().Foreground(mkComment).PaddingLeft(2)
+	diffDelStyle  = lipgloss.NewStyle().Foreground(mkPink).PaddingLeft(2)
+	diffAddStyle  = lipgloss.NewStyle().Foreground(mkGreen).PaddingLeft(2)
 	asstHeadStyle = lipgloss.NewStyle().Bold(true).Foreground(mkGreen)
 	asstBodyStyle = lipgloss.NewStyle().Foreground(mkFg).PaddingLeft(2)
 	errorTitleSty = lipgloss.NewStyle().Bold(true).Foreground(mkPink).
@@ -314,8 +317,13 @@ type tuiModel struct {
 	notice        string
 	noticeErr     bool
 
-	showThink   bool
-	showMeta    bool
+	showThink bool
+	showMeta  bool
+	// follow pins the chat transcript to the newest line. Wheel/pgup
+	// scrolling up clears it so streaming ticks stop yanking the view
+	// back down; scrolling back to the bottom (or a new submit/commit)
+	// sets it again.
+	follow      bool
 	mode        viewMode
 	prevMode    viewMode
 	cursor      int
@@ -359,6 +367,7 @@ func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session 
 	ta.Focus()
 
 	vp := viewport.New(80, 20)
+	vp.MouseWheelEnabled = true
 
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(lipgloss.NewStyle().Foreground(mkOrange)))
 
@@ -369,6 +378,7 @@ func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session 
 		input:     ta,
 		spinner:   sp,
 		showThink: true,
+		follow:    true,
 		mode:      viewChat,
 	}
 	m.refreshViewport()
@@ -637,7 +647,7 @@ func (m *tuiModel) flushStream() {
 	}
 	m.lastStreamFlush = time.Now()
 	m.refreshViewport()
-	if m.mode == viewChat {
+	if m.mode == viewChat && m.follow {
 		m.viewport.GotoBottom()
 	}
 }
@@ -793,6 +803,16 @@ func (m *tuiModel) wrapAskHint(s string) string {
 	return confirmHintStyle.Width(m.contentWidth()).Render(breakLongWords(s, m.contentWidth()))
 }
 
+// pinBottom re-renders and snaps the transcript to the newest line,
+// re-enabling autoscroll. Use for explicit jumps (submit, commit,
+// returning to chat); streaming ticks honor follow instead so a user
+// reading history is not yanked down.
+func (m *tuiModel) pinBottom() {
+	m.follow = true
+	m.refreshViewport()
+	m.viewport.GotoBottom()
+}
+
 // show switches overlay modes and keeps focus/viewport consistent.
 func (m *tuiModel) show(mode viewMode) {
 	if mode != viewChat && mode != viewDetail {
@@ -810,6 +830,7 @@ func (m *tuiModel) show(mode viewMode) {
 	}
 	m.refreshViewport()
 	if mode == viewChat {
+		m.follow = true
 		m.viewport.GotoBottom()
 	} else {
 		m.viewport.GotoTop()
@@ -854,8 +875,7 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	m.lastStreamFlush = time.Time{}
 	m.notice = ""
 	m.done = make(chan struct{})
-	m.refreshViewport()
-	m.viewport.GotoBottom()
+	m.pinBottom()
 
 	cfg := m.cfg
 	client := m.client
@@ -1066,8 +1086,7 @@ func (m *tuiModel) compactCmd() tea.Cmd {
 	m.busy = true
 	m.toolStatus = "Compacting…"
 	m.notice = ""
-	m.refreshViewport()
-	m.viewport.GotoBottom()
+	m.pinBottom()
 
 	cfg := m.cfg
 	client := m.client
@@ -1307,6 +1326,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input.SetWidth(vpW - 2)
 		m.glam = nil
 		m.refreshViewport()
+		if m.follow {
+			m.viewport.GotoBottom()
+		}
 		return m, nil
 
 	case spinner.TickMsg:
@@ -1319,7 +1341,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// the status spinner never goes stale between events. Committed
 			// turns are cached, so this is just the small pending block.
 			m.refreshViewport()
-			if m.mode == viewChat {
+			if m.mode == viewChat && m.follow {
 				m.viewport.GotoBottom()
 			}
 		}
@@ -1432,6 +1454,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if !m.pendingSince.IsZero() {
 			turn.DurMs = time.Since(m.pendingSince).Milliseconds()
+			if turn.DurMs < 1 {
+				turn.DurMs = 1
+			}
 		}
 		if msg.err != nil {
 			fe := friendlyError(msg.err)
@@ -1473,8 +1498,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.done = nil
 		}
 		m.input.Focus()
-		m.refreshViewport()
-		m.viewport.GotoBottom()
+		m.pinBottom()
 		return m, m.fetchUsageCmd()
 
 	case compactDoneMsg:
@@ -1502,9 +1526,23 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.noticeErr = false
 		}
 		m.input.Focus()
-		m.refreshViewport()
-		m.viewport.GotoBottom()
+		m.pinBottom()
 		return m, nil
+
+	case tea.MouseMsg:
+		// Wheel (and clicks) go to the viewport in every mode: in chat
+		// the textarea would swallow them and the scrollback would never
+		// move. Scrolling away from the bottom pauses autoscroll;
+		// scrolling back to the bottom resumes it.
+		var vcmd tea.Cmd
+		m.viewport, vcmd = m.viewport.Update(msg)
+		if m.mode == viewChat {
+			m.follow = m.viewport.AtBottom()
+		}
+		if vcmd != nil {
+			cmds = append(cmds, vcmd)
+		}
+		return m, tea.Batch(cmds...)
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -1714,6 +1752,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "pgup", "pgdown", "ctrl+d":
 		var vcmd tea.Cmd
 		m.viewport, vcmd = m.viewport.Update(msg)
+		m.follow = m.viewport.AtBottom()
 		return m, vcmd
 	case "up", "down":
 		// Let the textarea move first; viewport scrolls with pgup/pgdn.
@@ -2097,6 +2136,11 @@ func (m *tuiModel) renderTurn(t *Turn, w int) string {
 			}
 			parts = append(parts, thinkHeaderStyle.Render(label))
 		}
+	} else if m.showThink && t.DurMs > 0 && len(t.Tools) > 0 {
+		// Tool-only turn: no thinking text, but the wall time still lands
+		// on a bare thinking header so the elapsed persists in scrollback.
+		// The "\n\n" join below keeps a line return after it.
+		parts = append(parts, thinkHeaderStyle.Render("✦ thinking"+thinkDurSuffix(t.DurMs)))
 	}
 
 	for _, tr := range t.Tools {
@@ -2129,7 +2173,49 @@ func (m *tuiModel) renderTurnFull(t *Turn) string {
 		b.WriteString(m.wrapPlain("✦ thinking"+thinkDurSuffix(t.DurMs)+"\n"+t.Thinking) + "\n\n")
 	}
 	for _, tr := range t.Tools {
-		b.WriteString(m.wrapPlain(fmt.Sprintf("⏺ %s%s\nargs: %s\n%s", tr.Name, toolDurSuffix(tr.DurMs), tr.Args, tr.Output)) + "\n\n")
+		head := fmt.Sprintf("⏺ %s  %s%s", tr.Name, toolSummary(tr.Name, tr.Args, 300), toolDurSuffix(tr.DurMs))
+		var body strings.Builder
+		body.WriteString(head)
+		if tr.Name == "edit" {
+			if del, add, ok := editDiffLines(tr.Args, 300); ok {
+				for _, ln := range del {
+					body.WriteString("\n" + ln)
+				}
+				for _, ln := range add {
+					body.WriteString("\n" + ln)
+				}
+				// The "edited …" confirmation adds nothing after the diff.
+				if isEditConfirmation(tr.Output) {
+					b.WriteString(m.wrapPlain(body.String()) + "\n\n")
+					continue
+				}
+			}
+		} else if tr.Name == "write" {
+			if lines, ok := writeDiffLines(tr.Args, 300); ok {
+				for _, ln := range lines {
+					body.WriteString("\n" + ln)
+				}
+				if isEditConfirmation(tr.Output) {
+					b.WriteString(m.wrapPlain(body.String()) + "\n\n")
+					continue
+				}
+			}
+		} else if tr.Name == "todowrite" || tr.Name == "todoread" {
+			if lines, ok := todoChecklistLines(tr); ok {
+				for _, ln := range lines {
+					body.WriteString("\n" + ln)
+				}
+				b.WriteString(m.wrapPlain(body.String()) + "\n\n")
+				continue
+			}
+		}
+		if strings.TrimSpace(tr.Output) != "" {
+			body.WriteString("\n" + tr.Output)
+		}
+		if tr.Err != "" {
+			body.WriteString("\nerror: " + tr.Err)
+		}
+		b.WriteString(m.wrapPlain(body.String()) + "\n\n")
 	}
 	if t.Error != nil {
 		b.WriteString(m.wrapPlain("✗ "+t.Error.Title+"\n"+t.Error.Details) + "\n\n")
@@ -2138,6 +2224,217 @@ func (m *tuiModel) renderTurnFull(t *Turn) string {
 		b.WriteString(m.wrapPlain(t.Reply) + "\n")
 	}
 	return b.String()
+}
+
+// maxEditDiffLines caps the edit/write diff preview so one change never
+// floods the transcript; the tail counts the remainder.
+const maxEditDiffLines = 10
+
+// toolSummary renders tool args in plain English for scrollback headers
+// instead of raw JSON: paths, patterns and commands read as words.
+// Unknown tools and unparseable args fall back to truncated raw args.
+func toolSummary(name, args string, maxText int) string {
+	short := func(s string) string { return truncateRunes(strings.TrimSpace(s), maxText) }
+	switch name {
+	case "read":
+		var a struct {
+			Path   string `json:"path"`
+			Offset int    `json:"offset"`
+			Limit  int    `json:"limit"`
+		}
+		if json.Unmarshal([]byte(args), &a) != nil || strings.TrimSpace(a.Path) == "" {
+			return short(args)
+		}
+		p := strings.TrimSpace(a.Path)
+		if a.Offset <= 1 && a.Limit <= 0 {
+			return short(p)
+		}
+		start := a.Offset
+		if start < 1 {
+			start = 1
+		}
+		if a.Limit > 0 {
+			return short(fmt.Sprintf("%s:%d-%d", p, start, start+a.Limit-1))
+		}
+		return short(fmt.Sprintf("%s:%d+", p, start))
+	case "edit", "write":
+		var a struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal([]byte(args), &a) != nil || strings.TrimSpace(a.Path) == "" {
+			return short(args)
+		}
+		return short(a.Path)
+	case "grep":
+		var a struct {
+			Pattern string `json:"pattern"`
+			Path    string `json:"path"`
+			Include string `json:"include"`
+		}
+		if json.Unmarshal([]byte(args), &a) != nil || strings.TrimSpace(a.Pattern) == "" {
+			return short(args)
+		}
+		var b strings.Builder
+		b.WriteString(short(`"` + strings.TrimSpace(a.Pattern) + `"`))
+		if p := strings.TrimSpace(a.Path); p != "" && p != "." {
+			b.WriteString(" in " + short(p))
+		}
+		if inc := strings.TrimSpace(a.Include); inc != "" {
+			b.WriteString(" · " + short(inc))
+		}
+		return truncateRunes(b.String(), maxText)
+	case "glob":
+		var a struct {
+			Pattern string `json:"pattern"`
+			Path    string `json:"path"`
+		}
+		if json.Unmarshal([]byte(args), &a) != nil || strings.TrimSpace(a.Pattern) == "" {
+			return short(args)
+		}
+		s := strings.TrimSpace(a.Pattern)
+		if p := strings.TrimSpace(a.Path); p != "" && p != "." {
+			s += " in " + p
+		}
+		return short(s)
+	case "shell":
+		var a struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal([]byte(args), &a) != nil || strings.TrimSpace(a.Command) == "" {
+			return short(args)
+		}
+		return short(a.Command)
+	case "web_search":
+		var a struct {
+			Query string `json:"query"`
+		}
+		if json.Unmarshal([]byte(args), &a) != nil || strings.TrimSpace(a.Query) == "" {
+			return short(args)
+		}
+		return short(a.Query)
+	case "web_fetch":
+		var a struct {
+			URL string `json:"url"`
+		}
+		if json.Unmarshal([]byte(args), &a) != nil || strings.TrimSpace(a.URL) == "" {
+			return short(args)
+		}
+		return short(a.URL)
+	case "task":
+		var a struct {
+			Description string `json:"description"`
+			Prompt      string `json:"prompt"`
+		}
+		if json.Unmarshal([]byte(args), &a) != nil {
+			return short(args)
+		}
+		if d := strings.TrimSpace(a.Description); d != "" {
+			return short(d)
+		}
+		if p := strings.TrimSpace(a.Prompt); p != "" {
+			if i := strings.Index(p, "\n"); i >= 0 {
+				p = p[:i]
+			}
+			return short(p)
+		}
+		return short(args)
+	case "AskUserQuestion":
+		var a struct {
+			Questions []struct {
+				Question string `json:"question"`
+				Header   string `json:"header"`
+			} `json:"questions"`
+		}
+		if json.Unmarshal([]byte(args), &a) != nil || len(a.Questions) == 0 {
+			return short(args)
+		}
+		q := strings.TrimSpace(a.Questions[0].Question)
+		if q == "" {
+			q = strings.TrimSpace(a.Questions[0].Header)
+		}
+		if q == "" {
+			return short(args)
+		}
+		return short(q)
+	default:
+		return short(args)
+	}
+}
+
+// isEditConfirmation reports the stock edit/write success line, which the
+// recall view drops once the diff itself is shown.
+func isEditConfirmation(out string) bool {
+	s := strings.TrimSpace(out)
+	return strings.HasPrefix(s, "edited ") || strings.HasPrefix(s, "replaced ") || strings.HasPrefix(s, "wrote ")
+}
+
+// editDiffLines renders the oldString/newString pair from an edit call as
+// -/+ diff lines, capped at maxEditDiffLines with a +N more tail.
+func editDiffLines(args string, maxText int) (del, add []string, ok bool) {
+	var a struct {
+		OldString string `json:"oldString"`
+		NewString string `json:"newString"`
+	}
+	if json.Unmarshal([]byte(args), &a) != nil || a.OldString == "" && a.NewString == "" {
+		return nil, nil, false
+	}
+	w := maxText - 2
+	if w < 10 {
+		w = 10
+	}
+	for _, ln := range strings.Split(a.OldString, "\n") {
+		del = append(del, "- "+truncateRunes(ln, w))
+	}
+	for _, ln := range strings.Split(a.NewString, "\n") {
+		add = append(add, "+ "+truncateRunes(ln, w))
+	}
+	total := len(del) + len(add)
+	if total <= maxEditDiffLines {
+		return del, add, true
+	}
+	// Keep the head of each side; the tail counts what was cut.
+	keepDel := len(del)
+	keepAdd := len(add)
+	for keepDel+keepAdd > maxEditDiffLines && (keepDel > 1 || keepAdd > 1) {
+		if keepAdd >= keepDel && keepAdd > 1 {
+			keepAdd--
+		} else if keepDel > 1 {
+			keepDel--
+		} else {
+			break
+		}
+	}
+	del = del[:keepDel]
+	add = add[:keepAdd]
+	tail := fmt.Sprintf("… +%d more", total-keepDel-keepAdd)
+	add = append(add, tail)
+	return del, add, true
+}
+
+// writeDiffLines renders a write call's content as + diff lines, capped.
+func writeDiffLines(args string, maxText int) ([]string, bool) {
+	var a struct {
+		Content string `json:"content"`
+	}
+	if json.Unmarshal([]byte(args), &a) != nil || strings.TrimSpace(a.Content) == "" {
+		return nil, false
+	}
+	w := maxText - 2
+	if w < 10 {
+		w = 10
+	}
+	var out []string
+	lines := strings.Split(a.Content, "\n")
+	for _, ln := range lines {
+		out = append(out, "+ "+truncateRunes(ln, w))
+		if len(out) >= maxEditDiffLines {
+			if len(lines) > len(out) {
+				out = append(out, fmt.Sprintf("… +%d more", len(lines)-len(out)))
+			}
+			break
+		}
+	}
+	return out, true
 }
 
 func (m *tuiModel) renderToolLine(tr ToolRecord) string {
@@ -2158,11 +2455,33 @@ func (m *tuiModel) renderToolLine(tr ToolRecord) string {
 			return out
 		}
 	}
-	args := truncateRunes(strings.TrimSpace(tr.Args), maxText)
-	label := fmt.Sprintf("⏺ %s  %s%s", tr.Name, args, toolDurSuffix(tr.DurMs))
+	summary := toolSummary(tr.Name, tr.Args, maxText)
+	label := fmt.Sprintf("⏺ %s  %s%s", tr.Name, summary, toolDurSuffix(tr.DurMs))
 	// Tool styles carry PaddingLeft(2), so break two short of cw.
 	if tr.Err != "" || strings.HasPrefix(strings.TrimSpace(tr.Output), "error:") {
 		return toolErrStyle.Width(cw).Render(breakLongWords("✗ "+label, cw-2))
+	}
+	// Edits render the old/new pair as a -/+ diff instead of raw JSON.
+	if tr.Name == "edit" {
+		if del, add, ok := editDiffLines(tr.Args, maxText); ok {
+			out := toolLineStyle.Width(cw).Render(breakLongWords(label, cw-2))
+			for _, ln := range del {
+				out += "\n" + diffDelStyle.Width(cw).Render(breakLongWords(ln, cw-2))
+			}
+			for _, ln := range add {
+				out += "\n" + diffAddStyle.Width(cw).Render(breakLongWords(ln, cw-2))
+			}
+			return out
+		}
+	}
+	if tr.Name == "write" {
+		if lines, ok := writeDiffLines(tr.Args, maxText); ok {
+			out := toolLineStyle.Width(cw).Render(breakLongWords(label, cw-2))
+			for _, ln := range lines {
+				out += "\n" + diffAddStyle.Width(cw).Render(breakLongWords(ln, cw-2))
+			}
+			return out
+		}
 	}
 	out := strings.TrimSpace(tr.Output)
 	if out != "" {
@@ -2196,8 +2515,30 @@ func (m *tuiModel) renderPendingTool(t pendingTool) string {
 			return out
 		}
 	}
-	args := truncateRunes(strings.TrimSpace(t.args), maxText)
-	label := fmt.Sprintf("%s  %s  %s · running", m.spinner.View(), t.name, args)
+	summary := toolSummary(t.name, t.args, maxText)
+	// A running edit already carries old/new strings — show the diff live.
+	if t.name == "edit" {
+		if del, add, ok := editDiffLines(t.args, maxText); ok {
+			out := toolLineStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("%s  %s  %s · running", m.spinner.View(), t.name, summary), cw-2))
+			for _, ln := range del {
+				out += "\n" + diffDelStyle.Width(cw).Render(breakLongWords(ln, cw-2))
+			}
+			for _, ln := range add {
+				out += "\n" + diffAddStyle.Width(cw).Render(breakLongWords(ln, cw-2))
+			}
+			return out
+		}
+	}
+	if t.name == "write" {
+		if lines, ok := writeDiffLines(t.args, maxText); ok {
+			out := toolLineStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("%s  %s  %s · running", m.spinner.View(), t.name, summary), cw-2))
+			for _, ln := range lines {
+				out += "\n" + diffAddStyle.Width(cw).Render(breakLongWords(ln, cw-2))
+			}
+			return out
+		}
+	}
+	label := fmt.Sprintf("%s  %s  %s · running", m.spinner.View(), t.name, summary)
 	// Tool styles carry PaddingLeft(2), so break two short of cw.
 	return toolLineStyle.Width(cw).Render(breakLongWords(label, cw-2))
 }
@@ -2209,9 +2550,15 @@ func (m *tuiModel) renderPending(w int) string {
 	body := userBodyStyle.Width(bodyW).Render(breakLongWords(m.pendingPrompt, textW))
 	parts := []string{head, "", body, ""}
 
-	if m.pendingThinking != "" && m.showThink {
+	// The thinking header renders from turn start (body follows once text
+	// streams in) so the live elapsed is always visible while busy, even
+	// across long tool-only stretches with no thinking deltas yet. The
+	// trailing blank keeps a line return after the thinking state.
+	if m.showThink {
 		parts = append(parts, thinkHeaderStyle.Render("✦ thinking"+m.liveThinkSuffix()))
-		parts = append(parts, thinkBodyStyle.Width(bodyW).Render(breakLongWords(m.pendingThinking, textW)))
+		if m.pendingThinking != "" {
+			parts = append(parts, thinkBodyStyle.Width(bodyW).Render(breakLongWords(m.pendingThinking, textW)))
+		}
 		parts = append(parts, "")
 	}
 	for _, t := range m.pendingTools {
@@ -2654,7 +3001,8 @@ func (m *tuiModel) renderHelp() string {
 	return emptyStyle.Width(m.contentWidth()).Render(`Conversation first: your message shows instantly, the reply streams into the same thread.
 
 Keys
-  enter send · shift+enter/alt+enter/ctrl+j newline · esc cancel/back · pgup/pgdn scroll
+  enter send · shift+enter/alt+enter/ctrl+j newline · esc cancel/back · pgup/pgdn/wheel scroll
+  wheel/pgup pauses autoscroll until you reach the bottom again
   ctrl+g help · ctrl+r history · ctrl+l sessions · ctrl+u tools · ctrl+x errors · ctrl+y thinking display
   ctrl+o details · ctrl+p model · ctrl+n new session · ctrl+t thinking level (cycles low→high, wraps) · ctrl+s save · ctrl+q quit · ctrl+c cancel/quit
   in lists: ↑↓ move · enter open · esc back
@@ -2729,7 +3077,7 @@ func runTUI(ctx context.Context, cfg Config, cfgPath string, client *openai.Clie
 	// in a pipe.
 	fmt.Fprint(os.Stdout, "\x1b[>1u")
 	defer fmt.Fprint(os.Stdout, "\x1b[<u")
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	m.prog = p
 	_, err = p.Run()
 	return err
