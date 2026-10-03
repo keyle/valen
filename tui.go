@@ -332,6 +332,9 @@ func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session 
 	ta := textarea.New()
 	ta.Placeholder = "Type a message…  (shift+enter newline · /help)"
 	ta.ShowLineNumbers = false
+	// No white thick bar: the textarea default Prompt is
+	// lipgloss.ThickBorder().Left + " " (a white ▌ on every line).
+	ta.Prompt = ""
 	ta.SetWidth(78)
 	ta.SetHeight(inputHeight(cfg))
 	ta.CharLimit = 0

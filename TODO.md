@@ -61,7 +61,8 @@ Verdict: no single bug — six compounding gaps, all pushing toward
 
 ## Minor, UX
 
-- [ ] remove the white thick bar on the left of the chatbox
+- [x] remove the white thick bar on the left of the chatbox
+  DONE: textarea default `Prompt` (`lipgloss.ThickBorder().Left + " "`, white `▌` on every line) cleared in `newTUIModel` (`ta.Prompt = ""`); guest in `TestTUIInputDefaults`. Outer rounded chatbox border untouched.
 - [ ] the content of the chat scrollback is not all aligned. Some have a space in front, or two.
 - [ ] thinking messages (white) in scrollback would benefit from a timestamp of when they happen, e.g. message (1m3s) <-- when they occurred.
 - [ ] ability to paste a paragraph

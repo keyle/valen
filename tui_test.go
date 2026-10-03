@@ -897,6 +897,9 @@ func TestTUIInputDefaults(t *testing.T) {
 	if m.input.Cursor.Mode().String() != "blink" {
 		t.Fatalf("default cursor mode = %v, want blink", m.input.Cursor.Mode())
 	}
+	if m.input.Prompt != "" {
+		t.Fatalf("input Prompt = %q, want empty (no white thick bar in chatbox)", m.input.Prompt)
+	}
 }
 
 func TestTUIInputBlinkOffAndHeight(t *testing.T) {
