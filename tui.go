@@ -353,6 +353,13 @@ type tuiModel struct {
 	// stale flush timers.
 	mouseHold    []tea.KeyMsg
 	mouseHoldGen int
+	// mouseOff is the alt+m selection toggle. Reporting stays on by default
+	// so the wheel always scrolls; the bypass modifier (shift in most
+	// terminals; opt in iTerm2/Terminal.app) drag-selects + copies without
+	// toggling. With mouseOff set, terminal reporting is disabled via
+	// tea.DisableMouse so a plain drag selects natively (wheel paused)
+	// until alt+m re-enables it.
+	mouseOff bool
 
 	width  int
 	height int
@@ -1670,6 +1677,12 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
+		// With reporting toggled off (alt+m) there is nothing to scroll:
+		// the terminal keeps drags for native selection, so stray
+		// reports are ignored instead of moving the viewport.
+		if m.mouseOff {
+			return m, nil
+		}
 		// Wheel (and clicks) go to the viewport in every mode: in chat
 		// the textarea would swallow them and the scrollback would never
 		// move. Scrolling away from the bottom pauses autoscroll;
@@ -2007,6 +2020,19 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleAskKey(s)
 	}
 	switch s {
+	case "alt+m":
+		// Selection toggle: reporting on (default) keeps wheel-scroll
+		// with bypass-modifier drag-select; off disables terminal
+		// reporting so a plain drag selects + copies natively.
+		m.mouseOff = !m.mouseOff
+		if m.mouseOff {
+			m.notice = "Mouse off — drag selects + copies natively (wheel paused) · alt+m re-enables"
+			m.noticeErr = false
+			return m, tea.DisableMouse
+		}
+		m.notice = "Mouse on — wheel scrolls · shift+drag (opt+drag in iTerm/Terminal) selects + copies"
+		m.noticeErr = false
+		return m, tea.EnableMouseCellMotion
 	case "ctrl+g":
 		m.show(viewHelp)
 		return m, nil
@@ -3365,7 +3391,7 @@ func (m *tuiModel) renderHelp() string {
 Keys
   enter send · shift+enter/alt+enter/ctrl+j newline · esc cancel/back · pgup/pgdn/wheel scroll
   wheel/pgup pauses autoscroll until you reach the bottom again
-   shift+drag (opt+drag in iTerm/Terminal) selects + copies natively
+   shift+drag (opt+drag in iTerm/Terminal) selects + copies natively · alt+m toggles plain-drag selection (wheel paused while off)
   ctrl+g help · ctrl+r history · ctrl+l sessions · ctrl+u tools · ctrl+x errors · ctrl+y thinking display
   ctrl+o details · ctrl+p/ctrl+m model · ctrl+n new session · ctrl+t thinking level (cycles low→high, wraps) · ctrl+s save · ctrl+q quit · ctrl+c/ctrl+d cancel · clear input · quit
   in lists: ↑↓ move · enter open · esc back

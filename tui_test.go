@@ -1704,6 +1704,60 @@ func TestTUIWheelDebrisSwallowed(t *testing.T) {
 	}
 }
 
+// TestTUIMouseToggleSelection: alt+m flips terminal mouse reporting so both
+// workflows work. Reporting on (default): wheel scrolls, bypass-modifier
+// drag (shift-drag, opt-drag in iTerm2/Terminal.app) selects. Reporting
+// off: plain drag selects + copies natively, wheel reports are ignored.
+func TestTUIMouseToggleSelection(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	altM := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m"), Alt: true}
+	if got := altM.String(); got != "alt+m" {
+		t.Fatalf("test key should render as alt+m, got %q", got)
+	}
+	mm, cmd := m.Update(altM)
+	m = mm.(*tuiModel)
+	if cmd == nil {
+		t.Fatal("alt+m must disable terminal mouse reporting")
+	}
+	if !m.mouseOff {
+		t.Fatal("alt+m must set mouseOff")
+	}
+	if !strings.Contains(m.notice, "drag selects") {
+		t.Fatalf("notice should point at plain-drag selection: %q", m.notice)
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("alt+m leaked into input: %q", got)
+	}
+
+	// Wheel reports are ignored while off: the viewport must not move.
+	for i := 0; i < 10; i++ {
+		m.session.Turns = append(m.session.Turns, Turn{
+			At:     time.Now(),
+			Prompt: fmt.Sprintf("question %d with padding to fill lines", i),
+			Reply:  fmt.Sprintf("answer %d with padding to fill lines", i),
+		})
+	}
+	m.viewport.Width = 80
+	m.viewport.Height = 10
+	m.pinBottom()
+	top := m.viewport.YOffset
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	if m.viewport.YOffset != top {
+		t.Fatalf("wheel must not scroll while mouse is off: yoff=%d top=%d", m.viewport.YOffset, top)
+	}
+
+	// Toggling back re-enables reporting and wheel scroll.
+	mm, cmd = m.Update(altM)
+	m = mm.(*tuiModel)
+	if cmd == nil || m.mouseOff {
+		t.Fatal("second alt+m must re-enable mouse reporting")
+	}
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	if m.viewport.YOffset >= top {
+		t.Fatalf("wheel up did not scroll after re-enable: yoff=%d top=%d", m.viewport.YOffset, top)
+	}
+}
+
 func TestTUIEscTwiceCancels(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	cancelled := 0
