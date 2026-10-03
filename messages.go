@@ -101,7 +101,7 @@ func (b *messagesBlock) UnmarshalJSON(data []byte) error {
 func (b messagesBlock) MarshalJSON() ([]byte, error) {
 	type block messagesBlock
 	data, err := json.Marshal(block(b))
-	if err != nil || b.raw == nil {
+	if err != nil {
 		return data, err
 	}
 	fields := make(map[string]json.RawMessage, len(b.raw))
@@ -114,6 +114,18 @@ func (b messagesBlock) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range current {
 		fields[key] = value
+	}
+	// omitempty drops empty strings, but these fields are required by the API
+	// on their block types; always send them as strings.
+	switch b.Type {
+	case "text":
+		if _, ok := fields["text"]; !ok {
+			fields["text"] = json.RawMessage(`""`)
+		}
+	case "thinking":
+		if _, ok := fields["thinking"]; !ok {
+			fields["thinking"] = json.RawMessage(`""`)
+		}
 	}
 	return json.Marshal(fields)
 }
@@ -215,7 +227,16 @@ func splitMessagesHistoryNative(history []openai.ChatCompletionMessage, native m
 		case "assistant":
 			if len(m.ToolCalls) > 0 {
 				if blocks, ok := native[m.ToolCalls[0].ID]; ok {
-					msgs = append(msgs, messagesMessage{Role: "assistant", Content: blocks})
+					// Empty text blocks (e.g. a streamed text block with no
+					// deltas) are rejected upstream; drop them on replay.
+					kept := make([]messagesBlock, 0, len(blocks))
+					for _, b := range blocks {
+						if b.Type == "text" && b.Text == "" {
+							continue
+						}
+						kept = append(kept, b)
+					}
+					msgs = append(msgs, messagesMessage{Role: "assistant", Content: kept})
 					continue
 				}
 			}
