@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"strings"
 	"time"
 
@@ -38,9 +39,10 @@ func roundRetryDelay(attempt int) time.Duration {
 	return d
 }
 
-// shouldRetryRound reports whether err is worth another attempt. Only
-// user cancellation and local misconfiguration (missing key) are final;
-// everything else may be transient or provider-side.
+// shouldRetryRound reports whether err is worth another attempt. Final:
+// user cancellation, local misconfiguration (missing key), and 4xx
+// refusals (except 408/429). Everything else (5xx, network, stream
+// errors) may be transient.
 func shouldRetryRound(ctx context.Context, err error) bool {
 	if err == nil || ctx.Err() != nil {
 		return false
@@ -56,7 +58,30 @@ func shouldRetryRound(ctx context.Context, err error) bool {
 	if isContextOverflow(err) || errors.Is(err, errContentFilter) {
 		return false
 	}
+	// 4xx means the request itself was refused (bad payload, key, credits,
+	// model): resending it unchanged gets the same answer. 408 and 429 are
+	// the transient exceptions.
+	if s := errStatus(err); s >= 400 && s < 500 && s != http.StatusRequestTimeout && s != http.StatusTooManyRequests {
+		return false
+	}
 	return true
+}
+
+// errStatus extracts the HTTP status from a provider error, or 0.
+func errStatus(err error) int {
+	var te *transportError
+	if errors.As(err, &te) {
+		return te.Status
+	}
+	var ae *openai.APIError
+	if errors.As(err, &ae) {
+		return ae.HTTPStatusCode
+	}
+	var re *openai.RequestError
+	if errors.As(err, &re) {
+		return re.HTTPStatusCode
+	}
+	return 0
 }
 
 // roundWithRetry runs one model round, retrying failures with backoff and

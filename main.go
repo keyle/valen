@@ -604,13 +604,28 @@ func dispatchTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey
 }
 
 // chatSendMessages builds the wire copy without modifying stored history.
+// It is also the last line of defense against poisoned history: the client
+// serializes empty `content` as an absent key, which Anthropic-backed
+// providers reject (400 "text content parts must carry a string text") on
+// every later turn. So no message leaves here with blank content unless it
+// legitimately carries tool_calls.
 func chatSendMessages(history []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
-	out := make([]openai.ChatCompletionMessage, len(history))
-	for i, m := range history {
-		out[i] = m
-		if m.Role == openai.ChatMessageRoleTool {
-			out[i].Content = fitSendBudget(m.Content)
+	out := make([]openai.ChatCompletionMessage, 0, len(history))
+	for _, m := range history {
+		blank := strings.TrimSpace(m.Content) == "" && len(m.MultiContent) == 0
+		switch m.Role {
+		case openai.ChatMessageRoleTool:
+			m.Content = fitSendBudget(m.Content)
+		case openai.ChatMessageRoleUser:
+			if blank {
+				m.Content = "(empty message)"
+			}
+		case openai.ChatMessageRoleAssistant:
+			if blank && len(m.ToolCalls) == 0 {
+				continue
+			}
 		}
+		out = append(out, m)
 	}
 	return out
 }
