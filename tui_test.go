@@ -15,6 +15,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -1882,5 +1883,43 @@ func TestTUIRoundsStartNewParagraph(t *testing.T) {
 	}
 	if roundBreak("a\n") != "a\n\n" || roundBreak("a\n\n") != "a\n\n" || roundBreak("") != "" {
 		t.Fatal("roundBreak edge cases")
+	}
+}
+
+// On wide terminals the whole UI (header, scrollback, input, footer) is
+// capped to one column and centered, not just the transcript text.
+func TestViewCentersCappedColumn(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.Update(tea.WindowSizeMsg{Width: 200, Height: 40})
+	if got := m.columnWidth(); got != maxColumnWidth {
+		t.Fatalf("columnWidth = %d, want %d", got, maxColumnWidth)
+	}
+	pad := (200 - maxColumnWidth) / 2
+	lines := strings.Split(m.View(), "\n")
+	for i, l := range lines {
+		if w := lipgloss.Width(l); w > pad+maxColumnWidth {
+			t.Fatalf("line %d is %d wide, exceeds column %d", i, w, pad+maxColumnWidth)
+		}
+	}
+	// The input box top border sits at the left edge of the column.
+	var found bool
+	for _, l := range lines {
+		if strings.HasPrefix(l, strings.Repeat(" ", pad)+"╭") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("input border not centered with %d-col pad", pad)
+	}
+
+	// Narrow terminals are unchanged: no padding, full width.
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	if m.columnWidth() != 100 {
+		t.Fatalf("narrow columnWidth = %d", m.columnWidth())
+	}
+	for _, l := range strings.Split(m.View(), "\n") {
+		if strings.HasPrefix(l, " ╭") || strings.HasPrefix(l, "  ╭") {
+			t.Fatalf("unexpected padding on narrow terminal: %q", l)
+		}
 	}
 }

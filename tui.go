@@ -720,6 +720,20 @@ func usageTick() tea.Cmd {
 	return tea.Tick(time.Minute, func(time.Time) tea.Msg { return usageTickMsg{} })
 }
 
+// maxColumnWidth caps the whole UI column (header, scrollback, status, input,
+// footer). It is contentWidth's 120 plus the 8 columns of chrome, so
+// scrollback text keeps its readable width and the rest lines up with it.
+const maxColumnWidth = 128
+
+// columnWidth is the width of the centered UI column: the terminal width,
+// capped at maxColumnWidth.
+func (m *tuiModel) columnWidth() int {
+	if m.width > maxColumnWidth {
+		return maxColumnWidth
+	}
+	return m.width
+}
+
 func (m *tuiModel) viewWidth() int {
 	if m.viewport.Width > 0 {
 		return m.viewport.Width
@@ -1446,7 +1460,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if vpH < 5 {
 			vpH = 5
 		}
-		vpW := msg.Width - 4
+		vpW := m.columnWidth() - 4
 		if vpW < 40 {
 			vpW = 40
 		}
@@ -2254,7 +2268,12 @@ func (m *tuiModel) View() string {
 	status := m.statusView()
 	input := m.inputView()
 	footer := m.footerView()
-	return lipgloss.JoinVertical(lipgloss.Left, header, m.viewport.View(), status, input, footer)
+	block := lipgloss.JoinVertical(lipgloss.Left, header, m.viewport.View(), status, input, footer)
+	// Center the capped column on wide terminals.
+	if pad := (m.width - m.columnWidth()) / 2; pad > 0 {
+		block = lipgloss.NewStyle().PaddingLeft(pad).Render(block)
+	}
+	return block
 }
 
 func (m *tuiModel) headerView() string {
@@ -2290,7 +2309,7 @@ func (m *tuiModel) headerView() string {
 	}
 	line := title + meta + mode
 	if m.width > 0 {
-		return lipgloss.NewStyle().Width(m.width).Render(line)
+		return lipgloss.NewStyle().Width(m.columnWidth()).Render(line)
 	}
 	return line
 }
@@ -2344,7 +2363,7 @@ func (m *tuiModel) inputView() string {
 	}
 	style := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(border).Padding(0, 1)
 	if m.width > 0 {
-		style = style.Width(m.width - 2)
+		style = style.Width(m.columnWidth() - 2)
 	}
 	return style.Render(m.input.View())
 }
@@ -2357,7 +2376,7 @@ func (m *tuiModel) footerView() string {
 	text := m.goUsage.footerText(time.Now())
 	avail := 0
 	if m.width > 0 {
-		avail = m.width - 4
+		avail = m.columnWidth() - 4
 		if lipgloss.Width(hint)+lipgloss.Width(text)+5 > avail {
 			text = fmt.Sprintf("5h %d%%", m.goUsage.Rolling.Percent)
 		}
