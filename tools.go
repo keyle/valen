@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sashabaranov/go-openai"
+	"valen/internal/prompts"
 )
 
 const (
@@ -131,8 +132,8 @@ func ShellTool() Tool {
 		Description: "Run a shell command and return its combined stdout and stderr. For file operations use the dedicated tools instead (read not cat/head/tail/ls/find, edit not sed/awk, write not heredocs); reserve shell for builds, tests, and system commands. 60s timeout; output capped at 16k.",
 		Schema:      json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"shell command to run"}},"required":["command"]}`),
 		Fn: func(ctx context.Context, args string) (string, error) {
-			if isPlanMode(ctx) {
-				return "", fmt.Errorf("%s", planRefusal("shell"))
+			if prompts.IsPlanMode(ctx) {
+				return "", fmt.Errorf("%s", prompts.Refusal("shell"))
 			}
 			var a struct {
 				Command string `json:"command"`

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/sashabaranov/go-openai"
+	"valen/internal/dvlog"
 )
 
 // compaction.go: summary-mode compaction, send-side only (disk JSONL stays
@@ -481,7 +482,7 @@ func compactHistory(ctx context.Context, cfg Config, client *openai.Client, apiK
 	}
 	sumMsg := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: compactionSummaryPrefix + summary}
 	*history = append(append(append([]openai.ChatCompletionMessage(nil), systems...), sumMsg), tail...)
-	dlogf("compact summary ok headbytes=%d summary=%dB tail=%s", len(headText), len(summary), dvHistoryLine(tail))
+	dvlog.Logf("compact summary ok headbytes=%d summary=%dB tail=%s", len(headText), len(summary), dvlog.HistoryLine(tail, estimateTokens(tail)))
 	return summary, true, nil
 }
 
@@ -511,6 +512,6 @@ func leanHistoryForNextRound(cfg Config, history *[]openai.ChatCompletionMessage
 		return
 	}
 	if n := pruneOldToolOutputs(*history); n > 0 {
-		dlogf("lean prune %d outputs %s", n, dvHistoryLine(*history))
+		dvlog.Logf("lean prune %d outputs %s", n, dvlog.HistoryLine(*history, estimateTokens(*history)))
 	}
 }

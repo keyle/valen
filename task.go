@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/sashabaranov/go-openai"
+	"valen/internal/prompts"
 )
 
 // task.go: foreground-only subagent delegation (opencode-style `task`).
@@ -82,8 +83,8 @@ func TaskTool(exec func(ctx context.Context, prompt, kind string) (string, error
 			if kind != "explore" && kind != "general" {
 				return "", fmt.Errorf("subagent_type must be explore or general")
 			}
-			if isPlanMode(ctx) && kind != "explore" {
-				return "", fmt.Errorf("%s", planRefusal("task(general)"))
+			if prompts.IsPlanMode(ctx) && kind != "explore" {
+				return "", fmt.Errorf("%s", prompts.Refusal("task(general)"))
 			}
 			if taskDepth(ctx) >= taskMaxDepth {
 				return "", fmt.Errorf("task: max delegation depth %d reached", taskMaxDepth)

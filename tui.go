@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sashabaranov/go-openai"
+	"valen/internal/prompts"
 )
 
 // Monokai dark palette.
@@ -907,7 +908,7 @@ func (m *tuiModel) applyPlanMode(on bool) {
 	if on {
 		m.notice = "Plan mode on — read-only investigation; reply will be the plan."
 	} else {
-		m.notice = strings.TrimSpace(promptBuildSwitch)
+		m.notice = strings.TrimSpace(prompts.BuildSwitch())
 		if m.notice == "" {
 			m.notice = "Plan mode off — build mode."
 		}

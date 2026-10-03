@@ -18,6 +18,9 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/sashabaranov/go-openai"
+	"valen/internal/dvlog"
+	"valen/internal/guard"
+	"valen/internal/prompts"
 )
 
 const (
@@ -45,6 +48,26 @@ var userAgent = "valen/" + version + " (opencode-compatible agent harness)"
 // browserUserAgent is only for web_search/web_fetch, where the scraped
 // sites' bot defenses expect a browser.
 const browserUserAgent = "Mozilla/5.0 (iPad; CPU OS 18_7_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1"
+
+// effectiveSystem returns the configured system prompt, or the harness
+// prompt files (plus plan overlay) when none is set.
+func effectiveSystem(cfg Config) string {
+	if strings.TrimSpace(cfg.System) != "" {
+		return cfg.System
+	}
+	cwd := getFileRoot()
+	if cwd == "" {
+		if wd, err := os.Getwd(); err == nil {
+			cwd = wd
+		}
+	}
+	return prompts.SystemPrompt(cfg.Model, cfg.Plan, cwd)
+}
+
+// seedHistory builds the initial history for a turn.
+func seedHistory(cfg Config) []openai.ChatCompletionMessage {
+	return []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleSystem, Content: effectiveSystem(cfg)}}
+}
 
 // Config mirrors config.toml. See SPEC.md for the full schema.
 type Config struct {
@@ -153,7 +176,7 @@ func loadConfig(path string) (Config, error) {
 		cfg.MaxTokens = defaultMaxTokens
 	}
 	if cfg.MaxStagnantRounds <= 0 {
-		cfg.MaxStagnantRounds = defaultMaxStagnantRounds
+		cfg.MaxStagnantRounds = guard.DefaultMaxStagnantRounds
 	}
 	cfg.Compaction.Model = strings.TrimSpace(cfg.Compaction.Model)
 	cfg.Compaction.Thinking = strings.ToLower(strings.TrimSpace(cfg.Compaction.Thinking))
@@ -230,10 +253,10 @@ func start() error {
 			dvLogAbs = abs
 		}
 	}
-	if err := initDebugVerbose(*dvFlag, dvLogAbs); err != nil {
+	if err := dvlog.Init(*dvFlag, dvLogAbs); err != nil {
 		return err
 	}
-	defer closeDebugLog()
+	defer dvlog.Close()
 
 	tuiMode := !*printMode && isTTY(os.Stdin) && isTTY(os.Stdout)
 	workdir, rest := splitWorkdirArg(*dirFlag, flag.Args(), tuiMode)
@@ -312,7 +335,7 @@ func start() error {
 		}
 	}
 	if !*printMode && isTTY(os.Stdin) && isTTY(os.Stdout) {
-		dlogf("start model=%s transport=%s thinking=%s maxrounds=%d budget~%dtok schemastate~%dtok tools=%d tui=true",
+		dvlog.Logf("start model=%s transport=%s thinking=%s maxrounds=%d budget~%dtok schemastate~%dtok tools=%d tui=true",
 			cfg.Model, modelTransport(cfg.Model), cfg.Thinking, cfg.MaxRounds, contextBudget(cfg), requestToolsTokens(registry), len(registry.Names()))
 		return runTUI(ctx, cfg, cfgAbs, client, registry, apiKey)
 	}
@@ -404,7 +427,7 @@ func runTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey stri
 	// Plan mode gates at the tool Fns via ctx, so mark it once here and
 	// every nested call (tools, task subagent) inherits read-only.
 	if cfg.Plan {
-		ctx = withPlanMode(ctx)
+		ctx = prompts.WithPlanMode(ctx)
 	}
 	msg, usage, err := dispatchTurn(ctx, cfg, client, apiKey, hc, registry, history, onEvent)
 	if err != nil {
@@ -436,11 +459,11 @@ func dispatchTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey
 		return openai.ChatCompletionMessage{}, openai.Usage{}, ctx.Err()
 	}
 	t0 := time.Now()
-	dlogf("turn start transport=%s %s", modelTransport(cfg.Model), dvHistoryLine(*history))
+	dvlog.Logf("turn start transport=%s %s", modelTransport(cfg.Model), dvlog.HistoryLine(*history, estimateTokens(*history)))
 	before := estimateTokens(*history)
 	maybeAutoCompact(ctx, cfg, client, apiKey, hc, history)
 	if after := estimateTokens(*history); after != before {
-		dlogf("pre-send compact %dtok->%dtok", before, after)
+		dvlog.Logf("pre-send compact %dtok->%dtok", before, after)
 	}
 	var msg openai.ChatCompletionMessage
 	var usage openai.Usage
@@ -453,8 +476,8 @@ func dispatchTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey
 	default:
 		msg, usage, err = runChatTurn(ctx, cfg, client, apiKey, hc, registry, history, onEvent)
 	}
-	dlogf("turn end dur=%s err=%v in=%d out=%d total=%d reply=%dB",
-		dvDur(time.Since(t0)), err, usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, len(msg.Content))
+	dvlog.Logf("turn end dur=%s err=%v in=%d out=%d total=%d reply=%dB",
+		dvlog.Dur(time.Since(t0)), err, usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, len(msg.Content))
 	return msg, usage, err
 }
 
@@ -640,11 +663,11 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 				defer mu.Unlock()
 			}
 			outs[i] = registry.Run(ctx, tc.Function.Name, tc.Function.Arguments)
-			dlogf("tool %s args=%dB dur=%s out=%dB %q", tc.Function.Name, len(tc.Function.Arguments), dvDur(time.Since(t0)), len(outs[i]), dvPreview(tc.Function.Arguments, 160))
+			dvlog.Logf("tool %s args=%dB dur=%s out=%dB %q", tc.Function.Name, len(tc.Function.Arguments), dvlog.Dur(time.Since(t0)), len(outs[i]), dvlog.Preview(tc.Function.Arguments, 160))
 		}(i, tc)
 	}
 	wg.Wait()
-	dlogf("batch %d tools total=%s", len(calls), dvDur(time.Since(batch0)))
+	dvlog.Logf("batch %d tools total=%s", len(calls), dvlog.Dur(time.Since(batch0)))
 	if onEvent != nil {
 		for i, tc := range calls {
 			onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: outs[i], ID: tc.ID})
@@ -667,22 +690,22 @@ func runToolCallsSerial(ctx context.Context, registry *Registry, calls []openai.
 		}
 		t0 := time.Now()
 		res := registry.Run(ctx, tc.Function.Name, tc.Function.Arguments)
-		dlogf("tool %s args=%dB dur=%s out=%dB serial %q", tc.Function.Name, len(tc.Function.Arguments), dvDur(time.Since(t0)), len(res), dvPreview(tc.Function.Arguments, 160))
+		dvlog.Logf("tool %s args=%dB dur=%s out=%dB serial %q", tc.Function.Name, len(tc.Function.Arguments), dvlog.Dur(time.Since(t0)), len(res), dvlog.Preview(tc.Function.Arguments, 160))
 		if onEvent != nil {
 			onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: res, ID: tc.ID})
 		}
 		out = append(out, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: tc.ID, Content: res})
 	}
-	dlogf("batch %d tools serial total=%s", len(calls), dvDur(time.Since(batch0)))
+	dvlog.Logf("batch %d tools serial total=%s", len(calls), dvlog.Dur(time.Since(batch0)))
 	return out
 }
 
 // runChatTurn is the /chat/completions tool loop, streaming each round.
 func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
 	var usage openai.Usage
-	guards := newLoopGuards(cfg)
+	guards := guard.New(cfg.MaxStagnantRounds)
 	recovering := false
-	defer stripNudges(history)
+	defer guard.StripNudges(history)
 	for round := 0; round < cfg.MaxRounds; round++ {
 		toolsTok := requestToolsTokens(registry)
 		if err := checkContextBudget(cfg, *history, toolsTok); err != nil {
@@ -693,11 +716,11 @@ func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey 
 			req.Temperature = *cfg.Temperature
 		}
 		applyThinkingToRequest(&req, cfg.Model, cfg.Thinking)
-		if debugVerbose {
-			if sendBytes, ok := dvSendBytes(req); ok {
-				dlogf("round %d chat %s toolstok~%d sendbytes=%d\n%s", round+1, dvHistoryLine(*history), toolsTok, sendBytes, dvTailDetail(req.Messages, 6))
+		if dvlog.Enabled() {
+			if sendBytes, ok := dvlog.SendBytes(req); ok {
+				dvlog.Logf("round %d chat %s toolstok~%d sendbytes=%d\n%s", round+1, dvlog.HistoryLine(*history, estimateTokens(*history)), toolsTok, sendBytes, dvlog.TailDetail(req.Messages, 6))
 			} else {
-				dlogf("round %d chat %s toolstok~%d", round+1, dvHistoryLine(*history), toolsTok)
+				dvlog.Logf("round %d chat %s toolstok~%d", round+1, dvlog.HistoryLine(*history, estimateTokens(*history)), toolsTok)
 			}
 		}
 
@@ -706,18 +729,18 @@ func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey 
 		msg, roundUsage, err := chatRoundStream(ctx, cfg, apiKey, hc, req, onEvent)
 		if err != nil {
 			if !isStreamRejected(err) {
-				dlogf("round %d chat err=%v dur=%s", round+1, err, dvDur(time.Since(r0)))
+				dvlog.Logf("round %d chat err=%v dur=%s", round+1, err, dvlog.Dur(time.Since(r0)))
 				return openai.ChatCompletionMessage{}, usage, err
 			}
 			via = "unary"
 			msg, roundUsage, err = chatRoundOnce(ctx, cfg, apiKey, hc, req)
 			if err != nil {
-				dlogf("round %d chat unary err=%v dur=%s", round+1, err, dvDur(time.Since(r0)))
+				dvlog.Logf("round %d chat unary err=%v dur=%s", round+1, err, dvlog.Dur(time.Since(r0)))
 				return openai.ChatCompletionMessage{}, usage, err
 			}
 		}
-		dlogf("round %d chat %s dur=%s in=%d out=%d content=%dB calls=%s", round+1, via, dvDur(time.Since(r0)),
-			roundUsage.PromptTokens, roundUsage.CompletionTokens, len(msg.Content), dvCallsLine(msg.ToolCalls))
+		dvlog.Logf("round %d chat %s dur=%s in=%d out=%d content=%dB calls=%s", round+1, via, dvlog.Dur(time.Since(r0)),
+			roundUsage.PromptTokens, roundUsage.CompletionTokens, len(msg.Content), dvlog.CallsLine(msg.ToolCalls))
 		usage.PromptTokens += roundUsage.PromptTokens
 		usage.CompletionTokens += roundUsage.CompletionTokens
 		usage.TotalTokens += roundUsage.TotalTokens
@@ -734,10 +757,10 @@ func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey 
 			// leave the calls unexecuted, and finish the turn instead of
 			// dying on the stall.
 			if strings.TrimSpace(msg.Content) == "" {
-				return openai.ChatCompletionMessage{}, usage, stagnantError(guards.stagnant)
+				return openai.ChatCompletionMessage{}, usage, guard.StagnantError(guards.Stagnant())
 			}
 			(*history)[len(*history)-1].ToolCalls = nil
-			dlogf("stall recovery: finishing with text, %d tool call(s) declined", len(msg.ToolCalls))
+			dvlog.Logf("stall recovery: finishing with text, %d tool call(s) declined", len(msg.ToolCalls))
 			final := msg
 			final.ToolCalls = nil
 			return final, usage, nil
@@ -747,23 +770,23 @@ func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey 
 		// Keep long turns lean between rounds: prune-only, no blocking
 		// summary in the hot loop (summaries fire between turns).
 		leanHistoryForNextRound(cfg, history)
-		if nudge, act, stop := guards.note(msg.ToolCalls); stop != nil {
-			dlogf("stall guard tripped after %d stagnant rounds", guards.stagnant)
+		if nudge, act, stop := guards.Note(msg.ToolCalls); stop != nil {
+			dvlog.Logf("stall guard tripped after %d stagnant rounds", guards.Stagnant())
 			if recovering {
 				return openai.ChatCompletionMessage{}, usage, stop
 			}
 			recovering = true
-			dlogf("stall recovery: one final round under no-tools instruction")
-			*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: stallRecoveryText})
+			dvlog.Logf("stall recovery: one final round under no-tools instruction")
+			*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: guard.StallRecoveryText})
 			continue
 		} else {
 			if nudge {
-				dlogf("batch nudge appended after single-call streak")
-				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: batchNudgeText})
+				dvlog.Logf("batch nudge appended after single-call streak")
+				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: guard.BatchNudgeText})
 			}
 			if act {
-				dlogf("act nudge appended after %d stagnant rounds", guards.stagnant)
-				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: actNudgeText})
+				dvlog.Logf("act nudge appended after %d stagnant rounds", guards.Stagnant())
+				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: guard.ActNudgeText})
 			}
 		}
 	}
@@ -935,8 +958,8 @@ func chat(ctx context.Context, cfg Config, client *openai.Client, apiKey string,
 	history := make([]openai.ChatCompletionMessage, 0, 8)
 	history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: effectiveSystem(cfg)})
 	history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: prompt})
-	dlogf("start model=%s transport=%s thinking=%s maxrounds=%d budget~%dtok schemastate~%dtok tools=%d headless prompt=%dB %q",
-		cfg.Model, modelTransport(cfg.Model), cfg.Thinking, cfg.MaxRounds, contextBudget(cfg), requestToolsTokens(registry), len(registry.Names()), len(prompt), dvPreview(prompt, 200))
+	dvlog.Logf("start model=%s transport=%s thinking=%s maxrounds=%d budget~%dtok schemastate~%dtok tools=%d headless prompt=%dB %q",
+		cfg.Model, modelTransport(cfg.Model), cfg.Thinking, cfg.MaxRounds, contextBudget(cfg), requestToolsTokens(registry), len(registry.Names()), len(prompt), dvlog.Preview(prompt, 200))
 
 	onEvent := func(ev Event) {
 		if ev.Kind == "tool_start" {

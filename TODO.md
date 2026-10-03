@@ -2,8 +2,8 @@
 
 ## Minor, UX
 
+- [ ] thinking messages (white) in scrollback would benefit from a timestamp of when they happen, e.g. message (1m3s) <-- when they occurred, 'persisted' on the view when the next thinking reponse comes in.
 - [ ] the content of the chat scrollback is not all aligned. Some have a space in front, or two.
-- [ ] thinking messages (white) in scrollback would benefit from a timestamp of when they happen, e.g. message (1m3s) <-- when they occurred.
 - [ ] ability to paste a paragraph
 - [ ] shift+enter should insert a line return in the chatbox, it does not (yet!) - fix.
 - [ ] when working, page up/down temporarly jumps and then gets smashed back down.

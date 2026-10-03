@@ -23,7 +23,9 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | File | Responsibility |
 | --- | --- |
 | `main.go` | CLI flags, config loading/defaults, HTTP identity headers, agent loop |
-| `prompt.go` | Agent guidelines: per-family `prompt_*.txt` (opencode-adapted, embedded) + `<env>` header + plan overlay; plan-mode ctx gating |
+| `internal/prompts` | Agent guidelines: per-family `prompt_*.txt` (opencode-adapted, embedded) + `<env>` header + plan overlay; plan-mode ctx gating |
+| `internal/guard` | Tool-loop guards: stall limit, batching/act nudges, stall recovery, ephemeral-notice stripping |
+| `internal/dvlog` | Debug-verbose trace (`-dv`/`-dvlog`): timestamped round/tool/size log, off by default |
 | `tui.go` | Bubble Tea chat UI: padded conversation, instant echo, recall views, Monokai theme |
 | `models.go` | OpenCode Go catalog: live list, transport map, thinking levels, config persist |
 | `messages.go` | Anthropic `/messages` transport: wire format, thinking, tool loop |

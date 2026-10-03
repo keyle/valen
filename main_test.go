@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sashabaranov/go-openai"
+	"valen/internal/guard"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -30,7 +31,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.BaseURL != defaultBaseURL || cfg.APIKeyEnv != defaultAPIKeyEnv || cfg.MaxRounds != defaultMaxRounds || cfg.MaxContextTokens != defaultMaxContextTokens || cfg.MaxTokens != defaultMaxTokens || cfg.MaxStagnantRounds != defaultMaxStagnantRounds {
+	if cfg.BaseURL != defaultBaseURL || cfg.APIKeyEnv != defaultAPIKeyEnv || cfg.MaxRounds != defaultMaxRounds || cfg.MaxContextTokens != defaultMaxContextTokens || cfg.MaxTokens != defaultMaxTokens || cfg.MaxStagnantRounds != guard.DefaultMaxStagnantRounds {
 		t.Fatalf("bad defaults: %+v", cfg)
 	}
 	if !strings.HasPrefix(cfg.SessionID, "ses-") {

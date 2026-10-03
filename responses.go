@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/sashabaranov/go-openai"
+	"valen/internal/dvlog"
+	"valen/internal/guard"
 )
 
 func responsesEndpoint(baseURL string) string {
@@ -290,9 +292,9 @@ func runResponsesTurn(ctx context.Context, cfg Config, client *openai.Client, ap
 	var usage openai.Usage
 	tools := registry.ResponsesTools()
 	reasoning := responsesReasoning(cfg.Thinking)
-	guards := newLoopGuards(cfg)
+	guards := guard.New(cfg.MaxStagnantRounds)
 	recovering := false
-	defer stripNudges(history)
+	defer guard.StripNudges(history)
 	for round := 0; round < cfg.MaxRounds; round++ {
 		toolsTok := requestToolsTokens(registry)
 		if err := checkContextBudget(cfg, *history, toolsTok); err != nil {
@@ -313,11 +315,11 @@ func runResponsesTurn(ctx context.Context, cfg Config, client *openai.Client, ap
 		if cfg.Temperature != nil {
 			req.Temperature = cfg.Temperature
 		}
-		if debugVerbose {
-			if sendBytes, ok := dvSendBytes(req); ok {
-				dlogf("round %d responses %s toolstok~%d sendbytes=%d", round+1, dvHistoryLine(*history), toolsTok, sendBytes)
+		if dvlog.Enabled() {
+			if sendBytes, ok := dvlog.SendBytes(req); ok {
+				dvlog.Logf("round %d responses %s toolstok~%d sendbytes=%d", round+1, dvlog.HistoryLine(*history, estimateTokens(*history)), toolsTok, sendBytes)
 			} else {
-				dlogf("round %d responses %s toolstok~%d", round+1, dvHistoryLine(*history), toolsTok)
+				dvlog.Logf("round %d responses %s toolstok~%d", round+1, dvlog.HistoryLine(*history, estimateTokens(*history)), toolsTok)
 			}
 		}
 
@@ -328,13 +330,13 @@ func runResponsesTurn(ctx context.Context, cfg Config, client *openai.Client, ap
 		msg, roundUsage, err := responsesRoundStream(ctx, cfg, apiKey, hc, sreq, onEvent)
 		if err != nil {
 			if !isStreamRejected(err) {
-				dlogf("round %d responses err=%v dur=%s", round+1, err, dvDur(time.Since(r0)))
+				dvlog.Logf("round %d responses err=%v dur=%s", round+1, err, dvlog.Dur(time.Since(r0)))
 				return openai.ChatCompletionMessage{}, usage, err
 			}
 			via = "unary"
 			resp, err := callResponsesOnce(ctx, hc, cfg, apiKey, req)
 			if err != nil {
-				dlogf("round %d responses unary err=%v dur=%s", round+1, err, dvDur(time.Since(r0)))
+				dvlog.Logf("round %d responses unary err=%v dur=%s", round+1, err, dvlog.Dur(time.Since(r0)))
 				return openai.ChatCompletionMessage{}, usage, err
 			}
 			usage.PromptTokens += resp.Usage.InputTokens
@@ -355,8 +357,8 @@ func runResponsesTurn(ctx context.Context, cfg Config, client *openai.Client, ap
 			usage.CompletionTokens += roundUsage.CompletionTokens
 			usage.TotalTokens += roundUsage.TotalTokens
 		}
-		dlogf("round %d responses %s dur=%s in=%d out=%d content=%dB calls=%s", round+1, via, dvDur(time.Since(r0)),
-			roundUsage.PromptTokens, roundUsage.CompletionTokens, len(msg.Content), dvCallsLine(msg.ToolCalls))
+		dvlog.Logf("round %d responses %s dur=%s in=%d out=%d content=%dB calls=%s", round+1, via, dvlog.Dur(time.Since(r0)),
+			roundUsage.PromptTokens, roundUsage.CompletionTokens, len(msg.Content), dvlog.CallsLine(msg.ToolCalls))
 
 		if name := doomLoopTool(*history, msg.ToolCalls); name != "" {
 			return openai.ChatCompletionMessage{}, usage, doomLoopError(name)
@@ -370,10 +372,10 @@ func runResponsesTurn(ctx context.Context, cfg Config, client *openai.Client, ap
 			// leave the calls unexecuted, and finish the turn instead of
 			// dying on the stall.
 			if strings.TrimSpace(msg.Content) == "" {
-				return openai.ChatCompletionMessage{}, usage, stagnantError(guards.stagnant)
+				return openai.ChatCompletionMessage{}, usage, guard.StagnantError(guards.Stagnant())
 			}
 			(*history)[len(*history)-1].ToolCalls = nil
-			dlogf("stall recovery: finishing with text, %d tool call(s) declined", len(msg.ToolCalls))
+			dvlog.Logf("stall recovery: finishing with text, %d tool call(s) declined", len(msg.ToolCalls))
 			final := msg
 			final.ToolCalls = nil
 			return final, usage, nil
@@ -381,23 +383,23 @@ func runResponsesTurn(ctx context.Context, cfg Config, client *openai.Client, ap
 		*history = append(*history, runToolCalls(ctx, registry, msg.ToolCalls, onEvent)...)
 		// Same per-round lean as the chat loop: prune-only, no blocking summary.
 		leanHistoryForNextRound(cfg, history)
-		if nudge, act, stop := guards.note(msg.ToolCalls); stop != nil {
-			dlogf("stall guard tripped after %d stagnant rounds", guards.stagnant)
+		if nudge, act, stop := guards.Note(msg.ToolCalls); stop != nil {
+			dvlog.Logf("stall guard tripped after %d stagnant rounds", guards.Stagnant())
 			if recovering {
 				return openai.ChatCompletionMessage{}, usage, stop
 			}
 			recovering = true
-			dlogf("stall recovery: one final round under no-tools instruction")
-			*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: stallRecoveryText})
+			dvlog.Logf("stall recovery: one final round under no-tools instruction")
+			*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: guard.StallRecoveryText})
 			continue
 		} else {
 			if nudge {
-				dlogf("batch nudge appended after single-call streak")
-				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: batchNudgeText})
+				dvlog.Logf("batch nudge appended after single-call streak")
+				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: guard.BatchNudgeText})
 			}
 			if act {
-				dlogf("act nudge appended after %d stagnant rounds", guards.stagnant)
-				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: actNudgeText})
+				dvlog.Logf("act nudge appended after %d stagnant rounds", guards.Stagnant())
+				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: guard.ActNudgeText})
 			}
 		}
 	}
