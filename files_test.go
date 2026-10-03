@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -315,6 +316,59 @@ func TestOutsideAccessAskAllowAndDeny(t *testing.T) {
 	}
 	if !strings.Contains(out, "s3cret") {
 		t.Fatalf("out=%q", out)
+	}
+}
+
+func TestOutsideApprovalCoversFolder(t *testing.T) {
+	useTempRoot(t)
+	dir := t.TempDir()
+	for _, n := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte(n), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	asked := 0
+	old := askPrompter
+	askPrompter = func(context.Context, []AskQuestion) ([]string, error) { asked++; return []string{"Allow"}, nil }
+	defer func() { askPrompter = old }()
+	for _, n := range []string{"a.txt", "b.txt"} {
+		if _, err := ReadTool().Fn(context.Background(), `{"path":`+quoteJSON(filepath.Join(dir, n))+`}`); err != nil {
+			t.Fatalf("%s: %v", n, err)
+		}
+	}
+	if asked != 1 {
+		t.Fatalf("asked %d times, want 1", asked)
+	}
+}
+
+func TestSiblingWorktreeNeedsNoApproval(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := useTempRoot(t)
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", root, "-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	git("commit", "-q", "--allow-empty", "-m", "init")
+	sib := filepath.Join(t.TempDir(), "sib")
+	git("worktree", "add", "-q", sib, "-b", "sib")
+	if err := os.WriteFile(filepath.Join(sib, "f.txt"), []byte("hi"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadTool().Fn(context.Background(), `{"path":`+quoteJSON(filepath.Join(sib, "f.txt"))+`}`); err != nil {
+		t.Fatalf("sibling worktree read: %v", err)
+	}
+	other := filepath.Join(t.TempDir(), "x.txt")
+	if err := os.WriteFile(other, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadTool().Fn(context.Background(), `{"path":`+quoteJSON(other)+`}`); err == nil {
+		t.Fatal("unrelated folder should be denied without prompter")
 	}
 }
 

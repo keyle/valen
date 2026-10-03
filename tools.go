@@ -174,14 +174,15 @@ func (b *shellOutput) String() string {
 func ShellTool() Tool {
 	return Tool{
 		Name:        "shell",
-		Description: "Run a shell command and return its combined stdout and stderr. For file operations use the dedicated tools instead (read not cat/head/tail/ls/find, edit not sed/awk, write not heredocs); reserve shell for builds, tests, and system commands. 60s timeout; output capped at 16k.",
-		Schema:      json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"shell command to run"}},"required":["command"]}`),
+		Description: "Run a shell command and return its combined stdout and stderr. Runs in an OS sandbox: writes only in the workdir, sibling worktrees, approved folders and temp/cache dirs; network off unless network=true. For file operations use the dedicated tools instead (read not cat/head/tail/ls/find, edit not sed/awk, write not heredocs); reserve shell for builds, tests, and system commands. 60s timeout; output capped at 16k.",
+		Schema:      json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"shell command to run"},"network":{"type":"boolean","description":"set true only if the command needs the network (downloads, git fetch/push, curl); off by default, the user is asked once per session"}},"required":["command"]}`),
 		Fn: func(ctx context.Context, args string) (string, error) {
 			if prompts.IsPlanMode(ctx) {
 				return "", fmt.Errorf("%s", prompts.Refusal("shell"))
 			}
 			var a struct {
 				Command string `json:"command"`
+				Network bool   `json:"network"`
 			}
 			if err := json.Unmarshal([]byte(args), &a); err != nil {
 				return "", err
@@ -189,9 +190,15 @@ func ShellTool() Tool {
 			if strings.TrimSpace(a.Command) == "" {
 				return "", errors.New("command is required")
 			}
+			if err := gateShell(ctx, a.Command, a.Network); err != nil {
+				return "", err
+			}
 			ctx, cancel := context.WithTimeout(ctx, shellTimeout)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, "sh", "-c", a.Command)
+			cmd, err := sandboxCommand(ctx, a.Command, a.Network)
+			if err != nil {
+				return "", err
+			}
 			cmd.Dir = getFileRoot()
 			// Timeouts kill the whole process tree (see kill_unix.go): a plain
 			// child kill leaves pipeline grandchildren holding stdout, and Run
@@ -201,7 +208,7 @@ func ShellTool() Tool {
 			var buf shellOutput
 			cmd.Stdout = &buf
 			cmd.Stderr = &buf
-			err := cmd.Run()
+			err = cmd.Run()
 			out := strings.TrimSpace(buf.String())
 			var exit *exec.ExitError
 			switch {
@@ -211,6 +218,12 @@ func ShellTool() Tool {
 				// retrying the same doomed command (and the dv log shows it).
 				return fmt.Sprintf("%s\n[timed out after %s — partial output above; split the command or narrow its scope]", out, shellTimeout), nil
 			case errors.As(err, &exit):
+				if looksSandboxDenied(out) {
+					out += "\n" + sandboxHint
+				}
+				if !a.Network && looksNetworkDenied(out) {
+					out += "\n" + networkHint
+				}
 				return fmt.Sprintf("%s\n[exit %d]", out, exit.ExitCode()), nil
 			case err != nil:
 				return "", err

@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"valen/internal/prompts"
 )
@@ -49,6 +51,7 @@ func setFileRoot(dir string) {
 	approvedMu.Lock()
 	approvedOutside = map[string]bool{}
 	approvedMu.Unlock()
+	resetShellApprovals()
 }
 
 // getFileRoot returns the sandbox root, falling back to the process cwd.
@@ -87,8 +90,55 @@ func withinRoot(root, abs string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// checkFileAccess allows paths inside the root (or previously approved) and
-// otherwise asks the user via the active AskUserQuestion prompter. Without an
+// siblingWorktrees lists the checkout paths of the root's git repo (main plus
+// linked worktrees). Not cached: worktrees get created mid-session.
+func siblingWorktrees(root string) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "-C", root, "worktree", "list", "--porcelain").Output()
+	if err != nil {
+		return nil
+	}
+	var dirs []string
+	for _, l := range strings.Split(string(out), "\n") {
+		if p, ok := strings.CutPrefix(l, "worktree "); ok {
+			dirs = append(dirs, filepath.Clean(p))
+		}
+	}
+	return dirs
+}
+
+// real resolves symlinks when possible (macOS /var vs /private/var).
+func real(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
+}
+
+// inSiblingWorktree reports whether abs lies in a worktree of the same repo.
+func inSiblingWorktree(root, abs string) bool {
+	abs = real(abs)
+	for _, wt := range siblingWorktrees(root) {
+		if withinRoot(real(wt), abs) {
+			return true
+		}
+	}
+	return false
+}
+
+// accessFolder is the unit of approval: abs itself when it is a directory,
+// else its parent, so one answer covers a whole folder subtree.
+func accessFolder(abs string) string {
+	if fi, err := os.Stat(abs); err == nil && fi.IsDir() {
+		return abs
+	}
+	return filepath.Dir(abs)
+}
+
+// checkFileAccess allows paths inside the root, inside a sibling worktree of
+// the same repo, or inside a previously approved folder; anything else asks
+// the user (per folder) via the active AskUserQuestion prompter. Without an
 // interactive frontend there is nobody to ask, so the access is denied.
 func checkFileAccess(ctx context.Context, op, abs string) error {
 	root := getFileRoot()
@@ -96,19 +146,25 @@ func checkFileAccess(ctx context.Context, op, abs string) error {
 		return nil
 	}
 	approvedMu.Lock()
-	ok := approvedOutside[abs]
+	for dir := range approvedOutside {
+		if withinRoot(dir, abs) {
+			approvedMu.Unlock()
+			return nil
+		}
+	}
 	approvedMu.Unlock()
-	if ok {
+	if inSiblingWorktree(root, abs) {
 		return nil
 	}
+	folder := accessFolder(abs)
 	if askPrompter == nil {
 		return fmt.Errorf("denied: %s is outside workdir %s (no interactive prompter to approve it)", abs, root)
 	}
 	answers, err := promptUser(ctx, []AskQuestion{{
-		Question: fmt.Sprintf("Allow %s of %s? Workdir is %s.", op, abs, root),
+		Question: fmt.Sprintf("Allow %s of %s? This permits all of folder %s. Workdir is %s.", op, abs, folder, root),
 		Header:   "File access",
 		Options: []AskOption{
-			{Label: "Allow", Description: "Permit this path for the rest of this session"},
+			{Label: "Allow", Description: "Permit this folder for the rest of this session"},
 			{Label: "Deny", Description: "Keep the sandbox as is"},
 		},
 	}})
@@ -117,7 +173,7 @@ func checkFileAccess(ctx context.Context, op, abs string) error {
 	}
 	if len(answers) > 0 && strings.Contains(strings.ToLower(answers[0]), "allow") {
 		approvedMu.Lock()
-		approvedOutside[abs] = true
+		approvedOutside[folder] = true
 		approvedMu.Unlock()
 		return nil
 	}
@@ -153,6 +209,9 @@ func ReadTool() Tool {
 			}
 			if err := checkFileAccess(ctx, "read", abs); err != nil {
 				return "", err
+			}
+			if isSecretFile(abs) {
+				return "", fmt.Errorf("denied: %s holds secrets and is not readable; ask the user for the values you need", abs)
 			}
 			raw, err := os.ReadFile(abs)
 			if err != nil {
@@ -494,6 +553,9 @@ func GrepTool() Tool {
 					}
 					slash := filepath.ToSlash(rel)
 					if a.Include != "" && !matchGlob(filepath.ToSlash(a.Include), slash) && !matchGlob(filepath.ToSlash(a.Include), path.Base(slash)) {
+						return nil
+					}
+					if isSecretFile(p) {
 						return nil
 					}
 					if fi, err := d.Info(); err == nil && fi.Size() > maxGrepFileBytes {

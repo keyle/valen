@@ -107,10 +107,21 @@ func SystemPrompt(model string, planMode bool, cwd string) string {
 	if planMode {
 		body += "\n\n" + plan
 	}
+	body += "\n\n" + outsideRule
 	header := fmt.Sprintf("You are powered by the model named %s. The exact model ID is %s.\n<env>\n  Working directory: %s\n  Platform: %s\n  Today's date: %s\n</env>\n\n",
 		FriendlyName(model), model, cwd, runtime.GOOS, time.Now().Format("Mon Jan 02 2006"))
 	return header + body
 }
+
+// outsideRule covers what code cannot: shell commands that reach outside the
+// workdir. File tools are gated in files.go; shell is gated only by this.
+const outsideRule = `# Boundaries — Folders Outside the Workdir
+- Sibling git worktrees of this repo (see ` + "`git worktree list`" + `) are in scope: read, edit, and run commands there freely, including creating new ones with ` + "`git worktree add`" + `.
+- Shell is sandboxed by the OS: it can write only inside the workdir, sibling worktrees, folders the user approved, and temp/cache dirs; credential files (~/.ssh, ~/.aws, .env files) are hidden. A write elsewhere fails with "Operation not permitted" or "Read-only file system".
+- Shell has no network by default (localhost works). For downloads, git fetch/push or curl, pass network=true on the shell call; the user is asked once per session. Commands such as git push, git reset --hard, git clean, rm -r and sudo also ask once per session. If denied, stop and tell the user.
+- .env files cannot be read; ask the user for the values you need.
+- To work in another folder, first call glob or read on it with the file tools: the user is asked once per folder, and shell may then write there. If denied, do not try to work around it.
+- Never read or modify secrets or dotfiles in the home directory (shell rc files, tokens) without asking.`
 
 // BuildSwitch is the notice shown when leaving plan mode.
 func BuildSwitch() string {

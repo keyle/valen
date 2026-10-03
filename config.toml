@@ -72,8 +72,14 @@ blink = false
 # task is always registered as well (explore/general subagent delegation).
 # File tools (read, write, edit, glob, grep) and shell are scoped to the
 # workdir: the startup directory, `-dir <path>`, or a positional directory in
-# TUI mode (e.g. `./valen ~/Code/something`). Paths outside ask for approval
+# TUI mode (e.g. `./valen ~/Code/something`). Sibling git worktrees of the
+# same repo are allowed. Other paths outside ask for approval once per folder
 # via AskUserQuestion; without an interactive frontend they are denied.
+# `shell` additionally runs in an OS sandbox (macOS sandbox-exec, Linux bwrap):
+# it can write only to those same places plus temp/cache dirs, cannot see
+# credential files (~/.ssh, ~/.aws, .env files, ...) and has no network unless
+# the call asks for it (approved once per session, as are git push, rm -r, sudo).
+# Other operating systems are not supported.
 
 # [[mcp]]
 # name = "fs"

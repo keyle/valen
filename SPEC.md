@@ -16,7 +16,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 ## Non-goals
 
 - Multi-agent orchestration.
-- Sandboxing or permission prompts for `shell` — it runs commands as you.
+- Per-command permission prompts for `shell`. It is sandboxed by the OS instead (below).
 
 ## Layout
 
@@ -39,6 +39,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `tools.go` | Tool contract, ordered registry, builtin loader, output limits, `shell` |
 | `todos.go` | Session plan (`todowrite`/`todoread`, opencode schema, in-memory + session fold) |
 | `task.go` | Foreground-only `task` subagent (explore/general, isolated history, depth ≤2) |
+| `sandbox*.go`, `shellgate.go` | Shell sandbox: policy in `sandbox.go`, `sandbox-exec` (macOS), `bwrap` (Linux), other OSes fail to compile; once-per-session prompts for network and destructive commands |
 | `files.go` | File builtins (`read`, `write`, `edit`, `glob`, `grep`): workdir sandbox, outside-access approval, glob matching |
 | `ask.go` | `AskUserQuestion` contract, headless prompting/confirmation, answer formatting |
 | `search.go` | `web_search` (DuckDuckGo HTML) and `web_fetch` (HTML → text) |
@@ -265,7 +266,7 @@ Rules the registry enforces:
 
 | Tool | Args | Behaviour |
 | --- | --- | --- |
-| `shell` | `command` | `sh -c` in the workdir, 60s timeout, combined stdout+stderr; non-zero exit is returned as content with `[exit N]`, a timeout as partial output with `[timed out after …]`, not as an error |
+| `shell` | `command`, `network` (bool, default false) | `sh -c` in the workdir, 60s timeout, combined stdout+stderr; non-zero exit is returned as content with `[exit N]`, a timeout as partial output with `[timed out after …]`, not as an error |
 | `web_search` | `query` | DuckDuckGo HTML endpoint, up to 8 results as `N. title / url / snippet`; unwraps `/l/?uddg=` tracker links; 1 MiB body cap |
 | `web_fetch` | `url` | GET with 512 KiB cap, HTML tokenized to text (script/style/noscript dropped), truncated to 8000 chars |
 | `read` | `path`, `offset`, `limit` | Line-windowed read (default 2000 lines, max 5000, ~12KB per call with an offset hint to continue); lines prefixed with their number for `edit` context; long lines trimmed at 1000 chars |
@@ -281,9 +282,34 @@ Rules the registry enforces:
 File tools and `shell` share one sandbox root: the startup directory,
 `-dir <path>`, or a positional directory in TUI mode
 (`./valen ~/Code/something`). Paths escaping the root pause for approval
-through the active `AskUserQuestion` frontend (remembered per path for the
-session); without an interactive frontend they are denied with a clear
-error, so the model can explain and ask.
+through the active `AskUserQuestion` frontend (one answer covers the whole
+folder, remembered for the session). Sibling git worktrees of the same repo
+(`git worktree list`) are in scope and never prompt. Without an interactive
+frontend they are denied with a clear error, so the model can explain and ask.
+
+`shell` runs under an OS sandbox (`sandbox.go`), enforced by the kernel so
+`eval`, `$(...)` and scripts cannot escape it:
+
+- **Writes** only in the workdir, sibling git worktrees, folders approved this
+  session, temp dirs and tool caches (`~/go`, `~/.cache`, `~/.npm`, `~/.cargo`,
+  the user cache dir).
+- **Hidden** (no read or write): `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`,
+  `~/.docker`, `~/.azure`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`,
+  `~/.config/gh`, `~/.config/gcloud`, and `.env` / `.env.*` files anywhere
+  (templates `.env.example|sample|template` stay readable). `read` and `grep`
+  skip `.env` files too. On Linux `.env` files are found by scanning the
+  workdir at command start.
+- **Network off** (loopback still works) unless the call sets `network: true`;
+  the user is asked once per session.
+- **Ask once per session** before `git push`, `git reset --hard`, `git clean`,
+  `rm -r` and `sudo` (`shellgate.go`). Text matching is best-effort; the
+  sandbox is the boundary.
+- Other reads and processes are unrestricted.
+
+macOS uses `sandbox-exec` (Seatbelt); Linux needs `bwrap` (bubblewrap) on PATH,
+else `shell` errors with an install hint. Other OSes do not compile
+(`sandbox_other.go`): there is no unsandboxed mode. A failed command whose
+output shows a write or network denial gets a `[sandbox: …]` hint.
 
 Non-200 responses are errors, so the model sees `error: <url> returned 429 ...`
 rather than an HTML error page.
