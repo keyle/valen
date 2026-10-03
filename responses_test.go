@@ -332,3 +332,37 @@ func TestResponsesReasoningSummaryAlwaysPresent(t *testing.T) {
 		t.Fatalf("replayed input must keep summary: %s", wire)
 	}
 }
+
+// TestResponsesSendsConfiguredModelAndEffort pins the exact shipped config
+// (muse-spark-1.3-contributor + xhigh) to the wire: the /responses body
+// must carry the configured model ID verbatim with reasoning.effort=xhigh.
+// Guards against a dispatcher regression that would silently run the turn
+// on the wrong model or at the provider default effort.
+func TestResponsesSendsConfiguredModelAndEffort(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decode: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(responsesTextResp("ok"))
+	}))
+	defer srv.Close()
+
+	cfg := responsesTestConfig(srv.URL)
+	cfg.Model = "muse-spark-1.3-contributor"
+	cfg.Thinking = "xhigh"
+	if err := chat(context.Background(), cfg, newClient(cfg, "key"), "key", srv.Client(), NewRegistry(), "hi", io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if gotBody["model"] != "muse-spark-1.3-contributor" {
+		t.Fatalf("model=%v", gotBody["model"])
+	}
+	reasoning, _ := gotBody["reasoning"].(map[string]any)
+	if reasoning["effort"] != "xhigh" {
+		t.Fatalf("reasoning=%v", gotBody["reasoning"])
+	}
+}

@@ -49,7 +49,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 ## UX
 
 ```
- ✳ valen  ·  glm-5.3-flash  ·  ses-…  ·  3 tools
+ ✦ valen  ·  glm-5.3-flash  ·  ses-…  ·  3 tools
 
   You  15:04
   ┌ summarise the latest go release notes
@@ -60,7 +60,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   ⏺ web_search  go release notes 2026
     → 8 results…
 
-  ✳ glm-5.3-flash
+  ✦ glm-5.3-flash
    Go 1.27 shipped with … (rendered markdown)
 
    ↑ 412 · ↓ 89
@@ -74,7 +74,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 ```
 
 - Transcript is padded conversation blocks separated by blank lines; no role
-  prefixes. `You` (orange) and `✳ <model>` (green) head each block.
+  prefixes. `You` (orange) and `✦ <model>` (green) head each block.
   A blank session shows only a `No turns yet.` label; the AGENTS.md-first
   behaviour lives in the default system prompt (`config.toml`), not as
   intro text in the transcript.
@@ -113,7 +113,12 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   on hot windows. Hidden when `{base_url}/usage` is unavailable (non-Go keys).
 - Autoscroll follows new turns while pinned to the bottom; PgUp/PgDn or the
   mouse wheel scrolls the transcript, which pauses autoscroll until scrolled
-  back to the bottom (a new submit or committed turn re-pins). Split mouse
+  back to the bottom (a new submit or committed turn re-pins). Mouse reporting
+  is on by default so the wheel scrolls; the terminal bypass modifier
+  (shift in most terminals, opt in iTerm2/Terminal.app) drag-selects +
+  copies without toggling. alt+m toggles plain-drag selection: reporting
+  off means a plain drag selects + copies natively (wheel paused) until
+  alt+m re-enables it. Split mouse
   reports misparsed as key runes (rapid wheeling across TTY reads) are
   held for reassembly and never typed: a completed `[<…M` report drops,
   anything else releases as typing; genuine wheel input still arrives as
@@ -296,6 +301,8 @@ ready, input focused. `/clear` resets intentionally.
 | Ctrl+C / Ctrl+D | cancel (busy) / quit (idle) | quit |
 | Ctrl+J / Alt+Enter / Shift+Enter | newline in input (shift+enter where the terminal supports it) | — |
 | PgUp/PgDn / wheel | scroll transcript (pauses autoscroll until back at bottom) | scroll view |
+| Shift+drag (Opt+drag in iTerm/Terminal) | native drag-select + copy (wheel keeps scrolling) | same |
+| Alt+M | toggle plain-drag selection (mouse reporting off: drag selects, wheel paused) | — |
 | Ctrl+G | help | help |
 | Ctrl+R / Ctrl+L / Ctrl+U / Ctrl+X | history / sessions / tools / errors | same |
 | Ctrl+Y | toggle thinking display | toggle thinking display |

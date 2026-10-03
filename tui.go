@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"valen/internal/prompts"
+
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -22,7 +24,6 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sashabaranov/go-openai"
-	"valen/internal/prompts"
 )
 
 // Monokai dark palette.
@@ -344,6 +345,13 @@ type tuiModel struct {
 	// stale flush timers.
 	mouseHold    []tea.KeyMsg
 	mouseHoldGen int
+	// mouseOff is the alt+m selection toggle. Reporting stays on by default
+	// so the wheel always scrolls; the bypass modifier (shift in most
+	// terminals; opt in iTerm2/Terminal.app) drag-selects + copies without
+	// toggling. With mouseOff set, terminal reporting is disabled via
+	// tea.DisableMouse so a plain drag selects natively (wheel paused)
+	// until alt+m re-enables it.
+	mouseOff bool
 
 	width  int
 	height int
@@ -877,7 +885,7 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	m.busy = true
 	m.pendingPrompt = trimmed
 	m.pendingSince = time.Now()
-	m.toolStatus = "Reasoning…"
+	m.toolStatus = "Sending…"
 	m.pendingTools = nil
 	m.pendingText = ""
 	m.pendingThinking = ""
@@ -921,9 +929,18 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 		}
 		reply, usage, err := runTurn(ctx, cfg, client, apiKey, httpClient, registry, &h, onEvent)
 		if err == nil {
+			streamedThinking := thinking
 			thinking, answer = splitThinking(reply.Content)
 			if reply.ReasoningContent != "" {
 				thinking = reply.ReasoningContent
+			}
+			// The live view starts every thinking addition on its own
+			// line; the authoritative reply concatenates fragments
+			// exactly, so prefer the streamed buffer for display when
+			// deltas arrived. Empty means the non-streaming fallback
+			// (or <think> in content only) with nothing to preserve.
+			if streamedThinking != "" {
+				thinking = streamedThinking
 			}
 		}
 		return turnDoneMsg{prompt: trimmed, thinking: thinking, answer: answer, tools: tools, usage: usage, err: err, history: h, model: cfg.Model, effort: cfg.Thinking}
@@ -1549,6 +1566,12 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
+		// With reporting toggled off (alt+m) there is nothing to scroll:
+		// the terminal keeps drags for native selection, so stray
+		// reports are ignored instead of moving the viewport.
+		if m.mouseOff {
+			return m, nil
+		}
 		// Wheel (and clicks) go to the viewport in every mode: in chat
 		// the textarea would swallow them and the scrollback would never
 		// move. Scrolling away from the bottom pauses autoscroll;
@@ -1820,6 +1843,19 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleAskKey(s)
 	}
 	switch s {
+	case "alt+m":
+		// Selection toggle: reporting on (default) keeps wheel-scroll
+		// with bypass-modifier drag-select; off disables terminal
+		// reporting so a plain drag selects + copies natively.
+		m.mouseOff = !m.mouseOff
+		if m.mouseOff {
+			m.notice = "Mouse off — drag selects + copies natively (wheel paused) · alt+m re-enables"
+			m.noticeErr = false
+			return m, tea.DisableMouse
+		}
+		m.notice = "Mouse on — wheel scrolls · shift+drag (opt+drag in iTerm/Terminal) selects + copies"
+		m.noticeErr = false
+		return m, tea.EnableMouseCellMotion
 	case "ctrl+g":
 		m.show(viewHelp)
 		return m, nil
@@ -2014,7 +2050,7 @@ func (m *tuiModel) View() string {
 }
 
 func (m *tuiModel) headerView() string {
-	title := headerTitleStyle.Render("✳ valen")
+	title := headerTitleStyle.Render("✦ valen")
 	model := m.cfg.Model
 	if m.cfg.Thinking != "" {
 		model += " · " + m.cfg.Thinking
@@ -2068,7 +2104,7 @@ func (m *tuiModel) statusView() string {
 		elapsed := time.Since(m.pendingSince).Round(time.Second)
 		tool := m.toolStatus
 		if tool == "" {
-			tool = "Reasoning…"
+			tool = "Working…"
 		}
 		left = statusBusyStyle.Render(fmt.Sprintf("%s working  %s  %s", m.spinner.View(), tool, elapsed))
 	} else {
@@ -2272,7 +2308,7 @@ func (m *tuiModel) renderTurn(t *Turn, w int) string {
 		if m.showThink {
 			thHead := thinkHeaderStyle.Render("✦ thinking" + thinkDurSuffix(t.DurMs))
 			thBody := thinkBodyStyle.Width(bodyW).Render(breakLongWords(t.Thinking, textW))
-			parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, thHead, thBody))
+			parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, thHead, "", thBody))
 		} else {
 			label := "✦ thinking" + thinkDurSuffix(t.DurMs)
 			if t.DurMs > 0 {
@@ -2294,9 +2330,9 @@ func (m *tuiModel) renderTurn(t *Turn, w int) string {
 	}
 
 	if t.Reply != "" {
-		aHead := asstHeadStyle.Render("✳ " + m.cfg.Model)
+		aHead := asstHeadStyle.Render("✦ " + m.cfg.Model)
 		aBody := asstBodyStyle.Width(bodyW).Render(breakLongWords(m.renderMarkdown(t.Reply), bodyW-1))
-		parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, aHead, aBody))
+		parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, aHead, "", aBody))
 	}
 
 	if t.Error != nil {
@@ -2703,6 +2739,7 @@ func (m *tuiModel) renderPending(w int) string {
 	if m.showThink {
 		parts = append(parts, thinkHeaderStyle.Render("✦ thinking"+m.liveThinkSuffix()))
 		if m.pendingThinking != "" {
+			parts = append(parts, "")
 			parts = append(parts, thinkBodyStyle.Width(bodyW).Render(breakLongWords(m.pendingThinking, textW)))
 		}
 		parts = append(parts, "")
@@ -2714,14 +2751,15 @@ func (m *tuiModel) renderPending(w int) string {
 		parts = append(parts, "")
 	}
 	if m.pendingText != "" {
-		parts = append(parts, asstHeadStyle.Render("✳ "+m.cfg.Model))
+		parts = append(parts, asstHeadStyle.Render("✦ "+m.cfg.Model))
+		parts = append(parts, "")
 		parts = append(parts, asstBodyStyle.Width(bodyW).Render(breakLongWords(streamTail(m.pendingText), bodyW-1)))
 		parts = append(parts, "")
 	}
 
 	tool := m.toolStatus
 	if tool == "" {
-		tool = "Reasoning…"
+		tool = "Working…"
 	}
 	status := statusBusyStyle.Render(tool) + "  " + metaStyle.Render("esc cancels")
 	parts = append(parts, status)
@@ -3150,6 +3188,7 @@ func (m *tuiModel) renderHelp() string {
 Keys
   enter send · shift+enter/alt+enter/ctrl+j newline · esc cancel/back · pgup/pgdn/wheel scroll
   wheel/pgup pauses autoscroll until you reach the bottom again
+   shift+drag (opt+drag in iTerm/Terminal) selects + copies natively · alt+m toggles plain-drag selection (wheel paused while off)
   ctrl+g help · ctrl+r history · ctrl+l sessions · ctrl+u tools · ctrl+x errors · ctrl+y thinking display
   ctrl+o details · ctrl+p model · ctrl+n new session · ctrl+t thinking level (cycles low→high, wraps) · ctrl+s save · ctrl+q quit · ctrl+c cancel/quit
   in lists: ↑↓ move · enter open · esc back

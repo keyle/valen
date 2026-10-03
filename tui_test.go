@@ -876,6 +876,71 @@ func TestTUIThinkingPartsSeparateLiveLines(t *testing.T) {
 	}
 }
 
+// TestTUICommittedThinkingKeepsLiveLineReturns: the success-path commit
+// must keep the newline-separated streamed thinking for display instead
+// of the exactly-concatenated authoritative reply (which glues additions
+// into one wrapped line in scrollback). Replay history stays exact.
+func TestTUICommittedThinkingKeepsLiveLineReturns(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"Checking the repo layout\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"Reading the config file\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	m := newTestModel(t, testConfig(srv.URL))
+	runSubmit(t, m, "work")
+	if len(m.session.Turns) != 1 {
+		t.Fatalf("turns: %+v", m.session.Turns)
+	}
+	turn := m.session.Turns[0]
+	if turn.Thinking != "Checking the repo layout\nReading the config file" {
+		t.Fatalf("committed thinking glued: %q", turn.Thinking)
+	}
+	if turn.Reply != "done" {
+		t.Fatalf("reply: %q", turn.Reply)
+	}
+	// History keeps the exact concatenation for provider replay.
+	last := m.history[len(m.history)-1]
+	if last.ReasoningContent != "Checking the repo layoutReading the config file" {
+		t.Fatalf("replay reasoning altered: %q", last.ReasoningContent)
+	}
+	if !strings.Contains(m.renderChat(), "Checking the repo layout") || !strings.Contains(m.renderChat(), "Reading the config file") {
+		t.Fatalf("scrollback missing thinking:\n%s", m.renderChat())
+	}
+}
+
+// TestThinkingRoundsKeepLineReturnBetweenAdditions: every thinking round
+// (each thinking_delta addition) must land on its own line in the
+// committed turn, not glued onto the previous round's text. Regression
+// test: the success-path commit once overwrote the newline-separated
+// live buffer with the exactly-concatenated reply.
+func TestThinkingRoundsKeepLineReturnBetweenAdditions(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"first round\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"second round\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"third round\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	m := newTestModel(t, testConfig(srv.URL))
+	runSubmit(t, m, "work")
+	if len(m.session.Turns) != 1 {
+		t.Fatalf("turns: %+v", m.session.Turns)
+	}
+	thinking := m.session.Turns[0].Thinking
+	lines := strings.Split(thinking, "\n")
+	if len(lines) != 3 || lines[0] != "first round" || lines[1] != "second round" || lines[2] != "third round" {
+		t.Fatalf("thinking rounds not one-per-line: %q", thinking)
+	}
+	for _, glued := range []string{"first roundsecond", "second roundthird"} {
+		if strings.Contains(thinking, glued) {
+			t.Fatalf("thinking rounds glued: %q", thinking)
+		}
+	}
+}
+
 func TestThinkDurShowsSubSecond(t *testing.T) {
 	for durMs, want := range map[int64]string{
 		0:     "",
@@ -911,14 +976,14 @@ func TestPendingThinkingHeaderBeforeText(t *testing.T) {
 		t.Fatalf("live header must show elapsed before thinking text:\n%s", out)
 	}
 	head := strings.Index(out, "✦ thinking (1m3s)")
-	tool := strings.Index(out, "Reasoning…")
+	tool := strings.Index(out, "Working…")
 	if head < 0 || tool < 0 || head > tool {
 		t.Fatalf("header/tool order wrong:\n%s", out)
 	}
 	// Line return after the thinking state: header and status line must not
 	// share one visual line.
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "✦ thinking") && strings.Contains(line, "Reasoning…") {
+		if strings.Contains(line, "✦ thinking") && strings.Contains(line, "Working…") {
 			t.Fatalf("thinking header glued to status line:\n%s", out)
 		}
 	}
@@ -1489,5 +1554,59 @@ func TestTUIWheelDebrisSwallowed(t *testing.T) {
 	_, _ = m.Update(key("a", false, false))
 	if got := m.input.Value(); got != "<a" {
 		t.Fatalf("order broke, input=%q", got)
+	}
+}
+
+// TestTUIMouseToggleSelection: alt+m flips terminal mouse reporting so both
+// workflows work. Reporting on (default): wheel scrolls, bypass-modifier
+// drag (shift-drag, opt-drag in iTerm2/Terminal.app) selects. Reporting
+// off: plain drag selects + copies natively, wheel reports are ignored.
+func TestTUIMouseToggleSelection(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	altM := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m"), Alt: true}
+	if got := altM.String(); got != "alt+m" {
+		t.Fatalf("test key should render as alt+m, got %q", got)
+	}
+	mm, cmd := m.Update(altM)
+	m = mm.(*tuiModel)
+	if cmd == nil {
+		t.Fatal("alt+m must disable terminal mouse reporting")
+	}
+	if !m.mouseOff {
+		t.Fatal("alt+m must set mouseOff")
+	}
+	if !strings.Contains(m.notice, "drag selects") {
+		t.Fatalf("notice should point at plain-drag selection: %q", m.notice)
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("alt+m leaked into input: %q", got)
+	}
+
+	// Wheel reports are ignored while off: the viewport must not move.
+	for i := 0; i < 10; i++ {
+		m.session.Turns = append(m.session.Turns, Turn{
+			At:     time.Now(),
+			Prompt: fmt.Sprintf("question %d with padding to fill lines", i),
+			Reply:  fmt.Sprintf("answer %d with padding to fill lines", i),
+		})
+	}
+	m.viewport.Width = 80
+	m.viewport.Height = 10
+	m.pinBottom()
+	top := m.viewport.YOffset
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	if m.viewport.YOffset != top {
+		t.Fatalf("wheel must not scroll while mouse is off: yoff=%d top=%d", m.viewport.YOffset, top)
+	}
+
+	// Toggling back re-enables reporting and wheel scroll.
+	mm, cmd = m.Update(altM)
+	m = mm.(*tuiModel)
+	if cmd == nil || m.mouseOff {
+		t.Fatal("second alt+m must re-enable mouse reporting")
+	}
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	if m.viewport.YOffset >= top {
+		t.Fatalf("wheel up did not scroll after re-enable: yoff=%d top=%d", m.viewport.YOffset, top)
 	}
 }

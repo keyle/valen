@@ -167,7 +167,7 @@ func TestApplyPlanModeToggles(t *testing.T) {
 	if strings.Contains(m.history[0].Content, "Plan Mode") {
 		t.Fatal("system message must drop the plan overlay")
 	}
-	if !strings.Contains(m.headerView(), "✳ valen") {
+	if !strings.Contains(m.headerView(), "✦ valen") {
 		t.Fatalf("header=%q", m.headerView())
 	}
 }
