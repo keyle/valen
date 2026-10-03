@@ -5,7 +5,7 @@
 - [x] thinking text STILL does not add line return between additions to it. This needs to be FIXED.
 - [x] make the scrollback content cyan gray, and the response content blue. (`mkScrollback #9AAFC0` user body, `mkRespBlue #82AAFF` assistant body + glamour document.)
 - [x] make the text selectable (regression) in both chatbox and scrollback content. (No mouse mode: reporting stays on for wheel-scroll; shift+drag / opt+drag in iTerm/Terminal selects + copies natively at all times.)
-- [ ] the diff shown at edit, I like this, but we need to show more than 5 lines, maybe 8.
+- [x] the diff shown at edit, I like this, but we need to show more than 5 lines, maybe 8. (Now 8 del + 8 add, `maxEditDiffLines = 16`.)
 - [ ] the diff shown at edit, would be best if it were not simply red and green, but showing syntax colouring (explore available go packages)
 - [x] thinking messages (white) in scrollback would benefit from a timestamp of when they happen, e.g. message (1m3s) <-- when they occurred, 'persisted' on the view when the next thinking reponse comes in.
 - [ ] the content of the chat scrollback is not all aligned. Some have a space in front, or two.

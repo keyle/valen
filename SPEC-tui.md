@@ -97,7 +97,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   full args/output live in the Tools view. Headers use plain English, not
   raw JSON (`⏺ read foo.go`, `⏺ grep "pat" in src`, `⏺ edit foo.go`).
   `edit` rows render the change as a `-`/`+` diff (old/new strings, capped
-  at 10 lines with a `+N more` tail), live from the call args while running
+  at 16 lines — 8 del + 8 add — with a `+N more` tail), live from the call args while running
   and committed on the stored args; `write` rows preview added `+` lines
   the same way. `todowrite`/`todoread` rows render
   the session plan as a glyph checklist instead of raw JSON (`☑` completed,

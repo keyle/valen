@@ -2470,8 +2470,8 @@ func (m *tuiModel) renderTurnFull(t *Turn) string {
 }
 
 // maxEditDiffLines caps the edit/write diff preview so one change never
-// floods the transcript; the tail counts the remainder.
-const maxEditDiffLines = 10
+// floods the transcript; the tail counts the remainder. 16 = 8 del + 8 add.
+const maxEditDiffLines = 16
 
 // toolSummary renders tool args in plain English for scrollback headers
 // instead of raw JSON: paths, patterns and commands read as words.
