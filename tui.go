@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -352,13 +353,6 @@ type tuiModel struct {
 	// stale flush timers.
 	mouseHold    []tea.KeyMsg
 	mouseHoldGen int
-	// mouseOff is the alt+m selection toggle. Reporting stays on by default
-	// so the wheel always scrolls; the bypass modifier (shift in most
-	// terminals; opt in iTerm2/Terminal.app) drag-selects + copies without
-	// toggling. With mouseOff set, terminal reporting is disabled via
-	// tea.DisableMouse so a plain drag selects natively (wheel paused)
-	// until alt+m re-enables it.
-	mouseOff bool
 
 	width  int
 	height int
@@ -889,6 +883,9 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	if trimmed == "" {
 		return nil
 	}
+	if trimmed == ":q" {
+		return tea.Quit // vim-style alias for /quit
+	}
 	if strings.HasPrefix(trimmed, "/") {
 		return m.handleCommand(trimmed)
 	}
@@ -1399,6 +1396,12 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.openModelPicker("")
 	}
 
+	// Kitty disambiguate mode reports esc and ctrl/alt+key as CSI-u, which
+	// bubbletea drops as unknown: translate back into ordinary key events.
+	if km, ok := csiUKey(msg); ok {
+		return m.Update(km)
+	}
+
 	// CSI-u / modifyOtherKeys enter: shift+enter (and friends) that legacy
 	// terminals collapse into plain enter. mod 1 is unmodified enter, so it
 	// submits like the enter key; any modifier inserts a newline instead.
@@ -1667,12 +1670,6 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
-		// With reporting toggled off (alt+m) there is nothing to scroll:
-		// the terminal keeps drags for native selection, so stray
-		// reports are ignored instead of moving the viewport.
-		if m.mouseOff {
-			return m, nil
-		}
 		// Wheel (and clicks) go to the viewport in every mode: in chat
 		// the textarea would swallow them and the scrollback would never
 		// move. Scrolling away from the bottom pauses autoscroll;
@@ -1776,6 +1773,41 @@ func ctrlMCSI(msg tea.Msg) bool {
 		return false
 	}
 	return seq[7] == 'u' || seq[7] == '~'
+}
+
+// csiUKey decodes the Kitty "disambiguate" reports bubbletea v1 leaves as
+// unknown CSI: ESC[27u (esc), ESC[<letter>;5u (ctrl+letter) and
+// ESC[<char>;3u (alt+char). Anything else (enter, ctrl+m, unmodified
+// text) is left to its own handler. Lock bits (caps/num) are ignored.
+func csiUKey(msg tea.Msg) (tea.KeyMsg, bool) {
+	v := reflect.ValueOf(msg)
+	if !v.IsValid() || v.Kind() != reflect.Slice || v.Type().Elem().Kind() != reflect.Uint8 {
+		return tea.KeyMsg{}, false
+	}
+	seq := string(v.Bytes())
+	if len(seq) < 4 || !strings.HasPrefix(seq, "\x1b[") || seq[len(seq)-1] != 'u' {
+		return tea.KeyMsg{}, false
+	}
+	cpStr, modStr, _ := strings.Cut(seq[2:len(seq)-1], ";")
+	cp, err := strconv.Atoi(cpStr)
+	if err != nil {
+		return tea.KeyMsg{}, false
+	}
+	mod := 1
+	if modStr != "" {
+		if mod, err = strconv.Atoi(modStr); err != nil || mod < 1 {
+			return tea.KeyMsg{}, false
+		}
+	}
+	switch bits := (mod - 1) & 0x3f; {
+	case cp == 27 && bits == 0:
+		return tea.KeyMsg{Type: tea.KeyEsc}, true
+	case bits == 4 && cp >= 'a' && cp <= 'z' && cp != 'm':
+		return tea.KeyMsg{Type: tea.KeyType(cp - 'a' + 1)}, true
+	case bits == 2 && cp > 32 && cp < 127:
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{rune(cp)}, Alt: true}, true
+	}
+	return tea.KeyMsg{}, false
 }
 
 // enterCSIMod reports the CSI-u/modifyOtherKeys enter modifier for a message
@@ -1975,19 +2007,6 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleAskKey(s)
 	}
 	switch s {
-	case "alt+m":
-		// Selection toggle: reporting on (default) keeps wheel-scroll
-		// with bypass-modifier drag-select; off disables terminal
-		// reporting so a plain drag selects + copies natively.
-		m.mouseOff = !m.mouseOff
-		if m.mouseOff {
-			m.notice = "Mouse off — drag selects + copies natively (wheel paused) · alt+m re-enables"
-			m.noticeErr = false
-			return m, tea.DisableMouse
-		}
-		m.notice = "Mouse on — wheel scrolls · shift+drag (opt+drag in iTerm/Terminal) selects + copies"
-		m.noticeErr = false
-		return m, tea.EnableMouseCellMotion
 	case "ctrl+g":
 		m.show(viewHelp)
 		return m, nil
@@ -3346,13 +3365,13 @@ func (m *tuiModel) renderHelp() string {
 Keys
   enter send · shift+enter/alt+enter/ctrl+j newline · esc cancel/back · pgup/pgdn/wheel scroll
   wheel/pgup pauses autoscroll until you reach the bottom again
-   shift+drag (opt+drag in iTerm/Terminal) selects + copies natively · alt+m toggles plain-drag selection (wheel paused while off)
+   shift+drag (opt+drag in iTerm/Terminal) selects + copies natively
   ctrl+g help · ctrl+r history · ctrl+l sessions · ctrl+u tools · ctrl+x errors · ctrl+y thinking display
   ctrl+o details · ctrl+p/ctrl+m model · ctrl+n new session · ctrl+t thinking level (cycles low→high, wraps) · ctrl+s save · ctrl+q quit · ctrl+c/ctrl+d cancel · clear input · quit
   in lists: ↑↓ move · enter open · esc back
 
 Commands
-   /help /history /sessions (/resume) /tools /errors /think /save /clear /new /plan /quit
+   /help /history /sessions (/resume) /tools /errors /think /save /clear /new /plan /quit (or :q)
    /compact (/summarize) — prune + summarize older history with the cheap model; disk log untouched
    /plan — toggle plan mode: read-only investigation, the reply is the plan (write/edit/shell blocked, task explore-only)
    /model [filter] — list models with provider prefixes (go/…, openrouter/…) and switch (ctrl+p/ctrl+m does the same); missing keys report on pick/send, never block boot

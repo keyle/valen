@@ -1704,60 +1704,6 @@ func TestTUIWheelDebrisSwallowed(t *testing.T) {
 	}
 }
 
-// TestTUIMouseToggleSelection: alt+m flips terminal mouse reporting so both
-// workflows work. Reporting on (default): wheel scrolls, bypass-modifier
-// drag (shift-drag, opt-drag in iTerm2/Terminal.app) selects. Reporting
-// off: plain drag selects + copies natively, wheel reports are ignored.
-func TestTUIMouseToggleSelection(t *testing.T) {
-	m := newTestModel(t, testConfig("https://unused"))
-	altM := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m"), Alt: true}
-	if got := altM.String(); got != "alt+m" {
-		t.Fatalf("test key should render as alt+m, got %q", got)
-	}
-	mm, cmd := m.Update(altM)
-	m = mm.(*tuiModel)
-	if cmd == nil {
-		t.Fatal("alt+m must disable terminal mouse reporting")
-	}
-	if !m.mouseOff {
-		t.Fatal("alt+m must set mouseOff")
-	}
-	if !strings.Contains(m.notice, "drag selects") {
-		t.Fatalf("notice should point at plain-drag selection: %q", m.notice)
-	}
-	if got := m.input.Value(); got != "" {
-		t.Fatalf("alt+m leaked into input: %q", got)
-	}
-
-	// Wheel reports are ignored while off: the viewport must not move.
-	for i := 0; i < 10; i++ {
-		m.session.Turns = append(m.session.Turns, Turn{
-			At:     time.Now(),
-			Prompt: fmt.Sprintf("question %d with padding to fill lines", i),
-			Reply:  fmt.Sprintf("answer %d with padding to fill lines", i),
-		})
-	}
-	m.viewport.Width = 80
-	m.viewport.Height = 10
-	m.pinBottom()
-	top := m.viewport.YOffset
-	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
-	if m.viewport.YOffset != top {
-		t.Fatalf("wheel must not scroll while mouse is off: yoff=%d top=%d", m.viewport.YOffset, top)
-	}
-
-	// Toggling back re-enables reporting and wheel scroll.
-	mm, cmd = m.Update(altM)
-	m = mm.(*tuiModel)
-	if cmd == nil || m.mouseOff {
-		t.Fatal("second alt+m must re-enable mouse reporting")
-	}
-	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
-	if m.viewport.YOffset >= top {
-		t.Fatalf("wheel up did not scroll after re-enable: yoff=%d top=%d", m.viewport.YOffset, top)
-	}
-}
-
 func TestTUIEscTwiceCancels(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	cancelled := 0
@@ -1830,5 +1776,37 @@ func TestTUIUpDownJumpToEdges(t *testing.T) {
 	}
 	if m.input.Line() != 2 || m.input.LineInfo().CharOffset != len("three") {
 		t.Fatalf("down on last line must go to end: line=%d off=%d", m.input.Line(), m.input.LineInfo().CharOffset)
+	}
+}
+
+// TestTUICSIUKeys: under Kitty disambiguate mode esc arrives as a CSI-u
+// sequence that bubbletea reports as unknown; it must still cancel.
+func TestTUICSIUKeys(t *testing.T) {
+	type raw []byte // same shape as bubbletea's unexported unknown-CSI msg
+	m := newTestModel(t, testConfig("https://unused"))
+	cancelled := 0
+	m.busy = true
+	m.cancel = func() { cancelled++ }
+	_, _ = m.Update(raw("\x1b[27u"))
+	_, _ = m.Update(raw("\x1b[27u"))
+	if cancelled != 1 {
+		t.Fatalf("CSI 27u twice must cancel, cancelled=%d", cancelled)
+	}
+	if _, ok := csiUKey(raw("\x1b[109u")); ok {
+		t.Fatal("bare CSI 109u must not be translated")
+	}
+	if km, ok := csiUKey(raw("\x1b[99;5u")); !ok || km.Type != tea.KeyCtrlC {
+		t.Fatalf("CSI 99;5u must be ctrl+c, got %v %v", km, ok)
+	}
+}
+
+func TestTUIColonQQuits(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	cmd := m.submit(" :q ")
+	if cmd == nil {
+		t.Fatal(":q must quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("expected QuitMsg")
 	}
 }

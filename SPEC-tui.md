@@ -116,9 +116,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   back to the bottom (a new submit or committed turn re-pins). Mouse reporting
   is on by default so the wheel scrolls; the terminal bypass modifier
   (shift in most terminals, opt in iTerm2/Terminal.app) drag-selects +
-  copies without toggling. alt+m toggles plain-drag selection: reporting
-  off means a plain drag selects + copies natively (wheel paused) until
-  alt+m re-enables it. Split mouse
+  copies without toggling (no alt+m toggle). Split mouse
   reports misparsed as key runes (rapid wheeling across TTY reads) are
   held for reassembly and never typed: a completed `[<…M` report drops,
   anything else releases as typing; genuine wheel input still arrives as
@@ -310,7 +308,6 @@ ready, input focused. `/clear` resets intentionally.
 | Ctrl+J / Alt+Enter / Shift+Enter | newline in input (shift+enter where the terminal supports it) | — |
 | PgUp/PgDn / wheel | scroll transcript (pauses autoscroll until back at bottom) | scroll view |
 | Shift+drag (Opt+drag in iTerm/Terminal) | native drag-select + copy (wheel keeps scrolling) | same |
-| Alt+M | toggle plain-drag selection (mouse reporting off: drag selects, wheel paused) | — |
 | Ctrl+G | help | help |
 | Ctrl+R / Ctrl+L / Ctrl+U / Ctrl+X | history / sessions / tools / errors | same |
 | Ctrl+Y | toggle thinking display | toggle thinking display |
@@ -327,7 +324,7 @@ Function keys are gone; the footer only points at `/help`, which lists every
 shortcut (and the shortcut line above).
 
 Slash commands: `/help` `/history` `/sessions` (`/resume`, `/continue` — resume most recent) `/tools` `/errors` `/think` `/save`
-`/clear` `/compact` (`/summarize` alias) `/model [filter]` `/effort [level]` (`/thinking` alias) `/quit`.
+`/clear` `/compact` (`/summarize` alias) `/model [filter]` `/effort [level]` (`/thinking` alias) `/quit` (`:q` alias).
 
 ## Streaming (live)
 
