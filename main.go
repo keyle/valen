@@ -31,11 +31,6 @@ const (
 	// history. Assumption (reversible via max_context_tokens): well under
 	// the smallest catalog model's limit, over any healthy session.
 	defaultMaxContextTokens = 300000
-	// defaultSystem applies when `system` is unset in config.toml. It keeps
-	// the agent MCP-capable with a fast tool loopback and points blank
-	// sessions at AGENTS.md first. Batching guidance is explicit so the model
-	// emits parallel calls in one block instead of one tool per round.
-	defaultSystem = "You are a helpful assistant. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, todowrite, todoread, task, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it. Work fast: batch all independent tool calls in the same block (parallel read/glob/grep/shell); prefer grep/glob to locate before reading. For research and bounded multi-step work, delegate to the task subagent (explore for locating code, general for one step) instead of sprawling the main loop. For any task needing 3+ steps, you MUST call todowrite FIRST before any file reads or edits, keep exactly one in_progress, and update it after each step (mark completed only after verification). Act fast: once you can state the change, call write/edit within the next round or two — do not re-read files you already hold, and do not research library internals for a local-edit task. Exploring without acting is failure. Keep each round lean: re-read files instead of resending them."
 )
 
 // version is the binary version; `make prod` stamps it via
@@ -50,15 +45,6 @@ var userAgent = "valen/" + version + " (opencode-compatible agent harness)"
 // browserUserAgent is only for web_search/web_fetch, where the scraped
 // sites' bot defenses expect a browser.
 const browserUserAgent = "Mozilla/5.0 (iPad; CPU OS 18_7_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1"
-
-// effectiveSystem returns the configured system prompt, or the built-in
-// default when none is set.
-func effectiveSystem(cfg Config) string {
-	if strings.TrimSpace(cfg.System) != "" {
-		return cfg.System
-	}
-	return defaultSystem
-}
 
 // Config mirrors config.toml. See SPEC.md for the full schema.
 type Config struct {

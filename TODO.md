@@ -1,5 +1,16 @@
 # TODO — fullscreen loop UI (SPEC-tui.md)
 
+## Minor, UX
+
+- [ ] the content of the chat scrollback is not all aligned. Some have a space in front, or two.
+- [ ] thinking messages (white) in scrollback would benefit from a timestamp of when they happen, e.g. message (1m3s) <-- when they occurred.
+- [ ] ability to paste a paragraph
+- [ ] shift+enter should insert a line return in the chatbox, it does not (yet!) - fix.
+- [ ] when working, page up/down temporarly jumps and then gets smashed back down.
+- [ ] related: the wheelmouse should scroll the scrollback, it does not. add this. Scrolling up should go through the history.
+- [ ] show live errors such as backend overloaded, rate limiting, etc. in the thinking but in red?
+- [ ] when 'working' we want the user to press ESC twice to stop, 1 can be hit by mistake. Add a debounce and check for 2 ESC key sequential within 2 seconds, otherwise go back to working state. Do not interrupt the process until 2 ESC confirmed.
+- [ ] sandboxing permission, when working in a git worktree can lead to asking tons of permission, we should remember access given to a folder and not ask again, per session.
 
 ## Later (D — speedups not taken this round)
 
@@ -20,18 +31,6 @@
   events into the pending block instead of today's silent single `task` row.
 - [ ] D7 thinking-block signature capture on messages (replay native
   thinking blocks for cache affinity) instead of `<think>` text folding.
-
-## Minor, UX
-
-- [ ] the content of the chat scrollback is not all aligned. Some have a space in front, or two.
-- [ ] thinking messages (white) in scrollback would benefit from a timestamp of when they happen, e.g. message (1m3s) <-- when they occurred.
-- [ ] ability to paste a paragraph
-- [ ] shift+enter should insert a line return in the chatbox, it does not (yet!) - fix.
-- [ ] when working, page up/down temporarly jumps and then gets smashed back down.
-- [ ] related: the wheelmouse should scroll the scrollback, it does not. add this. Scrolling up should go through the history.
-- [ ] show live errors such as backend overloaded, rate limiting, etc. in the thinking but in red?
-- [ ] when 'working' we want the user to press ESC twice to stop, 1 can be hit by mistake. Add a debounce and check for 2 ESC key sequential within 2 seconds, otherwise go back to working state. Do not interrupt the process until 2 ESC confirmed.
-- [ ] sandboxing permission, when working in a git worktree can lead to asking tons of permission, we should remember access given to a folder and not ask again, per session.
 
 ## Medium
 

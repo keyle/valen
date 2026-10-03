@@ -15,9 +15,12 @@ import (
 )
 
 const (
-	shellTimeout  = 60 * time.Second
 	maxToolOutput = 16000
 )
+
+// shellTimeout is a var (not const) so offline tests can shrink the wait;
+// production kills shell commands at 60s.
+var shellTimeout = 60 * time.Second
 
 // Tool is a function the model may call. Args arrive as the raw JSON string the
 // model produced; the return value is fed back verbatim as the tool result.
@@ -125,7 +128,7 @@ func truncate(s string, max int) string {
 func ShellTool() Tool {
 	return Tool{
 		Name:        "shell",
-		Description: "Run a shell command and return its combined stdout and stderr",
+		Description: "Run a shell command and return its combined stdout and stderr. For file operations use the dedicated tools instead (read not cat/head/tail/ls/find, edit not sed/awk, write not heredocs); reserve shell for builds, tests, and system commands. 60s timeout; output capped at 16k.",
 		Schema:      json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"shell command to run"}},"required":["command"]}`),
 		Fn: func(ctx context.Context, args string) (string, error) {
 			var a struct {
@@ -141,6 +144,11 @@ func ShellTool() Tool {
 			defer cancel()
 			cmd := exec.CommandContext(ctx, "sh", "-c", a.Command)
 			cmd.Dir = getFileRoot()
+			// Timeouts kill the whole process tree (see kill_unix.go): a plain
+			// child kill leaves pipeline grandchildren holding stdout, and Run
+			// would wait on them past the timeout.
+			isolateProcessGroup(cmd)
+			cmd.Cancel = func() error { return killProcessGroup(cmd) }
 			var buf bytes.Buffer
 			cmd.Stdout = &buf
 			cmd.Stderr = &buf
@@ -148,6 +156,11 @@ func ShellTool() Tool {
 			out := strings.TrimSpace(buf.String())
 			var exit *exec.ExitError
 			switch {
+			case errors.Is(ctx.Err(), context.DeadlineExceeded):
+				// Killed by our own timeout, not the command: say so with the
+				// partial output, so the model splits the work instead of
+				// retrying the same doomed command (and the dv log shows it).
+				return fmt.Sprintf("%s\n[timed out after %s — partial output above; split the command or narrow its scope]", out, shellTimeout), nil
 			case errors.As(err, &exit):
 				return fmt.Sprintf("%s\n[exit %d]", out, exit.ExitCode()), nil
 			case err != nil:

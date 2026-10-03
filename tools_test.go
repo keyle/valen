@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRegistryKeepsInsertionOrder(t *testing.T) {
@@ -91,6 +92,21 @@ func TestShellTool(t *testing.T) {
 	}
 	if _, err := shell.Fn(context.Background(), `{`); err == nil {
 		t.Fatal("expected error for malformed args")
+	}
+}
+
+func TestShellTimeoutMarksPartial(t *testing.T) {
+	old := shellTimeout
+	shellTimeout = 50 * time.Millisecond
+	defer func() { shellTimeout = old }()
+
+	shell := ShellTool()
+	out, err := shell.Fn(context.Background(), `{"command":"echo part; sleep 5; echo never"}`)
+	if err != nil {
+		t.Fatalf("timeout should be content, got err=%v", err)
+	}
+	if !strings.Contains(out, "part") || strings.Contains(out, "never") || !strings.Contains(out, "timed out") {
+		t.Fatalf("out=%q", out)
 	}
 }
 

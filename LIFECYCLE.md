@@ -184,8 +184,9 @@ Anthropic pattern: stable prefixes cache, the moving tail doesn't.
   overlay/stdin). File-access approval prompts serialize the same way.
 - MCP calls lock **per server** (one stdin pipe each); cross-server batches
   overlap; builtins never lock.
-- The model must be *told* to batch: system prompts demand independent
-  calls in one block and `grep`/`glob`-before-`read`. One-tool-per-round is
+- The model must be *told* to batch: `prompt_meta.txt` / `prompt_default.txt`
+  demand small purposeful batches (2–4 related calls) and
+  `grep`/`glob`-before-`read`. One-tool-per-round is
   the failure mode that turns §2's table quadratic — batching is a prompt
   feature with token-math consequences, not politeness.
 - Not overlapped (documented limit): tools start after the round's terminal

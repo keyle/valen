@@ -676,6 +676,35 @@ func TestTUIPendingRunningToolsShowSpinnerAndCounts(t *testing.T) {
 	}
 }
 
+// TestTUIStatusShowsPhase: model-side deltas flip the footer from tool state
+// to thinking/writing, so a long reasoning round never looks like stuck
+// local work.
+func TestTUIStatusShowsPhase(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.busy = true
+
+	_, _ = m.Update(toolEventMsg{kind: "tool_start", text: "shell", args: `{"command":"ls"}`})
+	if m.toolStatus != "⏺ shell…" {
+		t.Fatalf("tool status=%q", m.toolStatus)
+	}
+	_, _ = m.Update(toolEventMsg{kind: "tool_result", text: "shell", output: "x"})
+	if m.toolStatus != "✓ shell" {
+		t.Fatalf("done status=%q", m.toolStatus)
+	}
+	_, _ = m.Update(toolEventMsg{kind: "thinking_delta", text: "hmm"})
+	if m.toolStatus != "thinking…" {
+		t.Fatalf("thinking status=%q", m.toolStatus)
+	}
+	_, _ = m.Update(toolEventMsg{kind: "text_delta", text: "answer"})
+	if m.toolStatus != "writing…" {
+		t.Fatalf("writing status=%q", m.toolStatus)
+	}
+	_, _ = m.Update(toolEventMsg{kind: "tool_start", text: "read", args: `{"path":"a"}`})
+	if m.toolStatus != "⏺ read…" {
+		t.Fatalf("back-to-tool status=%q", m.toolStatus)
+	}
+}
+
 // TestPendingToolMatchesByID: two parallel same-name calls keep their own
 // outputs — the first-started finishing first must not credit the later row.
 func TestPendingToolMatchesByID(t *testing.T) {

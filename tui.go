@@ -367,10 +367,6 @@ func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session 
 	return m
 }
 
-func seedHistory(cfg Config) []openai.ChatCompletionMessage {
-	return []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleSystem, Content: effectiveSystem(cfg)}}
-}
-
 func (m *tuiModel) Init() tea.Cmd {
 	var cmds []tea.Cmd
 	if inputBlink(m.cfg) {
@@ -1296,10 +1292,12 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "text_delta":
 			m.pendingText = appendStreamLine(m.pendingText, msg.text)
+			m.toolStatus = "writing…"
 			m.flushStream()
 			return m, nil
 		case "thinking_delta":
 			m.pendingThinking = appendStreamText(m.pendingThinking, msg.text)
+			m.toolStatus = "thinking…"
 			m.flushStream()
 			return m, nil
 		default:

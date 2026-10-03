@@ -23,6 +23,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | File | Responsibility |
 | --- | --- |
 | `main.go` | CLI flags, config loading/defaults, HTTP identity headers, agent loop |
+| `prompt.go` | Agent guidelines: `prompt_meta.txt` / `prompt_default.txt` (opencode-adapted, embedded) + `<env>` header, selected per model family |
 | `tui.go` | Bubble Tea chat UI: padded conversation, instant echo, recall views, Monokai theme |
 | `models.go` | OpenCode Go catalog: live list, transport map, thinking levels, config persist |
 | `messages.go` | Anthropic `/messages` transport: wire format, thinking, tool loop |
@@ -51,7 +52,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `base_url` | string | `https://opencode.ai/zen/go/v1` | API base; the transport path (`/chat/completions`, `/messages`, `/responses`) is appended per model |
 | `api_key_env` | string | `OPENCODE_GO_API_KEY` | Name of the env var holding the key, not the key itself |
 | `session_id` | string | `ses-<unixnano>` | Stable per conversation; sent as `x-opencode-session` |
-| `system` | string | built-in default (mirrors `config.toml`) | System prompt; empty uses the built-in default (helpful assistant, MCP-capable thinking agent with fast tool loopback, batch independent calls in one block, act within 1–2 rounds once the change is statable, check AGENTS.md first). The shipped `config.toml` sets it explicitly — edit there to override |
+| `system` | string | prompt files (`prompt_meta.txt` / `prompt_default.txt`) | Agent guidelines; empty uses the harness prompt files (opencode-adapted, valen-tuned: muse-family models get meta, others get default) plus a small `<env>` header (model, workdir, platform, date). Set to override entirely |
 | `max_rounds` | int | `100` | Hard stop on tool-loop iterations |
 | `max_stagnant_rounds` | int | `25` | Stall guard: abort a turn whose tool loop runs this many rounds with calls but no `write`/`edit`/`task` (exploring without acting); raise for long research turns |
 | `max_context_tokens` | int | `300000` | Fail-fast budget per round (est. runes/4): over-budget history aborts the turn with guidance instead of a doomed send |
@@ -141,7 +142,10 @@ error: "stopped after N rounds without a final answer"
 
 - Tool calls in one round run concurrently (semaphore 8) and their results
   append to history in request order, so wall-clock is ~max(latencies), not
-  the sum. `tool_start` events emit in order, then `tool_result` in order.
+  the sum. Keep batches small and purposeful (2–4 related calls answering
+  one question); wide sweeps split across rounds, since one slow tool holds
+  its whole batch's results. `tool_start` events emit in order, then
+  `tool_result` in order.
   Batches containing `AskUserQuestion` run sequentially instead: the single
   interactive overlay/stdin cannot serve concurrent prompts. File-access
   approval prompts serialize on the same mutex. MCP tool calls serialize per
@@ -231,7 +235,7 @@ Rules the registry enforces:
 
 | Tool | Args | Behaviour |
 | --- | --- | --- |
-| `shell` | `command` | `sh -c` in the workdir, 60s timeout, combined stdout+stderr; non-zero exit is returned as content with `[exit N]`, not as an error |
+| `shell` | `command` | `sh -c` in the workdir, 60s timeout, combined stdout+stderr; non-zero exit is returned as content with `[exit N]`, a timeout as partial output with `[timed out after …]`, not as an error |
 | `web_search` | `query` | DuckDuckGo HTML endpoint, up to 8 results as `N. title / url / snippet`; unwraps `/l/?uddg=` tracker links; 1 MiB body cap |
 | `web_fetch` | `url` | GET with 512 KiB cap, HTML tokenized to text (script/style/noscript dropped), truncated to 8000 chars |
 | `read` | `path`, `offset`, `limit` | Line-windowed read (default 2000 lines, max 5000, ~12KB per call with an offset hint to continue); lines prefixed with their number for `edit` context; long lines trimmed at 1000 chars |

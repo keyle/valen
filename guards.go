@@ -21,7 +21,7 @@ import (
 const (
 	defaultMaxStagnantRounds = 25
 	batchNudgeStreak         = 3
-	batchNudgeText           = "[ephemeral nudge — not part of the task] Batch all independent tool calls in the same block instead of one per round; keep dependent calls sequential."
+	batchNudgeText           = "[ephemeral nudge — not part of the task] Batch independent tool calls in the same block — small purposeful batches of 2–4 related calls; keep dependent calls sequential."
 	// actNudgeStagnant fires one act reminder this many stagnant rounds in,
 	// inviting the model to advance before the stall guard aborts the turn.
 	// Below the default limit; limits at or under it skip straight to the stop.
