@@ -113,7 +113,10 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   on hot windows. Hidden when `{base_url}/usage` is unavailable (non-Go keys).
 - Autoscroll follows new turns while pinned to the bottom; PgUp/PgDn or the
   mouse wheel scrolls the transcript, which pauses autoscroll until scrolled
-  back to the bottom (a new submit or committed turn re-pins).
+  back to the bottom (a new submit or committed turn re-pins). Split mouse
+  reports misparsed as key runes (rapid wheeling across TTY reads) are
+  swallowed before the input box, so `[<…M` fragments never land in the
+  draft; genuine wheel input still arrives as mouse events.
 - Chatbox chrome is configurable via `[input]` in `config.toml`: `blink`
   (default `true`; `false` parks the block cursor steady with no blink
   timer) and `height` (default `3` box lines; the transcript viewport

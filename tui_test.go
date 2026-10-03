@@ -1380,3 +1380,50 @@ func TestTUIPgUpPausesAutoscroll(t *testing.T) {
 		t.Fatal("pgup should pause follow")
 	}
 }
+
+// TestTUIWheelDebrisSwallowed: split SGR mouse reports misparsed as key
+// runes (rapid wheeling across TTY reads) must not land in the input box,
+// while real typing — including lookalikes — still inserts.
+func TestTUIWheelDebrisSwallowed(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.viewport.Width = 80
+
+	key := func(s string, alt, paste bool) tea.KeyMsg {
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s), Alt: alt, Paste: paste}
+	}
+	for _, debris := range []tea.KeyMsg{
+		key("[<65;69;42M", false, false),
+		key("<65;69;42M", false, false),
+		key("<65;69;42m", false, false),
+		key("<65;", false, false),
+		key("[<65", false, false),
+		key("69;42M", false, false),
+		key(";69;42M", false, false),
+		key("[", true, false),
+	} {
+		before := m.input.Value()
+		_, _ = m.Update(debris)
+		if got := m.input.Value(); got != before {
+			t.Fatalf("debris %q leaked into input: %q", string(debris.Runes), got)
+		}
+	}
+
+	// Lookalike typing still inserts: hearts, brackets, counts, ratios,
+	// arrows, and even pasted mouse-shaped text.
+	m.input.SetValue("")
+	for _, legit := range []tea.KeyMsg{
+		key("<3", false, false),
+		key("[", false, false),
+		key("42M", false, false),
+		key("1;2", false, false),
+		key("<-", false, false),
+		key("[<65;69;42M", false, true),
+	} {
+		_, _ = m.Update(legit)
+	}
+	for _, want := range []string{"<3", "[", "42M", "1;2", "<-", "[<65;69;42M"} {
+		if !strings.Contains(m.input.Value(), want) {
+			t.Fatalf("legit typing %q lost, input=%q", want, m.input.Value())
+		}
+	}
+}

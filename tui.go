@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -1623,7 +1624,37 @@ func enterCSIMod(msg tea.Msg) (int, bool) {
 	return parseEnterCSI(v.Bytes())
 }
 
+// mouseDebrisRe matches KeyRunes fragments of a split SGR mouse report.
+// Rapid wheeling can split one ESC[<Cb;Cx;CyM report across TTY reads;
+// bubbletea then misparses the pieces as key runes ("[<65;69;42M"),
+// which would otherwise land in the input box. Real wheel scrolling
+// still arrives as tea.MouseMsg and is untouched (see Update).
+//
+// The three arms cover: a "[" left over from the ESC consumed as alt
+// plus any digit prefix; a bare "<Cb;…" prefix (requiring ";" or M so
+// "<3" hearts still type); and a numeric tail (requiring a trailing M
+// so "42M" counts and "1;2" ratios still type). Pasted text never
+// matches: pastes arrive with Paste set and are exempt in isMouseDebris.
+var mouseDebrisRe = regexp.MustCompile(`^\[<\d[0-9;]*[Mm]?$|^<\d[0-9;]*[;Mm][0-9;Mm]*$|^;?[0-9]+;[0-9;]*[Mm]$`)
+
+// isMouseDebris reports split-mouse-report runes that must never reach
+// the input box (see mouseDebrisRe).
+func isMouseDebris(msg tea.KeyMsg) bool {
+	if msg.Type != tea.KeyRunes || msg.Paste || len(msg.Runes) == 0 {
+		return false
+	}
+	if msg.Alt && len(msg.Runes) == 1 && msg.Runes[0] == '[' {
+		return true
+	}
+	return mouseDebrisRe.MatchString(string(msg.Runes))
+}
+
 func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Split wheel-mouse reports misparsed as runes must never reach the
+	// input box; genuine wheel input arrives as tea.MouseMsg (see Update).
+	if isMouseDebris(msg) {
+		return m, nil
+	}
 	s := msg.String()
 
 	// Global: cancel / quit.
