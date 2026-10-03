@@ -1757,3 +1757,78 @@ func TestTUIMouseToggleSelection(t *testing.T) {
 		t.Fatalf("wheel up did not scroll after re-enable: yoff=%d top=%d", m.viewport.YOffset, top)
 	}
 }
+
+func TestTUIEscTwiceCancels(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	cancelled := 0
+	m.busy = true
+	m.cancel = func() { cancelled++ }
+	esc := tea.KeyMsg{Type: tea.KeyEsc}
+
+	_, cmd := m.Update(esc)
+	if cancelled != 0 || cmd == nil || m.escArmedAt.IsZero() {
+		t.Fatalf("first esc must only arm: cancelled=%d cmd=%v", cancelled, cmd)
+	}
+
+	// Expiry disarms and restores the working hint.
+	at := m.escArmedAt
+	_, _ = m.Update(escExpireMsg{at: at})
+	if !m.escArmedAt.IsZero() || !strings.Contains(m.notice, "Working") {
+		t.Fatalf("expiry must disarm: notice=%q", m.notice)
+	}
+	_, _ = m.Update(esc)
+	if cancelled != 0 {
+		t.Fatal("esc after expiry must re-arm, not cancel")
+	}
+
+	// Stale window: armed too long ago behaves as a first press.
+	m.escArmedAt = time.Now().Add(-3 * time.Second)
+	_, _ = m.Update(esc)
+	if cancelled != 0 {
+		t.Fatal("esc outside window must not cancel")
+	}
+
+	_, _ = m.Update(esc)
+	if cancelled != 1 || !m.escArmedAt.IsZero() {
+		t.Fatalf("second esc within window must cancel: cancelled=%d", cancelled)
+	}
+}
+
+func TestTUICtrlCDClearsThenQuits(t *testing.T) {
+	for _, key := range []tea.KeyType{tea.KeyCtrlC, tea.KeyCtrlD} {
+		m := newTestModel(t, testConfig("https://unused"))
+		m.input.SetValue("draft")
+		_, cmd := m.Update(tea.KeyMsg{Type: key})
+		if m.input.Value() != "" || cmd != nil {
+			t.Fatalf("key %v: first press must clear without quitting: %q", key, m.input.Value())
+		}
+		_, cmd = m.Update(tea.KeyMsg{Type: key})
+		if cmd == nil {
+			t.Fatalf("key %v: second press must quit", key)
+		}
+		if _, ok := cmd().(tea.QuitMsg); !ok {
+			t.Fatalf("key %v: expected QuitMsg", key)
+		}
+	}
+}
+
+func TestTUIUpDownJumpToEdges(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.input.SetValue("one\ntwo\nthree")
+	m.input.CursorEnd() // end of last line
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.input.Line() != 1 {
+		t.Fatalf("up from last line must move up, line=%d", m.input.Line())
+	}
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.input.Line() != 0 || m.input.LineInfo().ColumnOffset != 0 {
+		t.Fatalf("up on first line must go to start: line=%d col=%d", m.input.Line(), m.input.LineInfo().ColumnOffset)
+	}
+	for i := 0; i < 3; i++ {
+		_, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if m.input.Line() != 2 || m.input.LineInfo().CharOffset != len("three") {
+		t.Fatalf("down on last line must go to end: line=%d off=%d", m.input.Line(), m.input.LineInfo().CharOffset)
+	}
+}

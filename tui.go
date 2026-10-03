@@ -260,6 +260,12 @@ type usageMsg struct {
 // usageTickMsg triggers a periodic quota refresh.
 type usageTickMsg struct{}
 
+// escConfirmWindow is how long a first esc stays armed while working.
+const escConfirmWindow = 2 * time.Second
+
+// escExpireMsg disarms a pending esc-to-cancel and restores the working hint.
+type escExpireMsg struct{ at time.Time }
+
 // compactDoneMsg carries a finished manual compaction back to the UI thread.
 type compactDoneMsg struct {
 	summary   string
@@ -318,6 +324,9 @@ type tuiModel struct {
 	usageInflight bool
 	notice        string
 	noticeErr     bool
+	// escArmedAt is when the first esc of a two-press cancel landed while
+	// busy; zero when disarmed. A second esc within escConfirmWindow cancels.
+	escArmedAt time.Time
 
 	showThink bool
 	showMeta  bool
@@ -886,7 +895,7 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 		return m.handleCommand(trimmed)
 	}
 	if m.busy {
-		m.notice = "Working… press esc to cancel."
+		m.notice = "Working… press esc twice to cancel."
 		m.noticeErr = false
 		return nil
 	}
@@ -1085,7 +1094,7 @@ func (m *tuiModel) handleCommand(text string) tea.Cmd {
 // commit into (or be orphaned by) the fresh session.
 func (m *tuiModel) startFreshSession() {
 	if m.busy {
-		m.notice = "Working… press esc to cancel."
+		m.notice = "Working… press esc twice to cancel."
 		m.noticeErr = false
 		return
 	}
@@ -1125,7 +1134,7 @@ func (m *tuiModel) startFreshSession() {
 // Send-side only — the session JSONL keeps every turn.
 func (m *tuiModel) compactCmd() tea.Cmd {
 	if m.busy {
-		m.notice = "Working… press esc to cancel."
+		m.notice = "Working… press esc twice to cancel."
 		m.noticeErr = false
 		return nil
 	}
@@ -1501,6 +1510,15 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case escExpireMsg:
+		if m.escArmedAt.Equal(msg.at) {
+			m.escArmedAt = time.Time{}
+			if m.busy {
+				m.notice = "Working… press esc twice to cancel."
+				m.noticeErr = false
+			}
+		}
+		return m, nil
 	case usageTickMsg:
 		return m, tea.Batch(m.fetchUsageCmd(), usageTick())
 
@@ -1906,25 +1924,22 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Global: cancel / quit.
 	switch s {
-	case "ctrl+c":
+	case "ctrl+c", "ctrl+d":
 		if m.ask != nil {
 			m.dismissAsk(errors.New("user dismissed the questions"))
 			return m, nil
 		}
 		if m.busy {
 			m.cancelRun()
-			m.notice = "Cancelling…"
-			m.noticeErr = false
+			if s == "ctrl+c" {
+				m.notice = "Cancelling…"
+				m.noticeErr = false
+			}
 			return m, nil
 		}
-		return m, tea.Quit
-	case "ctrl+d":
-		if m.ask != nil {
-			m.dismissAsk(errors.New("user dismissed the questions"))
-			return m, nil
-		}
-		if m.busy {
-			m.cancelRun()
+		// Idle: first press clears a non-empty chatbox, next one quits.
+		if m.input.Value() != "" {
+			m.input.SetValue("")
 			return m, nil
 		}
 		return m, tea.Quit
@@ -1933,8 +1948,18 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.handleAskKey(s)
 		}
 		if m.busy {
-			m.cancelRun()
-			return m, nil
+			now := time.Now()
+			if !m.escArmedAt.IsZero() && now.Sub(m.escArmedAt) <= escConfirmWindow {
+				m.escArmedAt = time.Time{}
+				m.cancelRun()
+				m.notice = "Cancelling…"
+				m.noticeErr = false
+				return m, nil
+			}
+			m.escArmedAt = now
+			m.notice = "Press esc again within 2s to stop."
+			m.noticeErr = false
+			return m, tea.Tick(escConfirmWindow, func(time.Time) tea.Msg { return escExpireMsg{at: now} })
 		}
 		if m.mode != viewChat {
 			m.show(viewChat)
@@ -2022,7 +2047,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.busy {
-			m.notice = "Working… press esc to cancel."
+			m.notice = "Working… press esc twice to cancel."
 			m.noticeErr = false
 			return m, nil
 		}
@@ -2047,6 +2072,17 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, vcmd
 	case "up", "down":
 		// Let the textarea move first; viewport scrolls with pgup/pgdn.
+		// On the first/last visual row there is nowhere to go, so jump to
+		// the start/end of the text instead (shell-style).
+		li := m.input.LineInfo()
+		if s == "up" && m.input.Line() == 0 && li.RowOffset == 0 {
+			m.input.SetCursor(0)
+			return m, nil
+		}
+		if s == "down" && m.input.Line() == m.input.LineCount()-1 && li.RowOffset >= li.Height-1 {
+			m.input.CursorEnd()
+			return m, nil
+		}
 		var icmd tea.Cmd
 		m.input, icmd = m.input.Update(msg)
 		return m, icmd
@@ -2885,7 +2921,7 @@ func (m *tuiModel) renderPending(w int) string {
 	if tool == "" {
 		tool = "Working…"
 	}
-	status := statusBusyStyle.Render(tool) + "  " + metaStyle.Render("esc cancels")
+	status := statusBusyStyle.Render(tool) + "  " + metaStyle.Render("esc esc cancels")
 	parts = append(parts, status)
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
@@ -3093,7 +3129,7 @@ func (m *tuiModel) sessionItems() []sessionItem {
 // transcript and history is rebuilt so the resumed conversation continues.
 func (m *tuiModel) resumeSessionPath(path string) {
 	if m.busy {
-		m.notice = "Working... press esc to cancel before resuming."
+		m.notice = "Working... press esc twice to cancel before resuming."
 		m.noticeErr = false
 		return
 	}
@@ -3314,7 +3350,7 @@ Keys
   wheel/pgup pauses autoscroll until you reach the bottom again
    shift+drag (opt+drag in iTerm/Terminal) selects + copies natively · alt+m toggles plain-drag selection (wheel paused while off)
   ctrl+g help · ctrl+r history · ctrl+l sessions · ctrl+u tools · ctrl+x errors · ctrl+y thinking display
-  ctrl+o details · ctrl+p/ctrl+m model · ctrl+n new session · ctrl+t thinking level (cycles low→high, wraps) · ctrl+s save · ctrl+q quit · ctrl+c cancel/quit
+  ctrl+o details · ctrl+p/ctrl+m model · ctrl+n new session · ctrl+t thinking level (cycles low→high, wraps) · ctrl+s save · ctrl+q quit · ctrl+c/ctrl+d cancel · clear input · quit
   in lists: ↑↓ move · enter open · esc back
 
 Commands

@@ -14,7 +14,7 @@
 - [x] when working, page up/down temporarly jumps and then gets smashed back down. (Fixed: scrolling up pauses autoscroll until back at the bottom; streaming ticks only pin when following.)
 - [x] related: the wheelmouse should scroll the scrollback, it does not. add this. Scrolling up should go through the history. (Mouse cell-motion on + wheel routed to viewport in every mode.)
 - [ ] show live errors such as backend overloaded, rate limiting, etc. in the thinking but in red?
-- [ ] when 'working' we want the user to press ESC twice to stop, 1 can be hit by mistake. Add a debounce and check for 2 ESC key sequential within 2 seconds, otherwise go back to working state. Do not interrupt the process until 2 ESC confirmed.
+- [x] when 'working' we want the user to press ESC twice to stop, 1 can be hit by mistake. Add a debounce and check for 2 ESC key sequential within 2 seconds, otherwise go back to working state. Do not interrupt the process until 2 ESC confirmed. (Done: `escArmedAt` + `escConfirmWindow`.)
 - [ ] sandboxing permission, when working in a git worktree can lead to asking tons of permission, we should remember access given to a folder and not ask again, per session.
 
 ## Later (D — speedups not taken this round)

@@ -145,7 +145,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 Rules:
 
 - At most one in-flight run; Enter while working shows
-  "Working… press esc to cancel."
+  "Working… press esc twice to cancel."
 - `max_rounds` and consecutive-identical-batch guards apply per turn through
   the shared `runModelTurn`, same as `SPEC.md`; no synthetic recovery rounds.
 - Token totals accumulate per session.
