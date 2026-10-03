@@ -262,10 +262,13 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
 ## Model switching
 
 - `/model` (ctrl+p, or ctrl+m where the terminal sends disambiguated ctrl+m)
-  fetches the live catalogs — always OpenCode Go
-  (`GET {base_url}/models`), plus OpenRouter (`GET
-  https://openrouter.ai/api/v1/models`) when its key env is set — and opens
-  a picker: ↑↓ move, Enter switches, Esc backs out. Every row carries its
+  fetches the live catalogs — OpenCode Go (`GET {base_url}/models`) plus
+  OpenRouter (`GET https://openrouter.ai/api/v1/models`) — and opens
+  a picker: ↑↓ move, Enter switches, Esc backs out. Both providers list even
+  without keys (curated fallbacks when offline/unkeyed); picking or sending
+  with a model whose key is missing reports "OpenCode Go API key not found"
+  or "OpenRouter key not found" naming the env var, instead of failing boot.
+  Every row carries its
   provider prefix (`go/…`, `openrouter/…`); Go transports (`/chat`,
   `/responses`, `/messages`) are marked, OpenRouter rows always converse
   over its OpenAI-compatible chat endpoint.

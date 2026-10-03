@@ -52,8 +52,8 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `model` | string | — | **required.** Model ID, e.g. `glm-5.3-flash`, `kimi-k3`, or `openrouter/moonshotai/kimi-k3`. The `openrouter/` prefix selects the OpenRouter provider (needs its key, below); bare IDs ride OpenCode Go. Switch live with `/model` (ctrl+p); persisted to `config.toml` |
 | `thinking` | string | empty (provider default) | Reasoning level, per-model (see `/effort` picker): muse-spark `minimal`/`low`/`medium`/`high`/`xhigh`, gpt/grok `low`…`max` (+`none` on gpt), glm/deepseek `low`/`high`/`max` or `high`/`max`, kimi-k3 `max` only, toggle models `none`/`high`, fixed no-control models omit. Switch live with `/effort` (`/thinking` alias) or ctrl+t (cycles low→high, wraps); persisted to `config.toml`. Unknown models fall back to the full vocabulary until a 400 teaches the valid list, cached at `$XDG_DATA_HOME/valen/thinking_levels.json` |
 | `base_url` | string | `https://opencode.ai/zen/go/v1` | API base; the transport path (`/chat/completions`, `/messages`, `/responses`) is appended per model |
-| `api_key_env` | string | `OPENCODE_GO_API_KEY` | Name of the env var holding the key, not the key itself |
-| `openrouter_api_key_env` | string | `OPENROUTER_API_KEY` | Optional second provider: when this env var is set, `/model` also lists OpenRouter models (`openrouter/<vendor>/<model>`) served via OpenRouter's OpenAI-compatible chat endpoint. Unset means Go-only |
+| `api_key_env` | string | `OPENCODE_GO_API_KEY` | Name of the env var holding the key, not the key itself. Missing keys never fail boot — the TUI still opens and `/model` lists both providers; picking or sending with a Go model and no key says "OpenCode Go API key not found" |
+| `openrouter_api_key_env` | string | `OPENROUTER_API_KEY` | Second provider: `/model` always lists OpenRouter models (`openrouter/<vendor>/<model>`, fallback when offline) served via OpenRouter's OpenAI-compatible chat endpoint. Picking or sending with an `openrouter/…` model and no key says "OpenRouter key not found" |
 | `session_id` | string | `ses-<unixnano>` | Stable per conversation; sent as `x-opencode-session` |
 | `system` | string | prompt files (per model family) | Agent guidelines; empty uses the harness prompt files (opencode-adapted, valen-tuned: muse→meta, claude→anthropic, old reasoning→beast, gpt-6→astra, gpt/grok→gpt, codex/copilot/gemini/kimi/trinity→their file, else default) plus a small `<env>` header (model, workdir, platform, date). Set to override entirely |
 | `plan` | bool | `false` | Plan mode: read-only investigation — the plan overlay joins the system prompt, `write`/`edit`/`shell` refuse with guidance, `task` is explore-only. TUI `/plan` toggles at runtime; `-plan` sets it headless |
@@ -69,7 +69,10 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `mcp` | table[] | empty | Each entry needs `name` + `cmd`; optional `args`, `env` |
 
 Validation errors (missing `model`, MCP entry without `cmd`, unreadable file)
-exit non-zero before any network call.
+exit non-zero before any network call. Missing API keys are not validation
+errors: boot always succeeds and the missing key surfaces on model pick
+(TUI notice) and on send (friendly transcript error naming
+`api_key_env` vs `openrouter_api_key_env`).
 
 ## Provider contract
 

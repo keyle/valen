@@ -309,18 +309,12 @@ func start() error {
 		cfg.Plan = true
 	}
 
-	apiKey := os.Getenv(cfg.APIKeyEnv)
-	if apiKey == "" {
-		return fmt.Errorf("%s is not set", cfg.APIKeyEnv)
-	}
-	// OpenRouter is opt-in: only when its key env is present do we list and
-	// serve its models. A configured openrouter/ model without the key is a
-	// boot error, not a first-turn 401. Trimmed: pasted keys with stray
-	// whitespace 401 otherwise.
+	apiKey := strings.TrimSpace(os.Getenv(cfg.APIKeyEnv))
+	// Missing keys never fail boot: the TUI still opens so the user can
+	// browse /model, and the missing key surfaces when a model needing it
+	// is picked or a turn is sent (see missingKeyError + dispatchTurn).
+	// Trimmed: pasted keys with stray whitespace 401 otherwise.
 	cfg.OpenRouterKey = strings.TrimSpace(os.Getenv(cfg.OpenRouterKeyEnv))
-	if modelProvider(cfg.Model) == ProviderOpenRouter && cfg.OpenRouterKey == "" {
-		return fmt.Errorf("%s is not set (required by model %q)", cfg.OpenRouterKeyEnv, cfg.Model)
-	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -509,6 +503,56 @@ func runTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey stri
 	return msg, usage, err
 }
 
+// effectiveGoKey resolves the Go credential: the boot snapshot first, then
+// a live env read so an export after boot still works without a restart.
+func effectiveGoKey(cfg Config, apiKey string) string {
+	if k := strings.TrimSpace(apiKey); k != "" {
+		return k
+	}
+	return strings.TrimSpace(os.Getenv(goKeyEnvName(cfg)))
+}
+
+// effectiveOpenRouterKey resolves the OpenRouter credential the same way.
+func effectiveOpenRouterKey(cfg Config) string {
+	if k := strings.TrimSpace(cfg.OpenRouterKey); k != "" {
+		return k
+	}
+	return strings.TrimSpace(os.Getenv(openRouterKeyEnvName(cfg)))
+}
+
+// goKeyEnvName reports the configured Go env var for error messages.
+func goKeyEnvName(cfg Config) string {
+	if cfg.APIKeyEnv != "" {
+		return cfg.APIKeyEnv
+	}
+	return defaultAPIKeyEnv
+}
+
+// openRouterKeyEnvName reports the configured OpenRouter env var.
+func openRouterKeyEnvName(cfg Config) string {
+	if cfg.OpenRouterKeyEnv != "" {
+		return cfg.OpenRouterKeyEnv
+	}
+	return defaultOpenRouterKeyEnv
+}
+
+// missingKeyError is nil when the model in cfg can be called; otherwise an
+// "is not set" error naming the env var the provider needs. Boot never
+// fails on this — it surfaces on model pick (TUI notice) and on send
+// (dispatchTurn), where friendlyError turns it into a transcript message.
+func missingKeyError(cfg Config, apiKey string) error {
+	if modelProvider(cfg.Model) == ProviderOpenRouter {
+		if effectiveOpenRouterKey(cfg) == "" {
+			return fmt.Errorf("%s is not set (required by model %q)", openRouterKeyEnvName(cfg), cfg.Model)
+		}
+		return nil
+	}
+	if effectiveGoKey(cfg, apiKey) == "" {
+		return fmt.Errorf("%s is not set (required by model %q)", goKeyEnvName(cfg), cfg.Model)
+	}
+	return nil
+}
+
 // dispatchTurn runs one pre-send auto-compaction when over threshold, then
 // the model transport. Shared by all three transports so every model gets
 // the same send-side bound.
@@ -516,6 +560,14 @@ func dispatchTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey
 	if ctx.Err() != nil {
 		return openai.ChatCompletionMessage{}, openai.Usage{}, ctx.Err()
 	}
+	if err := missingKeyError(cfg, apiKey); err != nil {
+		return openai.ChatCompletionMessage{}, openai.Usage{}, err
+	}
+	// Refresh from the live env so an export after boot works without a
+	// restart; downstream transports must see the usable credential, not
+	// the possibly-empty boot snapshot.
+	apiKey = effectiveGoKey(cfg, apiKey)
+	cfg.OpenRouterKey = effectiveOpenRouterKey(cfg)
 	t0 := time.Now()
 	dvlog.Logf("turn start transport=%s %s", modelTransport(cfg.Model), dvlog.HistoryLine(*history, estimateTokens(*history)))
 	before := estimateTokens(*history)

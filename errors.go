@@ -31,7 +31,10 @@ func friendlyError(err error) FriendlyError {
 	case strings.Contains(lower, "no such host"), strings.Contains(lower, "connection refused"), strings.Contains(lower, "dial tcp"), strings.Contains(lower, "network is unreachable"):
 		return FriendlyError{"Couldn't reach the provider. Check network/VPN and resend.", msg}
 	case strings.Contains(lower, "is not set"):
-		return FriendlyError{"No API key found — set the env var named by api_key_env.", msg}
+		if strings.Contains(lower, "openrouter") {
+			return FriendlyError{"OpenRouter key not found — export the env var named by openrouter_api_key_env.", msg}
+		}
+		return FriendlyError{"OpenCode Go API key not found — set the env var named by api_key_env.", msg}
 	case strings.Contains(lower, "empty choices"):
 		return FriendlyError{"The model returned an empty reply. Try rephrasing or resending.", msg}
 	case strings.Contains(lower, "stopped after"):
@@ -61,7 +64,7 @@ func friendlyError(err error) FriendlyError {
 		if te.Transport == "openrouter" {
 			switch te.Status {
 			case 401:
-				fe.Title = "OpenRouter rejected the key. Check the env var named by openrouter_api_key_env (restart the TUI after exporting it)."
+				fe.Title = "OpenRouter rejected the key. Check the env var named by openrouter_api_key_env."
 				// Provisioning/management keys administer keys and
 				// guardrails but can't run inference: OpenRouter answers
 				// them on /chat/completions with 401 "User not found"

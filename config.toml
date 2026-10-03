@@ -1,6 +1,6 @@
 # valen harness config. See SPEC.md for the full schema.
 
-model = "openrouter/meta/muse-spark-1.3-contributor"
+model = "openrouter/anthropic/claude-sonnet-5.5"
 # thinking = "high"            # optional reasoning level; omit for provider default.
                                # Per-model (/effort picker, ctrl+t cycles low→high, wraps):
                                # muse-spark: minimal, low, medium, high, xhigh.
@@ -15,12 +15,13 @@ thinking = "high"
 tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "grep"]
 base_url = "https://opencode.ai/zen/go/v1"
 api_key_env = "OPENCODE_GO_API_KEY"
-# openrouter_api_key_env = "OPENROUTER_API_KEY"  # optional second provider:
-#   when this env var is set (export OPENROUTER_API_KEY=...), /model also
-#   lists OpenRouter models as openrouter/<vendor>/<model> (recent flagships
-#   in the fallback when offline). Served via OpenRouter's OpenAI-compatible
-#   chat endpoint with reasoning_effort for thinking; no Go session header
-#   is sent there. Unset (or empty) means Go-only.
+# openrouter_api_key_env = "OPENROUTER_API_KEY"  # second provider (no boot crash when unset):
+#   /model always lists OpenRouter models as openrouter/<vendor>/<model>
+#   (recent flagships in the fallback when offline/unkeyed), served via
+#   OpenRouter's OpenAI-compatible chat endpoint with reasoning_effort for
+#   thinking and no Go session header. Picking or sending with one and no
+#   key reports "OpenRouter key not found" (Go models report "OpenCode Go
+#   API key not found" the same way).
 # session_id = "ses-stable-id"   # optional, generated per run when omitted
 
 # system prompt: omit to use the harness prompt files (per model family —
@@ -50,7 +51,7 @@ api_key_env = "OPENCODE_GO_API_KEY"
                                 # explicit values are honored without a floor.
 
 [compaction]                    # summary-mode, send-side only (disk JSONL stays lossless).
-model = "openrouter/meta/muse-spark-1.3-contributor"
+model = "openrouter/anthropic/claude-sonnet-5.5"
 thinking = "high"
 # auto = true                     # prune older outputs; protect latest 2 user turns + 40k older tokens; summarize older turns.
 # keep_tokens = 15000             # soft whole-turn tail target; entire current turn always kept; threshold keep*3.

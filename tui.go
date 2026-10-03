@@ -675,9 +675,14 @@ func (m *tuiModel) flushStream() {
 // when a fetch is already in flight (the minute tick and post-turn refresh
 // would otherwise overlap on slow networks).
 func (m *tuiModel) fetchUsageCmd() tea.Cmd {
-	if m.httpClient == nil || m.apiKey == "" || m.usageInflight {
+	if m.httpClient == nil || m.usageInflight {
 		return nil
 	}
+	key := effectiveGoKey(m.cfg, m.apiKey)
+	if key == "" {
+		return nil
+	}
+	m.apiKey = key
 	m.usageInflight = true
 	base := m.ctx
 	if base == nil {
@@ -872,6 +877,20 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	if m.busy {
 		m.notice = "Working… press esc to cancel."
 		m.noticeErr = false
+		return nil
+	}
+	// Refresh from the live env so an export after boot is picked up, then
+	// fail fast with a notice (not a crash) when the current model has no key.
+	m.apiKey = effectiveGoKey(m.cfg, m.apiKey)
+	m.cfg.OpenRouterKey = effectiveOpenRouterKey(m.cfg)
+	if err := missingKeyError(m.cfg, m.apiKey); err != nil {
+		if modelProvider(m.cfg.Model) == ProviderOpenRouter {
+			m.notice = fmt.Sprintf("OpenRouter key not found — export %s=... to use %s.", openRouterKeyEnvName(m.cfg), m.cfg.Model)
+		} else {
+			m.notice = fmt.Sprintf("OpenCode Go API key not found — set %s=... to use %s.", goKeyEnvName(m.cfg), m.cfg.Model)
+		}
+		m.noticeErr = true
+		m.refreshViewport()
 		return nil
 	}
 	hist := append(append([]openai.ChatCompletionMessage(nil), m.history...), openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: trimmed})
@@ -1073,9 +1092,9 @@ func (m *tuiModel) startFreshSession() {
 	// clients around the new ID; otherwise turns would keep attributing
 	// to the old session server-side.
 	m.httpClient = newHTTPClient(m.cfg)
-	if m.apiKey != "" {
-		m.client = newClient(m.cfg, m.apiKey)
-	}
+	m.apiKey = effectiveGoKey(m.cfg, m.apiKey)
+	m.cfg.OpenRouterKey = effectiveOpenRouterKey(m.cfg)
+	m.client = newClient(m.cfg, m.apiKey)
 	m.pendingPrompt = ""
 	m.pendingTools = nil
 	m.pendingText = ""
@@ -1132,30 +1151,41 @@ func (m *tuiModel) compactCmd() tea.Cmd {
 	}
 }
 
-// openModelPicker fetches the live catalogs off the UI thread: always Go,
-// plus OpenRouter when its key is configured (models arrive stored with
-// their provider prefix). With a filter, an exact or unique-substring match
-// switches directly; otherwise the filtered picker opens.
+// openModelPicker fetches the live catalogs off the UI thread: Go plus
+// OpenRouter (models arrive stored with their provider prefix). Both are
+// listed even without keys — fallbacks cover unreachable catalogs — so a
+// missing key surfaces on pick/send, never as a boot crash. With a filter,
+// an exact or unique-substring match switches directly; otherwise the
+// filtered picker opens.
 func (m *tuiModel) openModelPicker(filter string) tea.Cmd {
 	m.notice = "Loading models…"
 	m.noticeErr = false
 	m.modelFilter = filter
+	cfg := m.cfg
+	goKey := effectiveGoKey(cfg, m.apiKey)
+	orKey := effectiveOpenRouterKey(cfg)
 	client := m.client
-	orKey := m.cfg.OpenRouterKey
+	if client == nil && goKey != "" {
+		client = newClient(cfg, goKey)
+	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		ids, err := fetchGoModels(ctx, client)
+		var ids []string
+		var err error
+		if client != nil {
+			ids, err = fetchGoModels(ctx, client)
+		} else {
+			err = fmt.Errorf("no client")
+		}
 		if err != nil || len(ids) == 0 {
 			ids = append([]string(nil), fallbackGoModels...)
 		}
-		if orKey != "" {
-			orIDs, orErr := fetchOpenRouterModels(ctx, nil, openRouterBaseURL, orKey)
-			if orErr != nil || len(orIDs) == 0 {
-				orIDs = prefixedOpenRouterFallback()
-			}
-			ids = append(ids, orIDs...)
+		orIDs, orErr := fetchOpenRouterModels(ctx, nil, openRouterBaseURL, orKey)
+		if orErr != nil || len(orIDs) == 0 {
+			orIDs = prefixedOpenRouterFallback()
 		}
+		ids = append(ids, orIDs...)
 		return modelsLoadedMsg{ids: ids, err: err, filter: filter}
 	}
 }
@@ -1176,7 +1206,9 @@ func (m *tuiModel) openEffortPicker() {
 // applyModelSwitch moves the session to id, resets an incompatible thinking
 // level, and persists both to config.toml so the choice sticks. Unknown
 // models probe the provider in the background: a bogus effort 400s with the
-// valid list, which is cached on disk for ctrl+t.
+// valid list, which is cached on disk for ctrl+t. A model whose provider key
+// is missing still switches (so keyless boots can browse), but the notice
+// says which key is missing instead of pretending the switch is ready.
 func (m *tuiModel) applyModelSwitch(id string) {
 	prevThinking := m.cfg.Thinking
 	m.cfg.Model = id
@@ -1205,9 +1237,17 @@ func (m *tuiModel) applyModelSwitch(id string) {
 		m.notice = msg + " (session only)"
 		m.noticeErr = false
 	}
+	if err := missingKeyError(m.cfg, m.apiKey); err != nil {
+		if modelProvider(id) == ProviderOpenRouter {
+			m.notice = fmt.Sprintf("Switched to %s. OpenRouter key not found — export %s=... to use it.", id, openRouterKeyEnvName(m.cfg))
+		} else {
+			m.notice = fmt.Sprintf("Switched to %s. OpenCode Go API key not found — set %s=... to use it.", id, goKeyEnvName(m.cfg))
+		}
+		m.noticeErr = true
+	}
 	m.show(viewChat)
 	if _, ok := cachedThinkingLevels(id); !ok {
-		if _, ok := lookupKnownLevels(modelBaseID(id)); !ok && m.httpClient != nil && m.apiKey != "" {
+		if _, ok := lookupKnownLevels(modelBaseID(id)); !ok && m.httpClient != nil && missingKeyError(m.cfg, m.apiKey) == nil {
 			cfg, apiKey, hc := m.cfg, m.apiKey, m.httpClient
 			base := m.ctx
 			if base == nil {
@@ -1459,7 +1499,19 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		ids := msg.ids
 		if msg.err != nil || len(ids) == 0 {
-			ids = append([]string(nil), fallbackGoModels...)
+			// Go live list failed: keep any OpenRouter rows already merged
+			// (live or fallback) and backfill Go with the curated list, so
+			// keyless boots still browse both providers.
+			var orKeep []string
+			for _, id := range msg.ids {
+				if modelProvider(id) == ProviderOpenRouter {
+					orKeep = append(orKeep, id)
+				}
+			}
+			if len(orKeep) == 0 {
+				orKeep = prefixedOpenRouterFallback()
+			}
+			ids = append(append([]string(nil), fallbackGoModels...), orKeep...)
 			m.notice = "Live model list unreachable — showing known models."
 			m.noticeErr = false
 		} else {
@@ -3043,9 +3095,9 @@ func (m *tuiModel) resumeSessionPath(path string) {
 	m.session = &Session{Path: path, ID: strings.TrimSuffix(filepath.Base(path), ".jsonl"), Turns: turns}
 	m.cfg.SessionID = m.session.ID
 	m.httpClient = newHTTPClient(m.cfg)
-	if m.apiKey != "" {
-		m.client = newClient(m.cfg, m.apiKey)
-	}
+	m.apiKey = effectiveGoKey(m.cfg, m.apiKey)
+	m.cfg.OpenRouterKey = effectiveOpenRouterKey(m.cfg)
+	m.client = newClient(m.cfg, m.apiKey)
 	for _, t := range turns {
 		m.session.TotalUsage.Prompt += t.Usage.Prompt
 		m.session.TotalUsage.Completion += t.Usage.Completion
@@ -3258,7 +3310,7 @@ Commands
    /help /history /sessions (/resume) /tools /errors /think /save /clear /new /plan /quit
    /compact (/summarize) — prune + summarize older history with the cheap model; disk log untouched
    /plan — toggle plan mode: read-only investigation, the reply is the plan (write/edit/shell blocked, task explore-only)
-   /model [filter] — list models with provider prefixes (go/…, openrouter/… when keyed) and switch (ctrl+p/ctrl+m does the same)
+   /model [filter] — list models with provider prefixes (go/…, openrouter/…) and switch (ctrl+p/ctrl+m does the same); missing keys report on pick/send, never block boot
   /effort [level] — thinking level for the current model (/thinking is an alias)
 
 When the model calls AskUserQuestion: ↑↓/jk move · enter select · space toggles multi-select · type your own when needed · enter confirms.
@@ -3313,7 +3365,22 @@ func runTUI(ctx context.Context, cfg Config, cfgPath string, client *openai.Clie
 	m := newTUIModel(cfg, client, registry, session)
 	m.ctx = ctx
 	m.cfgPath = cfgPath
-	m.apiKey = apiKey
+	m.apiKey = effectiveGoKey(cfg, apiKey)
+	m.cfg.OpenRouterKey = effectiveOpenRouterKey(cfg)
+	if m.apiKey == "" && m.client == nil {
+		m.client = newClient(m.cfg, "")
+	}
+	// Keyless boots still open: explain immediately which key the
+	// configured model needs so /model has context before first send.
+	if err := missingKeyError(m.cfg, m.apiKey); err != nil {
+		if modelProvider(m.cfg.Model) == ProviderOpenRouter {
+			m.notice = fmt.Sprintf("OpenRouter key not found — export %s=... to use %s. /model still lists both providers.", openRouterKeyEnvName(m.cfg), m.cfg.Model)
+		} else {
+			m.notice = fmt.Sprintf("OpenCode Go API key not found — set %s=... to use %s. /model still lists both providers.", goKeyEnvName(m.cfg), m.cfg.Model)
+		}
+		m.noticeErr = true
+		m.refreshViewport()
+	}
 	m.httpClient = newHTTPClient(cfg)
 	askPrompter = m.askPrompt
 	// Push Kitty progressive enhancement, disambiguate mode only: shift+enter
