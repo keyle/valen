@@ -55,8 +55,6 @@ var (
 	toolLineStyle = lipgloss.NewStyle().Foreground(mkCyan).PaddingLeft(2)
 	toolErrStyle  = lipgloss.NewStyle().Foreground(mkPink).PaddingLeft(2).Bold(true)
 	toolDimStyle  = lipgloss.NewStyle().Foreground(mkComment).PaddingLeft(2)
-	diffDelStyle  = lipgloss.NewStyle().Foreground(mkPink).PaddingLeft(2)
-	diffAddStyle  = lipgloss.NewStyle().Foreground(mkGreen).PaddingLeft(2)
 	asstHeadStyle = lipgloss.NewStyle().Bold(true).Foreground(mkGreen)
 	asstBodyStyle = lipgloss.NewStyle().Foreground(mkFg).PaddingLeft(2)
 	errorTitleSty = lipgloss.NewStyle().Bold(true).Foreground(mkPink).
@@ -2807,11 +2805,11 @@ func (m *tuiModel) renderToolLine(tr ToolRecord) string {
 	if tr.Name == "edit" {
 		if del, add, ok := editDiffLines(tr.Args, maxText); ok {
 			out := toolLineStyle.Width(cw).Render(breakLongWords(label, cw-2))
-			for _, ln := range del {
-				out += "\n" + diffDelStyle.Width(cw).Render(breakLongWords(ln, cw-2))
+			for _, ln := range highlightDiffRows(diffPath(tr.Args), del, cw) {
+				out += "\n" + ln
 			}
-			for _, ln := range add {
-				out += "\n" + diffAddStyle.Width(cw).Render(breakLongWords(ln, cw-2))
+			for _, ln := range highlightDiffRows(diffPath(tr.Args), add, cw) {
+				out += "\n" + ln
 			}
 			return out
 		}
@@ -2819,8 +2817,8 @@ func (m *tuiModel) renderToolLine(tr ToolRecord) string {
 	if tr.Name == "write" {
 		if lines, ok := writeDiffLines(tr.Args, maxText); ok {
 			out := toolLineStyle.Width(cw).Render(breakLongWords(label, cw-2))
-			for _, ln := range lines {
-				out += "\n" + diffAddStyle.Width(cw).Render(breakLongWords(ln, cw-2))
+			for _, ln := range highlightDiffRows(diffPath(tr.Args), lines, cw) {
+				out += "\n" + ln
 			}
 			return out
 		}
@@ -2862,11 +2860,11 @@ func (m *tuiModel) renderPendingTool(t pendingTool) string {
 	if t.name == "edit" {
 		if del, add, ok := editDiffLines(t.args, maxText); ok {
 			out := toolLineStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("%s  %s  %s · running", m.spinner.View(), t.name, summary), cw-2))
-			for _, ln := range del {
-				out += "\n" + diffDelStyle.Width(cw).Render(breakLongWords(ln, cw-2))
+			for _, ln := range highlightDiffRows(diffPath(t.args), del, cw) {
+				out += "\n" + ln
 			}
-			for _, ln := range add {
-				out += "\n" + diffAddStyle.Width(cw).Render(breakLongWords(ln, cw-2))
+			for _, ln := range highlightDiffRows(diffPath(t.args), add, cw) {
+				out += "\n" + ln
 			}
 			return out
 		}
@@ -2874,8 +2872,8 @@ func (m *tuiModel) renderPendingTool(t pendingTool) string {
 	if t.name == "write" {
 		if lines, ok := writeDiffLines(t.args, maxText); ok {
 			out := toolLineStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("%s  %s  %s · running", m.spinner.View(), t.name, summary), cw-2))
-			for _, ln := range lines {
-				out += "\n" + diffAddStyle.Width(cw).Render(breakLongWords(ln, cw-2))
+			for _, ln := range highlightDiffRows(diffPath(t.args), lines, cw) {
+				out += "\n" + ln
 			}
 			return out
 		}
