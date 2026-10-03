@@ -403,8 +403,19 @@ func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session 
 	return m
 }
 
+// Kitty keyboard protocol: push/pop "disambiguate escape codes" on the
+// current screen's stack.
+const (
+	kittyKeysPush = "\x1b[>1u"
+	kittyKeysPop  = "\x1b[<u"
+)
+
 func (m *tuiModel) Init() tea.Cmd {
 	var cmds []tea.Cmd
+	cmds = append(cmds, func() tea.Msg {
+		fmt.Fprint(os.Stdout, kittyKeysPush)
+		return nil
+	})
 	if inputBlink(m.cfg) {
 		cmds = append(cmds, textarea.Blink)
 	}
@@ -3383,15 +3394,19 @@ func runTUI(ctx context.Context, cfg Config, cfgPath string, client *openai.Clie
 	}
 	m.httpClient = newHTTPClient(cfg)
 	askPrompter = m.askPrompt
-	// Push Kitty progressive enhancement, disambiguate mode only: shift+enter
-	// then arrives as CSI 13;2u instead of plain enter (decoded in Update),
-	// while unmodified enter still sends CR and submits as before. Terminals
-	// without support ignore the private CSI; pop restores on exit. runTUI
-	// only runs on a TTY (see the isTTY gate in main), so this never lands
-	// in a pipe.
-	fmt.Fprint(os.Stdout, "\x1b[>1u")
-	defer fmt.Fprint(os.Stdout, "\x1b[<u")
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	// Kitty progressive enhancement (disambiguate only): shift+enter then
+	// arrives as CSI 13;2u instead of plain enter (decoded in Update), while
+	// unmodified enter still sends CR. The keyboard-mode stack is per screen,
+	// so it must be pushed AFTER bubbletea enters the alt screen (Init runs
+	// post-entry) and popped before it leaves (QuitMsg filter). Terminals
+	// without support ignore the private CSI. runTUI only runs on a TTY.
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion(),
+		tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
+			if _, ok := msg.(tea.QuitMsg); ok {
+				fmt.Fprint(os.Stdout, kittyKeysPop)
+			}
+			return msg
+		}))
 	m.prog = p
 	_, err = p.Run()
 	return err
