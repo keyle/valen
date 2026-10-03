@@ -115,8 +115,9 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   mouse wheel scrolls the transcript, which pauses autoscroll until scrolled
   back to the bottom (a new submit or committed turn re-pins). Split mouse
   reports misparsed as key runes (rapid wheeling across TTY reads) are
-  swallowed before the input box, so `[<…M` fragments never land in the
-  draft; genuine wheel input still arrives as mouse events.
+  held for reassembly and never typed: a completed `[<…M` report drops,
+  anything else releases as typing; genuine wheel input still arrives as
+  mouse events. Only pasted or typed chars may reach the input box.
 - Chatbox chrome is configurable via `[input]` in `config.toml`: `blink`
   (default `true`; `false` parks the block cursor steady with no blink
   timer) and `height` (default `3` box lines; the transcript viewport

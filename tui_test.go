@@ -1389,8 +1389,10 @@ func TestTUIPgUpPausesAutoscroll(t *testing.T) {
 }
 
 // TestTUIWheelDebrisSwallowed: split SGR mouse reports misparsed as key
-// runes (rapid wheeling across TTY reads) must not land in the input box,
-// while real typing — including lookalikes — still inserts.
+// runes (rapid wheeling across TTY reads) must not land in the input box.
+// Ambiguous fragments are held for reassembly — never inserted — while
+// real typing (including lookalikes) still inserts, immediately when it
+// cannot be mouse, or after the hold flushes.
 func TestTUIWheelDebrisSwallowed(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	m.viewport.Width = 80
@@ -1398,15 +1400,11 @@ func TestTUIWheelDebrisSwallowed(t *testing.T) {
 	key := func(s string, alt, paste bool) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s), Alt: alt, Paste: paste}
 	}
+	// Whole reports arriving as one KeyMsg drop immediately.
 	for _, debris := range []tea.KeyMsg{
 		key("[<65;69;42M", false, false),
 		key("<65;69;42M", false, false),
 		key("<65;69;42m", false, false),
-		key("<65;", false, false),
-		key("[<65", false, false),
-		key("69;42M", false, false),
-		key(";69;42M", false, false),
-		key("[", true, false),
 	} {
 		before := m.input.Value()
 		_, _ = m.Update(debris)
@@ -1414,23 +1412,82 @@ func TestTUIWheelDebrisSwallowed(t *testing.T) {
 			t.Fatalf("debris %q leaked into input: %q", string(debris.Runes), got)
 		}
 	}
+	if len(m.mouseHold) != 0 {
+		t.Fatalf("dropped reports left hold state: %q", m.mouseHoldText())
+	}
 
-	// Lookalike typing still inserts: hearts, brackets, counts, ratios,
-	// arrows, and even pasted mouse-shaped text.
+	// A report split across reads reassembles and drops: feed it in
+	// pieces, including single chars that match typing exactly.
+	for _, frag := range []tea.KeyMsg{
+		key("[", true, false),
+		key("<64", false, false),
+		key(";35", false, false),
+		key(";12M", false, false),
+	} {
+		_, _ = m.Update(frag)
+		if got := m.input.Value(); got != "" {
+			t.Fatalf("split fragment %q leaked into input: %q", string(frag.Runes), got)
+		}
+	}
+	if len(m.mouseHold) != 0 {
+		t.Fatalf("completed split report left hold state: %q", m.mouseHoldText())
+	}
+	// Stale flush timers after a drop are no-ops.
+	_, _ = m.Update(mouseHoldFlushMsg{gen: m.mouseHoldGen})
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("flush after drop inserted: %q", got)
+	}
+
+	// Byte-wise split: every fragment is a plausible typed char, yet the
+	// reassembled report still drops.
+	m2 := newTestModel(t, testConfig("https://unused"))
+	for _, s := range []string{"<", "6", "4", ";", "3", "5", ";", "1", "2", "M"} {
+		_, _ = m2.Update(key(s, false, false))
+	}
+	if got := m2.input.Value(); got != "" {
+		t.Fatalf("byte-wise report leaked: %q", got)
+	}
+
+	// Typing that cannot be mouse inserts immediately: ratios, counts,
+	// arrows. A bare "[" is a valid report prefix, so it waits for the
+	// flush like "<3".
 	m.input.SetValue("")
 	for _, legit := range []tea.KeyMsg{
-		key("<3", false, false),
-		key("[", false, false),
-		key("42M", false, false),
 		key("1;2", false, false),
+		key("42M", false, false),
 		key("<-", false, false),
-		key("[<65;69;42M", false, true),
+		key("[", false, false),
+		key("<3", false, false),
 	} {
 		_, _ = m.Update(legit)
 	}
-	for _, want := range []string{"<3", "[", "42M", "1;2", "<-", "[<65;69;42M"} {
+	for _, want := range []string{"1;2", "42M", "<-"} {
 		if !strings.Contains(m.input.Value(), want) {
 			t.Fatalf("legit typing %q lost, input=%q", want, m.input.Value())
 		}
+	}
+	if strings.Contains(m.input.Value(), "<3") {
+		t.Fatalf("held prefix should not insert early, input=%q", m.input.Value())
+	}
+	_, _ = m.Update(mouseHoldFlushMsg{gen: m.mouseHoldGen})
+	for _, want := range []string{"[", "<3"} {
+		if !strings.Contains(m.input.Value(), want) {
+			t.Fatalf("held typing %q lost after flush, input=%q", want, m.input.Value())
+		}
+	}
+
+	// Pasted mouse-shaped text bypasses the hold and inserts at once.
+	m.input.SetValue("")
+	_, _ = m.Update(key("[<65;69;42M", false, true))
+	if !strings.Contains(m.input.Value(), "[<65;69;42M") {
+		t.Fatalf("pasted text lost, input=%q", m.input.Value())
+	}
+
+	// Typing after held fragments flushes them first, preserving order.
+	m.input.SetValue("")
+	_, _ = m.Update(key("<", false, false))
+	_, _ = m.Update(key("a", false, false))
+	if got := m.input.Value(); got != "<a" {
+		t.Fatalf("order broke, input=%q", got)
 	}
 }

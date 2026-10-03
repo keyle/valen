@@ -336,6 +336,15 @@ type tuiModel struct {
 	effortLevels []string
 	ask          *askState
 
+	// mouseHold buffers ambiguous SGR mouse-report fragments (split wheel
+	// reports arrive as KeyRunes, indistinguishable from typing on
+	// content alone). Held runes are never inserted: a reassembled
+	// report is dropped, anything else is released as typing on
+	// timeout or on the next unambiguous key. mouseHoldGen invalidates
+	// stale flush timers.
+	mouseHold    []tea.KeyMsg
+	mouseHoldGen int
+
 	width  int
 	height int
 	ready  bool
@@ -1308,6 +1317,15 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case mouseHoldFlushMsg:
+		// Ambiguous fragments that never completed a mouse report were
+		// typed text: release them. A completed report is already
+		// dropped at arrival, so anything still held here is typing.
+		if msg.gen == m.mouseHoldGen {
+			m.flushMouseHold()
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -1624,36 +1642,133 @@ func enterCSIMod(msg tea.Msg) (int, bool) {
 	return parseEnterCSI(v.Bytes())
 }
 
-// mouseDebrisRe matches KeyRunes fragments of a split SGR mouse report.
-// Rapid wheeling can split one ESC[<Cb;Cx;CyM report across TTY reads;
-// bubbletea then misparses the pieces as key runes ("[<65;69;42M"),
-// which would otherwise land in the input box. Real wheel scrolling
-// still arrives as tea.MouseMsg and is untouched (see Update).
+// Split SGR mouse reports (ESC[<Cb;Cx;CyM, one per wheel tick) can land
+// as KeyRunes when a report straddles two TTY reads; genuine wheel input
+// still arrives as tea.MouseMsg and is untouched (see Update). Fragments
+// are printable ([, <, digits, ;, M) so no content blacklist can catch
+// them without also eating typing — instead, ambiguous fragments are
+// held briefly and reassembled: a completed report is dropped, anything
+// else is released as typing. Pasted text never participates: pastes
+// arrive with Paste set and bypass the hold entirely.
 //
-// The three arms cover: a "[" left over from the ESC consumed as alt
-// plus any digit prefix; a bare "<Cb;…" prefix (requiring ";" or M so
-// "<3" hearts still type); and a numeric tail (requiring a trailing M
-// so "42M" counts and "1;2" ratios still type). Pasted text never
-// matches: pastes arrive with Paste set and are exempt in isMouseDebris.
-var mouseDebrisRe = regexp.MustCompile(`^\[<\d[0-9;]*[Mm]?$|^<\d[0-9;]*[;Mm][0-9;Mm]*$|^;?[0-9]+;[0-9;]*[Mm]$`)
+// sgrReportComplete matches one reassembled report (button/cell/release);
+// sgrReportPrefix matches its strict prefixes, the only shapes worth
+// holding. Anything else (digits without "<", stray M, overlong runs)
+// can never become a report and types immediately.
+var (
+	sgrReportCompleteRe = regexp.MustCompile(`^\[?<\d+;\d+;\d+[Mm]$`)
+	sgrReportPrefixRe   = regexp.MustCompile(`^\[?$|^\[?<\d{0,6};?\d{0,6};?\d{0,6}$`)
+)
 
-// isMouseDebris reports split-mouse-report runes that must never reach
-// the input box (see mouseDebrisRe).
-func isMouseDebris(msg tea.KeyMsg) bool {
-	if msg.Type != tea.KeyRunes || msg.Paste || len(msg.Runes) == 0 {
-		return false
+// mouseHoldDelay bounds how long ambiguous fragments stay invisible while
+// waiting for the rest of a possibly split report.
+const mouseHoldDelay = 50 * time.Millisecond
+
+// mouseHoldCap bounds the hold buffer: a real report is under 20 bytes,
+// so anything longer is typing, not mouse.
+const mouseHoldCap = 24
+
+// mouseHoldFlushMsg releases held fragments as typing when no report
+// completed in time. gen drops stale timers after newer holds.
+type mouseHoldFlushMsg struct {
+	gen int
+}
+
+// mouseFragmentText reports whether msg could be part of a split SGR
+// report, returning its ESC-stripped text. Only plain single-stream
+// runes qualify: pastes, alt combos (except the lone "[" left when ESC
+// splits off), and special keys never do.
+func mouseFragmentText(msg tea.KeyMsg) (string, bool) {
+	if msg.Paste || msg.Type != tea.KeyRunes || len(msg.Runes) == 0 {
+		return "", false
 	}
-	if msg.Alt && len(msg.Runes) == 1 && msg.Runes[0] == '[' {
-		return true
+	if msg.Alt {
+		if len(msg.Runes) == 1 && msg.Runes[0] == '[' {
+			return "[", true
+		}
+		return "", false
 	}
-	return mouseDebrisRe.MatchString(string(msg.Runes))
+	for _, r := range msg.Runes {
+		switch r {
+		case '[', '<', ';', 'M', 'm', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		default:
+			return "", false
+		}
+	}
+	return string(msg.Runes), true
+}
+
+func (m *tuiModel) mouseHoldText() string {
+	var b strings.Builder
+	for _, h := range m.mouseHold {
+		if t, ok := mouseFragmentText(h); ok {
+			b.WriteString(t)
+		}
+	}
+	return b.String()
+}
+
+// flushMouseHold releases held fragments to their sink, replaying each
+// exactly as the normal path would: the chat textarea in viewChat, the
+// ask free-text box in its own phase. Overlays and pick/review ignore
+// typing, so held runes there are dropped like typed ones would be.
+func (m *tuiModel) flushMouseHold() {
+	held := m.mouseHold
+	m.mouseHold = nil
+	if len(held) == 0 {
+		return
+	}
+	if m.ask != nil && m.ask.phase == "own" {
+		for _, h := range held {
+			if s := h.String(); len(s) == 1 {
+				m.ask.own += s
+			}
+		}
+		return
+	}
+	if m.mode == viewChat && m.ask == nil {
+		for _, h := range held {
+			m.input, _ = m.input.Update(h)
+		}
+	}
+}
+
+// filterMouseFragment holds a possible split-report fragment instead of
+// typing it. It reports consumed=true when the key was held or dropped
+// (caller returns); consumed=false means the hold was flushed (or empty)
+// and the key must flow through the normal path.
+func (m *tuiModel) filterMouseFragment(msg tea.KeyMsg) (tea.Cmd, bool) {
+	frag, ok := mouseFragmentText(msg)
+	if !ok {
+		m.flushMouseHold()
+		return nil, false
+	}
+	combined := m.mouseHoldText() + frag
+	if sgrReportCompleteRe.MatchString(combined) {
+		// A split report reassembled: drop it all, it was never typed.
+		m.mouseHold = nil
+		m.mouseHoldGen++
+		return nil, true
+	}
+	if len(combined) > mouseHoldCap || !sgrReportPrefixRe.MatchString(combined) {
+		// Can never become a mouse report: release as typing now.
+		m.flushMouseHold()
+		return nil, false
+	}
+	m.mouseHold = append(m.mouseHold, msg)
+	m.mouseHoldGen++
+	gen := m.mouseHoldGen
+	return tea.Tick(mouseHoldDelay, func(time.Time) tea.Msg {
+		return mouseHoldFlushMsg{gen: gen}
+	}), true
 }
 
 func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Split wheel-mouse reports misparsed as runes must never reach the
-	// input box; genuine wheel input arrives as tea.MouseMsg (see Update).
-	if isMouseDebris(msg) {
-		return m, nil
+	// Possible split wheel-mouse reports are held for reassembly, never
+	// typed: only pasted or typed chars may reach the input box. Genuine
+	// wheel input arrives as tea.MouseMsg (see Update).
+	if cmd, consumed := m.filterMouseFragment(msg); consumed {
+		return m, cmd
 	}
 	s := msg.String()
 

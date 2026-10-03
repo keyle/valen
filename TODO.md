@@ -2,6 +2,10 @@
 
 ## Minor, UX
 
+- [ ] make the scrollback content cyan gray, and the response content blue.
+- [ ] make the text selectable (regression) in both chatbox and scrollback content.
+- [ ] the diff shown at edit, I like this, but we need to show more than 5 lines, maybe 8.
+- [ ] the diff shown at edit, would be best if it were not simply red and green, but showing syntax colouring (explore available go packages)
 - [x] thinking messages (white) in scrollback would benefit from a timestamp of when they happen, e.g. message (1m3s) <-- when they occurred, 'persisted' on the view when the next thinking reponse comes in.
 - [ ] the content of the chat scrollback is not all aligned. Some have a space in front, or two.
 - [x] ability to paste a paragraph

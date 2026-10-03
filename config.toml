@@ -11,7 +11,7 @@ model = "muse-spark-1.3-contributor"
                                # Unknown models learn from the provider 400 and
                                # cache to $XDG_DATA_HOME/valen/thinking_levels.json.
                                # Switch live with /model (ctrl+p) and /effort — saved back here.
-thinking = "high"
+thinking = "xhigh"
 tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "grep"]
 base_url = "https://opencode.ai/zen/go/v1"
 api_key_env = "OPENCODE_GO_API_KEY"
@@ -45,7 +45,7 @@ api_key_env = "OPENCODE_GO_API_KEY"
 
 [compaction]                    # summary-mode, send-side only (disk JSONL stays lossless).
 model = "muse-spark-1.3-contributor"
-thinking = "medium"              # independent of main high effort; lower synchronous summary effort.
+thinking = "xhigh"
 # auto = true                     # prune older outputs; protect latest 2 user turns + 40k older tokens; summarize older turns.
 # keep_tokens = 15000             # soft whole-turn tail target; entire current turn always kept; threshold keep*3.
 # buffer = 30000                  # headroom below max_context_tokens; default 10% of the budget.
