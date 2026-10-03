@@ -72,6 +72,25 @@ func TestChatStreamsTextDeltas(t *testing.T) {
 	}
 }
 
+func TestChatRetriesContentFilterOnce(t *testing.T) {
+	filtered := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"par\"},\"finish_reason\":\"content_filter\"}]}\n\ndata: [DONE]\n\n"
+	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}
+
+	var bodies []string
+	srv := sseServer(t, &bodies, filtered, chatTextStream("ok"))
+	reply, _, err := runChatTurn(context.Background(), newTestConfig(srv.URL), nil, "key", srv.Client(), NewRegistry(), &history, nil)
+	if err != nil || reply.Content != "ok" || len(bodies) != 2 {
+		t.Fatalf("reply=%q err=%v calls=%d", reply.Content, err, len(bodies))
+	}
+
+	bodies = nil
+	srv = sseServer(t, &bodies, filtered)
+	_, _, err = runChatTurn(context.Background(), newTestConfig(srv.URL), nil, "key", srv.Client(), NewRegistry(), &history, nil)
+	if err == nil || !strings.Contains(err.Error(), "content_filter") || len(bodies) != 2 {
+		t.Fatalf("err=%v calls=%d, want error after exactly 2 calls", err, len(bodies))
+	}
+}
+
 func TestChatStreamsToolCalls(t *testing.T) {
 	toolRound := "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"type\":\"function\",\"function\":{\"name\":\"shell\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":" + jsonQuote(`{"command":"echo hi"}`) + "}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"
 	var bodies []string

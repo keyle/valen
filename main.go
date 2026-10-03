@@ -910,14 +910,23 @@ func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey 
 			req.Temperature = *cfg.Temperature
 		}
 		applyThinkingToRequest(&req, cfg.Model, cfg.Thinking)
-		if stream {
-			msg, usage, err := chatRoundStream(ctx, cfg, apiKey, hc, req, onEvent)
-			if !isStreamRejected(err) {
-				return msg, usage, err
+		round := func() (openai.ChatCompletionMessage, openai.Usage, error) {
+			if stream {
+				msg, usage, err := chatRoundStream(ctx, cfg, apiKey, hc, req, onEvent)
+				if !isStreamRejected(err) {
+					return msg, usage, err
+				}
+				stream = false
 			}
-			stream = false
+			return chatRoundOnce(ctx, cfg, apiKey, hc, req)
 		}
-		return chatRoundOnce(ctx, cfg, apiKey, hc, req)
+		msg, usage, err := round()
+		if errors.Is(err, errContentFilter) && ctx.Err() == nil {
+			// Provider filters are often false positives and non-deterministic;
+			// retry the round once. Nothing was executed from the partial reply.
+			msg, usage, err = round()
+		}
+		return msg, usage, err
 	})
 }
 
@@ -990,10 +999,15 @@ func chatRoundOnce(ctx context.Context, cfg Config, apiKey string, hc *http.Clie
 	return msg, out.Usage, validateModelReply(msg)
 }
 
+// errContentFilter marks a round the provider cut off with a content filter.
+var errContentFilter = errors.New("content filter")
+
 func chatFinishError(reason string) error {
 	switch reason {
 	case "", "stop", "tool_calls", "function_call":
 		return nil
+	case "content_filter":
+		return fmt.Errorf("api: chat: incomplete response (%s): %w", reason, errContentFilter)
 	default:
 		return fmt.Errorf("api: chat: incomplete response (%s)", reason)
 	}
