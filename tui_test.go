@@ -1864,3 +1864,23 @@ func TestTUIColonQQuits(t *testing.T) {
 		t.Fatal("expected QuitMsg")
 	}
 }
+
+// TestTUIRoundsStartNewParagraph: text streamed by consecutive model rounds
+// (separated by tool calls) must not glue into one paragraph.
+func TestTUIRoundsStartNewParagraph(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	for _, round := range []string{"first.", "second.", "third."} {
+		_, _ = m.Update(toolEventMsg{kind: "round_start"})
+		_, _ = m.Update(toolEventMsg{kind: "text_delta", text: round})
+		_, _ = m.Update(toolEventMsg{kind: "thinking_delta", text: "t " + round})
+	}
+	if m.pendingText != "first.\n\nsecond.\n\nthird." {
+		t.Fatalf("rounds glued: %q", m.pendingText)
+	}
+	if m.pendingThinking != "t first.\n\nt second.\n\nt third." {
+		t.Fatalf("thinking rounds: %q", m.pendingThinking)
+	}
+	if roundBreak("a\n") != "a\n\n" || roundBreak("a\n\n") != "a\n\n" || roundBreak("") != "" {
+		t.Fatal("roundBreak edge cases")
+	}
+}

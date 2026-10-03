@@ -949,6 +949,9 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 		thinkIdx := 0
 		onEvent := func(ev Event) {
 			switch ev.Kind {
+			case "round_start":
+				answer = roundBreak(answer)
+				thinking = roundBreak(thinking)
 			case "tool_start":
 				tools = append(tools, ToolRecord{ID: ev.ID, Name: ev.Text, Args: ev.Args})
 			case "tool_result":
@@ -1477,6 +1480,8 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.kind {
 		case "round_start":
 			m.toolStatus = "Reasoning…"
+			m.pendingText = roundBreak(m.pendingText)
+			m.pendingThinking = roundBreak(m.pendingThinking)
 		case "tool_start":
 			m.pendingTools = append(m.pendingTools, pendingTool{name: msg.text, args: msg.args, id: msg.id})
 			if n := m.runningToolCount(); n > 1 {
@@ -3001,6 +3006,20 @@ func appendThinkingDelta(s, delta string, idx, cur int) (string, int) {
 		s += "\n"
 	}
 	return appendStreamText(s, delta), idx
+}
+
+// roundBreak ends the text streamed so far with a blank line, so the next
+// model round starts its own paragraph instead of gluing onto the previous
+// round's last sentence. Empty text and text already ending in a blank
+// line are left alone.
+func roundBreak(s string) string {
+	switch {
+	case s == "", strings.HasSuffix(s, "\n\n"):
+		return s
+	case strings.HasSuffix(s, "\n"):
+		return s + "\n"
+	}
+	return s + "\n\n"
 }
 
 // Stream chunks are arbitrary token fragments, not lines. Preserve whitespace
