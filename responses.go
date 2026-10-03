@@ -64,6 +64,56 @@ type responsesOutputItem struct {
 	EncryptedContent string                 `json:"encrypted_content,omitempty"`
 }
 
+// MarshalJSON ensures Responses reasoning items always carry `summary`.
+// The provider returns `"summary":[]` for empty reasoning and requires it on
+// replay (`input[1] missing required field summary` otherwise). Go's
+// `omitempty` drops empty slices, so without this the second round of every
+// tool-using turn 400s. Non-reasoning items keep omitempty behavior.
+func (it responsesOutputItem) MarshalJSON() ([]byte, error) {
+	type plain responsesOutputItem
+	if it.Type != "reasoning" {
+		return json.Marshal(plain(it))
+	}
+	// Build the object manually so an empty summary encodes as [] not null
+	// and is never omitted. Nil becomes [].
+	summary := it.Summary
+	if summary == nil {
+		summary = []responsesSummaryPart{}
+	}
+	m := map[string]any{
+		"type":    it.Type,
+		"summary": summary,
+	}
+	if it.ID != "" {
+		m["id"] = it.ID
+	}
+	if it.CallID != "" {
+		m["call_id"] = it.CallID
+	}
+	if it.Name != "" {
+		m["name"] = it.Name
+	}
+	if it.Arguments != "" {
+		m["arguments"] = it.Arguments
+	}
+	if it.Role != "" {
+		m["role"] = it.Role
+	}
+	if it.Phase != "" {
+		m["phase"] = it.Phase
+	}
+	if len(it.Content) > 0 {
+		m["content"] = it.Content
+	}
+	if it.Status != "" {
+		m["status"] = it.Status
+	}
+	if it.EncryptedContent != "" {
+		m["encrypted_content"] = it.EncryptedContent
+	}
+	return json.Marshal(m)
+}
+
 type responsesResponse struct {
 	ID                string                `json:"id"`
 	Model             string                `json:"model"`

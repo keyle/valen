@@ -39,6 +39,8 @@ type Turn struct {
 	Model    string                         `json:"model,omitempty"`
 	Effort   string                         `json:"effort,omitempty"`
 	History  []openai.ChatCompletionMessage `json:"history,omitempty"`
+	// DurMs is wall time from submit to commit, shown as e.g. "✦ thinking (1m3s)".
+	DurMs int64 `json:"dur_ms,omitempty"`
 }
 
 // SessionMeta is the sidecar alongside the append-only JSONL: title from the

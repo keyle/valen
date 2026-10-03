@@ -283,3 +283,52 @@ func TestResponsesSurfacesAPIError(t *testing.T) {
 		t.Fatalf("friendly=%+v", fe)
 	}
 }
+
+// Reasoning replay must always carry `summary`: the provider returns
+// `"summary":[]` for empty reasoning and 400s the next round when it is
+// omitted (`input[1] missing required field summary`). Go's omitempty drops
+// empty slices, so reasoning marshals summary explicitly.
+func TestResponsesReasoningSummaryAlwaysPresent(t *testing.T) {
+	for _, summary := range [][]responsesSummaryPart{nil, {}} {
+		raw, err := json.Marshal(responsesOutputItem{
+			Type: "reasoning", ID: "rs_1", Status: "completed",
+			EncryptedContent: "opaque", Summary: summary,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), `"summary":[]`) {
+			t.Fatalf("reasoning must encode summary as []: %s", raw)
+		}
+	}
+	raw, err := json.Marshal(responsesOutputItem{Type: "message", ID: "msg_1", Role: "assistant"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "summary") {
+		t.Fatalf("non-reasoning must omit summary: %s", raw)
+	}
+	// Second-round input replays native reasoning verbatim; the wire JSON
+	// must keep summary so the provider accepts the tool continuation.
+	history := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "hi"},
+		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{
+			{ID: "call-1", Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "read", Arguments: `{"path":"TODO.md"}`}},
+		}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "call-1", Content: "ok"},
+	}
+	native := map[string][]responsesOutputItem{
+		"call-1": {
+			{Type: "reasoning", ID: "rs_1", EncryptedContent: "opaque"},
+			{Type: "function_call", ID: "fc_1", CallID: "call-1", Name: "read", Arguments: `{"path":"TODO.md"}`},
+		},
+	}
+	_, input := splitResponsesInputNative(history, native)
+	wire, err := json.Marshal(map[string]any{"input": input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wire), `"summary":[]`) {
+		t.Fatalf("replayed input must keep summary: %s", wire)
+	}
+}

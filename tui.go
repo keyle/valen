@@ -1240,7 +1240,7 @@ func (m *tuiModel) exportTranscript() (string, bool) {
 	for _, t := range m.session.Turns {
 		fmt.Fprintf(&b, "## You · %s\n\n%s\n\n", t.At.Format("15:04"), t.Prompt)
 		if t.Thinking != "" {
-			fmt.Fprintf(&b, "<details><summary>thinking</summary>\n\n%s\n\n</details>\n\n", t.Thinking)
+			fmt.Fprintf(&b, "<details><summary>thinking%s</summary>\n\n%s\n\n</details>\n\n", thinkDurSuffix(t.DurMs), t.Thinking)
 		}
 		for _, tr := range t.Tools {
 			fmt.Fprintf(&b, "> tool `%s` `%s`\n>\n> %s\n\n", tr.Name, truncatePlain(tr.Args, 120), truncatePlain(tr.Output, 2000))
@@ -1404,6 +1404,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			At: msg.promptAt(), Prompt: msg.prompt, Thinking: msg.thinking, Reply: msg.answer, Tools: msg.tools,
 			Usage: Usage{Prompt: msg.usage.PromptTokens, Completion: msg.usage.CompletionTokens, Total: msg.usage.TotalTokens},
 			Model: msg.model, Effort: msg.effort, History: msg.history,
+		}
+		if !m.pendingSince.IsZero() {
+			turn.DurMs = time.Since(m.pendingSince).Milliseconds()
 		}
 		if msg.err != nil {
 			fe := friendlyError(msg.err)
@@ -1949,6 +1952,33 @@ func (m *tuiModel) committedTurns(w int) string {
 	return strings.TrimSuffix(m.chatCache, "\n\n\n")
 }
 
+// thinkDurSuffix renders the persisted thinking timestamp, e.g. " (1m3s)".
+// Empty when unknown so pre-existing sessions render unchanged.
+func thinkDurSuffix(durMs int64) string {
+	if durMs <= 0 {
+		return ""
+	}
+	return " (" + formatThinkDur(time.Duration(durMs)*time.Millisecond) + ")"
+}
+
+// formatThinkDur rounds to seconds so the header reads 12s / 1m3s, matching
+// the live status elapsed.
+func formatThinkDur(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	return d.Round(time.Second).String()
+}
+
+// liveThinkSuffix is the in-flight elapsed for the pending thinking header;
+// empty when the turn start is unknown.
+func (m *tuiModel) liveThinkSuffix() string {
+	if m.pendingSince.IsZero() {
+		return ""
+	}
+	return " (" + formatThinkDur(time.Since(m.pendingSince)) + ")"
+}
+
 func (m *tuiModel) renderTurn(t *Turn, w int) string {
 	var parts []string
 	// bodyW is the style width; textW leaves room for the left border plus
@@ -1962,11 +1992,17 @@ func (m *tuiModel) renderTurn(t *Turn, w int) string {
 
 	if t.Thinking != "" {
 		if m.showThink {
-			thHead := thinkHeaderStyle.Render("✦ thinking")
+			thHead := thinkHeaderStyle.Render("✦ thinking" + thinkDurSuffix(t.DurMs))
 			thBody := thinkBodyStyle.Width(bodyW).Render(breakLongWords(t.Thinking, textW))
 			parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, thHead, thBody))
 		} else {
-			parts = append(parts, thinkHeaderStyle.Render(fmt.Sprintf("✦ thinking (%d chars) — ctrl+y to expand", len(t.Thinking))))
+			label := "✦ thinking" + thinkDurSuffix(t.DurMs)
+			if t.DurMs > 0 {
+				label = fmt.Sprintf("%s · %d chars — ctrl+y to expand", label, len(t.Thinking))
+			} else {
+				label = fmt.Sprintf("%s (%d chars) — ctrl+y to expand", label, len(t.Thinking))
+			}
+			parts = append(parts, thinkHeaderStyle.Render(label))
 		}
 	}
 
@@ -1997,7 +2033,7 @@ func (m *tuiModel) renderTurnFull(t *Turn) string {
 	var b strings.Builder
 	b.WriteString(m.wrapPlain("You · "+t.At.Format("15:04:05")+"\n"+t.Prompt) + "\n\n")
 	if t.Thinking != "" {
-		b.WriteString(m.wrapPlain("✦ thinking\n"+t.Thinking) + "\n\n")
+		b.WriteString(m.wrapPlain("✦ thinking"+thinkDurSuffix(t.DurMs)+"\n"+t.Thinking) + "\n\n")
 	}
 	for _, tr := range t.Tools {
 		b.WriteString(m.wrapPlain(fmt.Sprintf("⏺ %s\nargs: %s\n%s", tr.Name, tr.Args, tr.Output)) + "\n\n")
@@ -2081,7 +2117,7 @@ func (m *tuiModel) renderPending(w int) string {
 	parts := []string{head, "", body, ""}
 
 	if m.pendingThinking != "" && m.showThink {
-		parts = append(parts, thinkHeaderStyle.Render("✦ thinking"))
+		parts = append(parts, thinkHeaderStyle.Render("✦ thinking"+m.liveThinkSuffix()))
 		parts = append(parts, thinkBodyStyle.Width(bodyW).Render(breakLongWords(m.pendingThinking, textW)))
 		parts = append(parts, "")
 	}
