@@ -695,6 +695,53 @@ func TestPendingToolMatchesByID(t *testing.T) {
 	}
 }
 
+// TestTUITodoChecklistInScrollback: todowrite rows render the plan as a
+// glyph checklist instead of raw JSON — live while running (from args) and
+// committed (from the stored result).
+func TestTUITodoChecklistInScrollback(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.viewport.Width = 80
+	m.busy = true
+	m.pendingPrompt = "slice it"
+
+	args := `{"todos":[{"content":"Slice it","status":"completed","priority":"high"},{"content":"Wire UI","status":"in_progress","priority":"medium"}]}`
+	_, _ = m.Update(toolEventMsg{kind: "tool_start", text: "todowrite", args: args})
+	live := m.renderPending(80)
+	for _, want := range []string{"todowrite", "· running", "☑ Slice it", "◐ Wire UI"} {
+		if !strings.Contains(live, want) {
+			t.Fatalf("live todowrite must checklist %q:\n%s", want, live)
+		}
+	}
+	if strings.Contains(live, `"todos"`) {
+		t.Fatalf("live todowrite must not dump raw JSON:\n%s", live)
+	}
+
+	out := `[{"content":"Slice it","status":"completed","priority":"high"},{"content":"Wire UI","status":"in_progress","priority":"medium"}]`
+	_, _ = m.Update(toolEventMsg{kind: "tool_result", text: "todowrite", output: out})
+	done := m.renderPending(80)
+	for _, want := range []string{"☑ Slice it", "◐ Wire UI"} {
+		if !strings.Contains(done, want) {
+			t.Fatalf("finished todowrite must checklist %q:\n%s", want, done)
+		}
+	}
+
+	row := m.renderToolLine(ToolRecord{Name: "todowrite", Args: args, Output: out})
+	for _, want := range []string{"⏺ todowrite", "☑ Slice it", "◐ Wire UI"} {
+		if !strings.Contains(row, want) {
+			t.Fatalf("committed todowrite must checklist %q:\n%s", want, row)
+		}
+	}
+	if strings.Contains(row, `"todos"`) {
+		t.Fatalf("committed todowrite must not dump raw JSON:\n%s", row)
+	}
+
+	// Non-todo tools keep the default row.
+	plain := m.renderToolLine(ToolRecord{Name: "shell", Args: `{"command":"ls"}`, Output: "main.go"})
+	if !strings.Contains(plain, "main.go") {
+		t.Fatalf("other tools must keep default preview:\n%s", plain)
+	}
+}
+
 func TestTUIUnknownCommandNotices(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	m.handleCommand("/nope")

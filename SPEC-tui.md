@@ -96,7 +96,11 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 - Thinking renders dim/italic with a left rule, shown by default; ctrl+y or
   `/think` collapses to `✦ thinking (N chars)`.
 - Tool calls render one compact cyan line plus a dim first-line preview;
-  full args/output live in the Tools view.
+  full args/output live in the Tools view. `todowrite`/`todoread` rows render
+  the session plan as a glyph checklist instead of raw JSON (`☑` completed,
+  `◐` in progress, `☐` pending, `✕` cancelled; capped at 6 with a `+N more`
+  tail), live from the call args while running and from the stored result on
+  commit — so todo progress reads in the scrollback next to thinking.
 - Replies render as markdown via glamour (Monokai style, wrapped to viewport).
 - Errors render as a pink `✗ <friendly>` block; details in Errors view.
 - Tokens per turn render dim (`↑ N · ↓ M`); session totals in the status bar.

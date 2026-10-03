@@ -7,6 +7,58 @@ import (
 	"testing"
 )
 
+// TestTodoChecklistFormatsPlan: todowrite output renders as glyph checklist
+// lines instead of raw JSON in the scrollback.
+func TestTodoChecklistFormatsPlan(t *testing.T) {
+	out := `[{"content":"Slice it","status":"completed","priority":"high"},{"content":"Wire UI","status":"in_progress","priority":"medium"},{"content":"Tests","status":"pending","priority":"low"},{"content":"Docs","status":"cancelled","priority":"low"}]`
+	lines, ok := formatTodoChecklist(out)
+	if !ok {
+		t.Fatal("valid plan must format")
+	}
+	for _, want := range []string{"→ ☑ Slice it", "→ ◐ Wire UI", "→ ☐ Tests", "→ ✕ Docs"} {
+		found := false
+		for _, ln := range lines {
+			if ln == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("missing %q in %v", want, lines)
+		}
+	}
+}
+
+// TestTodoChecklistFromArgsAndCaps: todowrite args shape parses too, long
+// plans cap with a "+N more" tail, and non-todo text falls back to default
+// rendering.
+func TestTodoChecklistFromArgsAndCaps(t *testing.T) {
+	args := `{"todos":[{"content":"One","status":"pending","priority":"high"}]}`
+	lines, ok := todoChecklistLines(ToolRecord{Name: "todowrite", Args: args})
+	if !ok || len(lines) != 1 || lines[0] != "→ ☐ One" {
+		t.Fatalf("args shape must format: %v %v", lines, ok)
+	}
+	var big []string
+	for i := 0; i < 9; i++ {
+		big = append(big, `{"content":"task","status":"pending","priority":"low"}`)
+	}
+	lines, ok = formatTodoChecklist("[" + strings.Join(big, ",") + "]")
+	if !ok || len(lines) != maxTodoScrollbackLines+1 {
+		t.Fatalf("long plan must cap at %d+tail: %v", maxTodoScrollbackLines, lines)
+	}
+	if !strings.Contains(lines[len(lines)-1], "+3 more") {
+		t.Fatalf("tail must count remainder: %v", lines)
+	}
+	if lines, ok := formatTodoChecklist("[]"); !ok || len(lines) != 1 || lines[0] != "→ empty plan" {
+		t.Fatalf("empty plan must render one line: %v %v", lines, ok)
+	}
+	if _, ok := formatTodoChecklist(`{"command":"ls"}`); ok {
+		t.Fatal("non-todo payload must fall back to default rendering")
+	}
+	if _, ok := formatTodoChecklist("error: bad args"); ok {
+		t.Fatal("error output must fall back to default rendering")
+	}
+}
+
 // TestTodoRoundTrip: todowrite stores an opencode-schema list, todoread
 // returns it, and invalid states are rejected.
 func TestTodoRoundTrip(t *testing.T) {

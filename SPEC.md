@@ -213,7 +213,7 @@ Rules the registry enforces:
 | `glob` | `pattern`, `path` | Recursive file list supporting `*`/`?`/`[...]`/`**`; top-level subtrees walk in parallel, results sorted; skips `.git` |
 | `grep` | `pattern`, `path`, `include` | Go regexp content search as `file:line: text`, sorted by file then line; directory walk collects candidates while file reads/matches run on a bounded worker pool (8); skips `.git`/binaries/>1 MiB files, capped at 100 matches (max 20 per file, so one noisy file can't starve others) |
 | `AskUserQuestion` | `questions[]` | Presents each question with options plus type-your-own, confirms all answers, and returns `User has answered your questions: ...` |
-| `todowrite` | `todos[]` (`content`, `status`: `pending`/`in_progress`/`completed`/`cancelled`, `priority`: `high`/`medium`/`low`) | Replaces the in-memory session plan (opencode schema); the call records fold into the session JSONL, `/clear`/`/new` reset it, resume restores the last plan. For multi-step work: plan first, one `in_progress` at a time, mark `completed` only after verification |
+| `todowrite` | `todos[]` (`content`, `status`: `pending`/`in_progress`/`completed`/`cancelled`, `priority`: `high`/`medium`/`low`) | Replaces the in-memory session plan (opencode schema); the call records fold into the session JSONL, `/clear`/`/new` reset it, resume restores the last plan. The model must call it FIRST before any file reads/edits on 3+ step tasks and update it after each step: one `in_progress` at a time, mark `completed` only after verification |
 | `todoread` | — | Returns the current session plan as JSON (`[]` when empty) |
 
 File tools and `shell` share one sandbox root: the startup directory,
@@ -285,9 +285,10 @@ deterministic. Tools are registered as
   `AskUserQuestion` round trip per transport (`tool`, `tool_result`,
   `function_call_output`).
 - `todos_test.go` — `todowrite`/`todoread` round trip (opencode schema),
-  validation rejects, empty/reset, restore-from-turns; `lean_test.go` —
-  per-round prune without network, over-threshold mid-turn summary, auto-off
-  no-op.
+  validation rejects, empty/reset, restore-from-turns, scrollback checklist
+  formatting (glyphs, args shape, cap tail, non-todo fallback);
+  `lean_test.go` — per-round prune without network, never summarizes mid-turn,
+  auto-off no-op.
 
 ## Usage
 

@@ -38,7 +38,7 @@ const (
 	// the agent MCP-capable with a fast tool loopback and points blank
 	// sessions at AGENTS.md first. Batching guidance is explicit so the model
 	// emits parallel calls in one block instead of one tool per round.
-	defaultSystem = "You are a helpful assistant. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, todowrite, todoread, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it. Work fast: batch all independent tool calls in the same block (parallel read/glob/grep/shell); prefer grep/glob to locate before reading. For multi-step work, plan with todowrite first (one in_progress at a time, mark completed as you go) and keep each round lean: re-read files instead of resending them."
+	defaultSystem = "You are a helpful assistant. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, todowrite, todoread, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it. Work fast: batch all independent tool calls in the same block (parallel read/glob/grep/shell); prefer grep/glob to locate before reading. For any task needing 3+ steps, you MUST call todowrite FIRST before any file reads or edits, keep exactly one in_progress, and update it after each step (mark completed only after verification). Keep each round lean: re-read files instead of resending them."
 )
 
 // effectiveSystem returns the configured system prompt, or the built-in

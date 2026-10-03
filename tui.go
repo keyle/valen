@@ -1980,6 +1980,18 @@ func (m *tuiModel) renderToolLine(tr ToolRecord) string {
 	if maxText < 20 {
 		maxText = 20
 	}
+	// Session-plan calls render as a compact checklist instead of raw JSON
+	// so todo progress reads like opencode's in the scrollback, both live
+	// and committed. Anything unparseable falls through to the default row.
+	if tr.Name == "todowrite" || tr.Name == "todoread" {
+		if lines, ok := todoChecklistLines(tr); ok {
+			out := toolLineStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("⏺ %s", tr.Name), cw-2))
+			for _, ln := range lines {
+				out += "\n" + toolDimStyle.Width(cw).Render(breakLongWords(ln, cw-2))
+			}
+			return out
+		}
+	}
 	args := truncateRunes(strings.TrimSpace(tr.Args), maxText)
 	label := fmt.Sprintf("⏺ %s  %s", tr.Name, args)
 	// Tool styles carry PaddingLeft(2), so break two short of cw.
@@ -2006,6 +2018,17 @@ func (m *tuiModel) renderPendingTool(t pendingTool) string {
 	maxText := cw - 4
 	if maxText < 20 {
 		maxText = 20
+	}
+	// A running todowrite has no result yet, but its args already carry the
+	// planned list — show the checklist under the running header.
+	if t.name == "todowrite" || t.name == "todoread" {
+		if lines, ok := formatTodoChecklist(t.args); ok {
+			out := toolLineStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("%s  %s · running", m.spinner.View(), t.name), cw-2))
+			for _, ln := range lines {
+				out += "\n" + toolDimStyle.Width(cw).Render(breakLongWords(ln, cw-2))
+			}
+			return out
+		}
 	}
 	args := truncateRunes(strings.TrimSpace(t.args), maxText)
 	label := fmt.Sprintf("%s  %s  %s · running", m.spinner.View(), t.name, args)

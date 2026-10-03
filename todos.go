@@ -114,9 +114,80 @@ func normalizeTodos(in []Todo) ([]Todo, error) {
 	return out, nil
 }
 
+// todoGlyph maps a todo status to its scrollback marker.
+func todoGlyph(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed":
+		return "☑"
+	case "in_progress":
+		return "◐"
+	case "cancelled":
+		return "✕"
+	default:
+		return "☐"
+	}
+}
+
+// parseTodoPayload extracts a todo list from a todowrite/todoread payload:
+// either the tool result (a JSON array) or todowrite args ({"todos":[...]}).
+// ok=false means the text is not a todo payload and the caller should fall
+// back to the default tool rendering.
+func parseTodoPayload(text string) (list []Todo, ok bool) {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return nil, false
+	}
+	var direct []Todo
+	if err := json.Unmarshal([]byte(t), &direct); err == nil && direct != nil {
+		return direct, true
+	}
+	var wrapped struct {
+		Todos []Todo `json:"todos"`
+	}
+	if err := json.Unmarshal([]byte(normalizeArgs(t)), &wrapped); err == nil && wrapped.Todos != nil {
+		return wrapped.Todos, true
+	}
+	return nil, false
+}
+
+// maxTodoScrollbackLines caps the checklist so one plan update never floods
+// the transcript; the tail counts the remainder.
+const maxTodoScrollbackLines = 6
+
+// formatTodoChecklist renders a todowrite/todoread payload as compact
+// scrollback lines with per-item status glyphs. Empty plans render as one
+// line; longer plans cut at maxTodoScrollbackLines with a "+N more" tail.
+func formatTodoChecklist(text string) (lines []string, ok bool) {
+	list, ok := parseTodoPayload(text)
+	if !ok {
+		return nil, false
+	}
+	if len(list) == 0 {
+		return []string{"→ empty plan"}, true
+	}
+	for i, td := range list {
+		if i >= maxTodoScrollbackLines {
+			lines = append(lines, fmt.Sprintf("→ … +%d more", len(list)-maxTodoScrollbackLines))
+			break
+		}
+		lines = append(lines, fmt.Sprintf("→ %s %s", todoGlyph(td.Status), truncateRunes(strings.TrimSpace(td.Content), 100)))
+	}
+	return lines, true
+}
+
+// todoChecklistLines prefers the stored tool result, falling back to the
+// call args (a running todowrite has no result yet but its args carry the
+// planned list).
+func todoChecklistLines(tr ToolRecord) ([]string, bool) {
+	if lines, ok := formatTodoChecklist(tr.Output); ok {
+		return lines, true
+	}
+	return formatTodoChecklist(tr.Args)
+}
+
 // todoWriteDesc mirrors opencode's todowrite guidance: when to plan, one
 // in_progress at a time, update in real time, small actionable steps.
-const todoWriteDesc = "Create and maintain a structured task list for the current coding session. Tracks progress, organizes multi-step work, and surfaces status to the user. Use proactively when the task needs 3+ steps, is non-trivial, or the user gave multiple tasks. Keep exactly one in_progress at a time; mark completed only after the work is actually done (including verification); if blocked, keep it in_progress and add a follow-up todo. Items must be specific and actionable — break large work into smaller steps. Skip for single straightforward tasks or pure questions."
+const todoWriteDesc = "Create and maintain a structured task list for the current coding session. Tracks progress, organizes multi-step work, and surfaces status to the user. Call this FIRST before any file reads or edits when the task needs 3+ steps, is non-trivial, or the user gave multiple tasks — then update it after every step. Keep exactly one in_progress at a time; mark completed only after the work is actually done (including verification); if blocked, keep it in_progress and add a follow-up todo. Items must be specific and actionable — break large work into smaller steps. Skip for single straightforward tasks or pure questions."
 
 // TodoWriteTool replaces the session plan. Output is the stored list as JSON.
 func TodoWriteTool() Tool {
