@@ -11,7 +11,7 @@ model = "muse-spark-1.3-contributor"
                                # Unknown models learn from the provider 400 and
                                # cache to $XDG_DATA_HOME/valen/thinking_levels.json.
                                # Switch live with /model (ctrl+p) and /effort — saved back here.
-thinking = "xhigh"
+thinking = "high"
 tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "grep"]
 base_url = "https://opencode.ai/zen/go/v1"
 api_key_env = "OPENCODE_GO_API_KEY"
@@ -20,6 +20,10 @@ api_key_env = "OPENCODE_GO_API_KEY"
 system = "You are a professional programming service. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, todowrite, todoread, task, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it. Work fast and multithreaded: batch all independent tool calls in the same block (parallel read/glob/grep/shell); prefer grep/glob to locate before reading. Prefer ripgrep over grep and fd over find. For research and bounded multi-step work, delegate to the task subagent (explore for locating code, general for one step) instead of sprawling the main loop. Agressively prune irrelevant context to the task at hand to keep the tokens reasonable; not for cost but for speed and lean approach. For any task needing 3+ steps, you MUST call todowrite FIRST before any file reads or edits, keep exactly one in_progress, and update it after each step (mark completed only after verification)."
                                 # default system prompt (same as the built-in); set to override.
 # max_rounds = 100 
+# max_stagnant_rounds = 25       # abort a turn whose tool loop runs this many
+                                # rounds with calls but no write/edit/task
+                                # (exploring without acting); raise for long
+                                # research turns.
 
 # max_context_tokens = 200000  # fail-fast per-round budget (est. runes/4):
                                # over-budget history aborts the turn instead of
@@ -32,7 +36,7 @@ system = "You are a professional programming service. You are an MCP-capable thi
 
 [compaction]                    # summary-mode, send-side only (disk JSONL stays lossless).
 model = "muse-spark-1.3-contributor"
-thinking = "medium"             # summarizer effort, independent of top-level thinking (xhigh stays for solving).
+thinking = "high"
 # auto = true                     # prune every send; summarize past the threshold; retry once after a too-long 400.
 # keep_tokens = 15000             # recent tail kept verbatim beside the summary; also sets the early threshold (keep×3).
 # buffer = 30000                  # headroom below max_context_tokens; default 10% of the budget.

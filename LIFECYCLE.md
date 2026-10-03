@@ -247,6 +247,12 @@ missing feature.
   (`/compact`, `/clear`, raise the knob).
 - `doomLoopTool` — same single tool+args a third consecutive time →
   abort with guidance. Multi-call batches don't count (parallel unit).
+- Stall guard — `max_stagnant_rounds` (default 25) rounds with tool calls but
+  no `write`/`edit`/`task` → abort ("exploring without acting"). Shell
+  doesn't reset it. Raise for long research turns.
+- Batching nudge — 3 consecutive single-call rounds append one ephemeral
+  user reminder to batch independent calls; stripped at turn end.
+  Question rounds pause both counters.
 - Retry — 429/502/503/504 + network errors, 3 attempts, 300ms→800ms
   backoff, bodies drained for connection reuse, `Retry-After` not yet
   honored (TODO D1). 400s never retry (stream-fallback owns that path).

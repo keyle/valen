@@ -357,6 +357,8 @@ func runMessagesTurn(ctx context.Context, cfg Config, client *openai.Client, api
 	var usage openai.Usage
 	tools := registry.MessagesTools()
 	thinking := messagesThinking(cfg.Thinking)
+	guards := newLoopGuards(cfg)
+	defer stripNudges(history)
 	for round := 0; round < cfg.MaxRounds; round++ {
 		toolsTok := requestToolsTokens(registry)
 		if err := checkContextBudget(cfg, *history, toolsTok); err != nil {
@@ -428,6 +430,13 @@ func runMessagesTurn(ctx context.Context, cfg Config, client *openai.Client, api
 		*history = append(*history, runToolCalls(ctx, registry, msg.ToolCalls, onEvent)...)
 		// Same per-round lean as the chat loop: prune-only, no blocking summary.
 		leanHistoryForNextRound(cfg, history)
+		if nudge, stop := guards.note(msg.ToolCalls); stop != nil {
+			dlogf("stall guard tripped after %d stagnant rounds", guards.stagnant)
+			return openai.ChatCompletionMessage{}, usage, stop
+		} else if nudge {
+			dlogf("batch nudge appended after single-call streak")
+			*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: batchNudgeText})
+		}
 	}
 	return openai.ChatCompletionMessage{}, usage, fmt.Errorf("stopped after %d rounds without a final answer", cfg.MaxRounds)
 }

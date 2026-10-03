@@ -53,20 +53,24 @@ func effectiveSystem(cfg Config) string {
 
 // Config mirrors config.toml. See SPEC.md for the full schema.
 type Config struct {
-	Model            string           `toml:"model"`
-	Thinking         string           `toml:"thinking"`
-	BaseURL          string           `toml:"base_url"`
-	APIKeyEnv        string           `toml:"api_key_env"`
-	SessionID        string           `toml:"session_id"`
-	System           string           `toml:"system"`
-	MaxRounds        int              `toml:"max_rounds"`
-	MaxContextTokens int              `toml:"max_context_tokens"`
-	MaxTokens        int              `toml:"max_tokens"`
-	Temperature      *float32         `toml:"temperature"`
-	Tools            []string         `toml:"tools"`
-	MCPServers       []MCPServer      `toml:"mcp"`
-	Compaction       CompactionConfig `toml:"compaction"`
-	Input            InputConfig      `toml:"input"`
+	Model            string `toml:"model"`
+	Thinking         string `toml:"thinking"`
+	BaseURL          string `toml:"base_url"`
+	APIKeyEnv        string `toml:"api_key_env"`
+	SessionID        string `toml:"session_id"`
+	System           string `toml:"system"`
+	MaxRounds        int    `toml:"max_rounds"`
+	MaxContextTokens int    `toml:"max_context_tokens"`
+	MaxTokens        int    `toml:"max_tokens"`
+	// MaxStagnantRounds aborts a turn whose tool loop runs this many rounds
+	// with calls but no write/edit/task (exploring without acting). Zero
+	// means the default (25); raise for long research turns.
+	MaxStagnantRounds int              `toml:"max_stagnant_rounds"`
+	Temperature       *float32         `toml:"temperature"`
+	Tools             []string         `toml:"tools"`
+	MCPServers        []MCPServer      `toml:"mcp"`
+	Compaction        CompactionConfig `toml:"compaction"`
+	Input             InputConfig      `toml:"input"`
 }
 
 // CompactionConfig mirrors the [compaction] table: summary-mode only,
@@ -147,6 +151,9 @@ func loadConfig(path string) (Config, error) {
 	}
 	if cfg.MaxTokens == 0 {
 		cfg.MaxTokens = defaultMaxTokens
+	}
+	if cfg.MaxStagnantRounds <= 0 {
+		cfg.MaxStagnantRounds = defaultMaxStagnantRounds
 	}
 	cfg.Compaction.Model = strings.TrimSpace(cfg.Compaction.Model)
 	cfg.Compaction.Thinking = strings.ToLower(strings.TrimSpace(cfg.Compaction.Thinking))
@@ -664,6 +671,8 @@ func runToolCallsSerial(ctx context.Context, registry *Registry, calls []openai.
 // runChatTurn is the /chat/completions tool loop, streaming each round.
 func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
 	var usage openai.Usage
+	guards := newLoopGuards(cfg)
+	defer stripNudges(history)
 	for round := 0; round < cfg.MaxRounds; round++ {
 		toolsTok := requestToolsTokens(registry)
 		if err := checkContextBudget(cfg, *history, toolsTok); err != nil {
@@ -715,6 +724,13 @@ func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey 
 		// Keep long turns lean between rounds: prune-only, no blocking
 		// summary in the hot loop (summaries fire between turns).
 		leanHistoryForNextRound(cfg, history)
+		if nudge, stop := guards.note(msg.ToolCalls); stop != nil {
+			dlogf("stall guard tripped after %d stagnant rounds", guards.stagnant)
+			return openai.ChatCompletionMessage{}, usage, stop
+		} else if nudge {
+			dlogf("batch nudge appended after single-call streak")
+			*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: batchNudgeText})
+		}
 	}
 	return openai.ChatCompletionMessage{}, usage, fmt.Errorf("stopped after %d rounds without a final answer", cfg.MaxRounds)
 }

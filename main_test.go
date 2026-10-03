@@ -30,7 +30,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.BaseURL != defaultBaseURL || cfg.APIKeyEnv != defaultAPIKeyEnv || cfg.MaxRounds != defaultMaxRounds || cfg.MaxContextTokens != defaultMaxContextTokens || cfg.MaxTokens != defaultMaxTokens {
+	if cfg.BaseURL != defaultBaseURL || cfg.APIKeyEnv != defaultAPIKeyEnv || cfg.MaxRounds != defaultMaxRounds || cfg.MaxContextTokens != defaultMaxContextTokens || cfg.MaxTokens != defaultMaxTokens || cfg.MaxStagnantRounds != defaultMaxStagnantRounds {
 		t.Fatalf("bad defaults: %+v", cfg)
 	}
 	if !strings.HasPrefix(cfg.SessionID, "ses-") {
@@ -44,6 +44,7 @@ base_url = "https://example.test/v1"
 api_key_env = "MY_KEY"
 session_id = "ses-fixed"
 max_rounds = 3
+max_stagnant_rounds = 7
 temperature = 0.0
 tools = ["shell"]
 
@@ -55,7 +56,7 @@ args = ["-y", "server"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.BaseURL != "https://example.test/v1" || cfg.SessionID != "ses-fixed" || cfg.MaxRounds != 3 {
+	if cfg.BaseURL != "https://example.test/v1" || cfg.SessionID != "ses-fixed" || cfg.MaxRounds != 3 || cfg.MaxStagnantRounds != 7 {
 		t.Fatalf("bad overrides: %+v", cfg)
 	}
 	if cfg.Temperature == nil || *cfg.Temperature != 0 {

@@ -52,8 +52,9 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `api_key_env` | string | `OPENCODE_GO_API_KEY` | Name of the env var holding the key, not the key itself |
 | `session_id` | string | `ses-<unixnano>` | Stable per conversation; sent as `x-opencode-session` |
 | `system` | string | built-in default (mirrors `config.toml`) | System prompt; empty uses the built-in default (helpful assistant, MCP-capable thinking agent with fast tool loopback, batch independent calls in one block, check AGENTS.md first). The shipped `config.toml` sets it explicitly — edit there to override |
-| `max_rounds` | int | `8` | Hard stop on tool-loop iterations |
-| `max_context_tokens` | int | `200000` | Fail-fast budget per round (est. runes/4): over-budget history aborts the turn with guidance instead of a doomed send |
+| `max_rounds` | int | `100` | Hard stop on tool-loop iterations |
+| `max_stagnant_rounds` | int | `25` | Stall guard: abort a turn whose tool loop runs this many rounds with calls but no `write`/`edit`/`task` (exploring without acting); raise for long research turns |
+| `max_context_tokens` | int | `300000` | Fail-fast budget per round (est. runes/4): over-budget history aborts the turn with guidance instead of a doomed send |
 | `temperature` | float | unset | Pointer semantics: unset omits the field, `0.0` sends zero |
 | `max_tokens` | int | `16384` (floor 8192) | Per-answer output cap on the messages transport; long answers finish in one round instead of two full-history rounds |
 | `compaction` | table | `auto=true, keep_tokens=15000, buffer=10%, thinking=medium` | Summary-mode, send-side only (disk JSONL stays lossless): `auto` compacts before send when over budget and retries once after a too-long 400; `keep_tokens` recent tail kept verbatim beside the summary; `buffer` headroom below `max_context_tokens`; `model` cheap summarizer override (empty = session model); `thinking` summarizer effort, independent of top-level `thinking` (default `medium` when accepted, cheapest fallback per model) |
@@ -173,7 +174,12 @@ error: "stopped after N rounds without a final answer"
   JSON envelope per message, no tokenizer dep) instead of sending a doomed
   request into a 429; `doomLoopTool` aborts the turn when the same single
   tool call repeats a third consecutive time (multi-call batches break the
-  chain). `maybeAutoCompact` keeps every send lean: prune runs unconditionally
+     chain). A stall guard (`loopGuards`) aborts the turn after
+   `max_stagnant_rounds` rounds with tool calls but no `write`/`edit`/`task`
+   (shell probing doesn't count — it looks busy while changing nothing), and
+   appends one ephemeral batching reminder after 3 consecutive single-call
+   rounds (stripped at turn end, so later turns stay clean; question rounds
+   pause both counters). `maybeAutoCompact` keeps every send lean: prune runs unconditionally
   (cheap, local — file reads are disposable since tools re-read them, so all
   but the newest 2 collapse to path/range descriptors while user decisions
   never shrink and other outputs keep the newest 40k tokens), then the head
