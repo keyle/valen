@@ -276,9 +276,11 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
   otherwise opens the filtered picker. `/model <known-id>` works offline.
 - Switching keeps the conversation history; an incompatible thinking level
   resets to the provider default with a note.
-- Both model and thinking persist to `config.toml` (comments and other keys
-  untouched), so the last selection sticks across runs. Without a config path
-  (tests) the switch is session-only.
+- Both model and thinking persist to `~/.config/valen/state.json`
+  (`$XDG_CONFIG_HOME/valen/`), never to `config.toml`, and override the
+  config's `model`/`thinking` on the next boot (an invalid saved pair is
+  ignored). Without a state path (tests, `-config <file>`) the switch is
+  session-only.
 
 ## Friendly errors
 

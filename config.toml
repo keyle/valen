@@ -1,4 +1,5 @@
 # valen harness config. See SPEC.md for the full schema.
+# Lives at ~/.config/valen/config.toml; config-ori.toml beside it is the pristine default.
 
 model = "openrouter/anthropic/claude-sonnet-5.5"
 # thinking = "high"            # optional reasoning level; omit for provider default.
@@ -10,7 +11,8 @@ model = "openrouter/anthropic/claude-sonnet-5.5"
                                # Fixed (mimo, minimax, …): omit (default only).
                                # Unknown models learn from the provider 400 and
                                # cache to $XDG_DATA_HOME/valen/thinking_levels.json.
-                               # Switch live with /model (ctrl+p) and /effort — saved back here.
+                               # Switch live with /model (ctrl+p) and /effort — saved to state.json beside this file
+                               # (overrides model/thinking here; delete it to reset).
 thinking = "high"
 tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "grep"]
 base_url = "https://opencode.ai/zen/go/v1"

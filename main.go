@@ -24,7 +24,6 @@ import (
 )
 
 const (
-	defaultConfigPath            = "config.toml"
 	defaultBaseURL               = "https://opencode.ai/zen/go/v1"
 	defaultAPIKeyEnv             = "OPENCODE_GO_API_KEY"
 	defaultOpenRouterKeyEnv      = "OPENROUTER_API_KEY"
@@ -163,11 +162,8 @@ func loadConfig(path string) (Config, error) {
 	if cfg.Model == "" {
 		return cfg, errors.New("model is required")
 	}
-	// Bare IDs ride Go; "openrouter/…" rides OpenRouter. Anything else with
-	// a slash is almost certainly a pasted OpenRouter ID missing its
-	// prefix — reject it explicitly rather than sending it somewhere odd.
-	if i := strings.Index(cfg.Model, "/"); i >= 0 && !strings.HasPrefix(normalizeModelID(cfg.Model), ProviderOpenRouter+"/") {
-		return cfg, fmt.Errorf("model %q has an unknown provider prefix (OpenRouter models need %q)", cfg.Model, ProviderOpenRouter+"/vendor/model")
+	if err := validateModelID(cfg.Model); err != nil {
+		return cfg, err
 	}
 	cfg.Thinking = strings.ToLower(strings.TrimSpace(cfg.Thinking))
 	if !validThinkingLevel(cfg.Model, cfg.Thinking) {
@@ -253,7 +249,7 @@ func main() {
 }
 
 func start() error {
-	cfgPath := flag.String("config", defaultConfigPath, "path to config")
+	cfgPath := flag.String("config", "", "path to config (default: ~/.config/valen/config.toml, seeded on first run)")
 	dirFlag := flag.String("dir", "", "working directory: sandbox root for file tools and shell")
 	printMode := flag.Bool("p", false, "one-shot: answer the prompt and exit")
 	planFlag := flag.Bool("plan", false, "plan mode: read-only investigation, present the plan as the reply")
@@ -262,8 +258,21 @@ func start() error {
 	flag.Parse()
 
 	// Resolve paths before any chdir so relative paths keep working.
+	// Default: the user config dir, seeded from the embedded default on first
+	// run. An explicit -config pins that file: no seeding, and no saved
+	// model/thinking overlay (so the file alone decides).
 	cfgAbs := *cfgPath
-	if abs, err := filepath.Abs(cfgAbs); err == nil {
+	statePath := ""
+	if cfgAbs == "" {
+		dir, err := userConfigDir()
+		if err != nil {
+			return fmt.Errorf("config dir: %w", err)
+		}
+		if cfgAbs, err = ensureUserConfig(dir); err != nil {
+			return fmt.Errorf("config dir %s: %w", dir, err)
+		}
+		statePath = filepath.Join(dir, userStateName)
+	} else if abs, err := filepath.Abs(cfgAbs); err == nil {
 		cfgAbs = abs
 	}
 	dvLogAbs := *dvLogFlag
@@ -304,6 +313,9 @@ func start() error {
 	cfg, err := loadConfig(cfgAbs)
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
+	}
+	if statePath != "" {
+		cfg = applyUserState(cfg, statePath)
 	}
 	if *planFlag {
 		cfg.Plan = true
@@ -359,7 +371,7 @@ func start() error {
 	if !*printMode && isTTY(os.Stdin) && isTTY(os.Stdout) {
 		dvlog.Logf("start model=%s transport=%s thinking=%s maxrounds=%d budget~%dtok schemastate~%dtok tools=%d tui=true",
 			cfg.Model, modelTransport(cfg.Model), cfg.Thinking, cfg.MaxRounds, contextBudget(cfg), requestToolsTokens(registry), len(registry.Names()))
-		return runTUI(ctx, cfg, cfgAbs, client, registry, apiKey)
+		return runTUI(ctx, cfg, statePath, client, registry, apiKey)
 	}
 
 	prompt, err := readPrompt(rest)
@@ -823,7 +835,7 @@ func runModelTurn(ctx context.Context, cfg Config, registry *Registry, history *
 			onEvent(Event{Kind: "round_start", Text: fmt.Sprintf("Round %d/%d", n+1, cfg.MaxRounds)})
 		}
 		t0 := time.Now()
-		msg, u, err := round(ctx, *history)
+		msg, u, err := roundWithRetry(ctx, onEvent, *history, round)
 		usage.PromptTokens += u.PromptTokens
 		usage.CompletionTokens += u.CompletionTokens
 		usage.TotalTokens += u.TotalTokens

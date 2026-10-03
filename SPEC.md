@@ -44,7 +44,17 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `ask.go` | `AskUserQuestion` contract, headless prompting/confirmation, answer formatting |
 | `search.go` | `web_search` (DuckDuckGo HTML) and `web_fetch` (HTML → text) |
 | `mcp.go` | stdio MCP client lifecycle, tool registration, result flattening |
-| `config.toml` | Example configuration |
+| `config.toml` | Default configuration, embedded in the binary and seeded to `~/.config/valen/` on first run |
+| `userconfig.go` | Config dir (`$XDG_CONFIG_HOME/valen`, else `~/.config/valen`): first-run seeding, `config-ori.toml`, `state.json` (last model/thinking) |
+
+## Config location
+
+Config lives in `~/.config/valen/` (`$XDG_CONFIG_HOME/valen/`), created on
+first run: `config.toml` (yours; never overwritten), `config-ori.toml` (pristine
+copy of the shipped default, refreshed on upgrade so you can diff), and
+`state.json` (ephemeral state written by valen: last model/thinking). Sessions
+and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
+`-config <file>` uses that file only: no seeding and no state overlay.
 
 ## Config schema (`config.toml`)
 
@@ -417,8 +427,9 @@ default; zero hot-loop cost when off.
 
 TUI model controls: `/model [filter]` (ctrl+p) lists the OpenCode Go catalog and
 switches; `/effort [level]` (`/thinking` alias) sets the thinking level for
-the current model. Both persist to `config.toml`, so the last selection
-sticks across runs; headless mode reads the same keys. `/plan` toggles plan
+the current model. Both persist to `state.json` in the config dir, so the last selection
+sticks across runs and overrides `config.toml`'s `model`/`thinking`; headless
+mode reads the same overlay (not with `-config <file>`). `/plan` toggles plan
 mode at runtime (read-only investigation, reply is the plan; header shows
 `· plan`); it does not persist. The TUI footer also
 shows Go plan usage (`5h` / `7d` / `30d`), yellow past 80% and pink at the cap.

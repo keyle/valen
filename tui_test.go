@@ -1186,8 +1186,8 @@ func newTestModelWithConfig(t *testing.T, body string) (*tuiModel, string) {
 	}
 	m := newTUIModel(cfg, newClient(cfg, "key"), NewRegistry(), session)
 	m.ctx = context.Background()
-	m.cfgPath = path
-	return m, path
+	m.statePath = filepath.Join(dir, "state.json")
+	return m, m.statePath
 }
 
 func TestTUIModelDirectSwitchPersists(t *testing.T) {
@@ -1199,9 +1199,9 @@ func TestTUIModelDirectSwitchPersists(t *testing.T) {
 	if m.cfg.Thinking != "" {
 		t.Fatalf("max is invalid on kimi toggle and must reset, got %q", m.cfg.Thinking)
 	}
-	raw, _ := os.ReadFile(path)
-	if !strings.Contains(string(raw), `model = "kimi-k2.6"`) || strings.Contains(string(raw), "thinking") {
-		t.Fatalf("config not persisted:\n%s", raw)
+	st := loadUserState(path)
+	if st.Model != "kimi-k2.6" || st.Thinking != "" {
+		t.Fatalf("state not persisted: %+v", st)
 	}
 	if !strings.Contains(m.notice, "Switched") || !strings.Contains(m.notice, "Saved") {
 		t.Fatalf("notice=%q", m.notice)
@@ -1430,9 +1430,8 @@ func TestTUIEffortPickerAndSet(t *testing.T) {
 	if m.cfg.Thinking != "max" {
 		t.Fatalf("thinking=%q", m.cfg.Thinking)
 	}
-	raw, _ := os.ReadFile(path)
-	if !strings.Contains(string(raw), `thinking = "max"`) {
-		t.Fatalf("thinking not persisted:\n%s", raw)
+	if st := loadUserState(path); st.Thinking != "max" || st.Model != "glm-5.3" {
+		t.Fatalf("thinking not persisted: %+v", st)
 	}
 	if !strings.Contains(m.headerView(), "max") {
 		t.Fatal("header should show the thinking level")

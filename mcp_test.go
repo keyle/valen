@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -22,6 +23,7 @@ func TestMain(m *testing.M) {
 		}
 		return
 	}
+	roundRetryBase, roundRetryMax = time.Millisecond, 2*time.Millisecond
 	os.Exit(m.Run())
 }
 

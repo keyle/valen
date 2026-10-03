@@ -279,7 +279,7 @@ type compactDoneMsg struct {
 
 type tuiModel struct {
 	cfg        Config
-	cfgPath    string
+	statePath  string
 	client     *openai.Client
 	registry   *Registry
 	session    *Session
@@ -306,7 +306,10 @@ type tuiModel struct {
 	pendingText     string
 	pendingThinking string
 	pendingThinkIdx int // reasoning part index of the pendingThinking tail
-	lastStreamFlush time.Time
+	// roundText/roundThinking snapshot the pending streams at round start so
+	// a retry can discard the failed attempt's partial output.
+	roundText, roundThinking string
+	lastStreamFlush          time.Time
 	// chatCache memoizes the rendered committed turns so streaming deltas
 	// only re-render the live pending block, not the whole history. Committed
 	// turns are immutable, so the prefix extends append-only; any key change
@@ -961,11 +964,17 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 		var tools []ToolRecord
 		var thinking, answer string
 		thinkIdx := 0
+		var roundAnswer, roundThinking string
 		onEvent := func(ev Event) {
 			switch ev.Kind {
 			case "round_start":
 				answer = roundBreak(answer)
 				thinking = roundBreak(thinking)
+				roundAnswer, roundThinking = answer, thinking
+			case "retry":
+				// The failed attempt's partial output is replayed by the
+				// next attempt; drop it so nothing shows twice.
+				answer, thinking = roundAnswer, roundThinking
 			case "tool_start":
 				tools = append(tools, ToolRecord{ID: ev.ID, Name: ev.Text, Args: ev.Args})
 			case "tool_result":
@@ -1243,7 +1252,7 @@ func (m *tuiModel) openEffortPicker() {
 }
 
 // applyModelSwitch moves the session to id, resets an incompatible thinking
-// level, and persists both to config.toml so the choice sticks. Unknown
+// level, and persists both to state.json so the choice sticks. Unknown
 // models probe the provider in the background: a bogus effort 400s with the
 // valid list, which is cached on disk for ctrl+t. A model whose provider key
 // is missing still switches (so keyless boots can browse), but the notice
@@ -1264,12 +1273,12 @@ func (m *tuiModel) applyModelSwitch(id string) {
 		}
 	}
 	msg := fmt.Sprintf("Switched to %s.%s", id, resetNote)
-	if m.cfgPath != "" {
-		if err := persistModelSelection(m.cfgPath, m.cfg.Model, m.cfg.Thinking); err != nil {
-			m.notice = msg + " (config save failed: " + err.Error() + ")"
+	if m.statePath != "" {
+		if err := saveModelState(m.statePath, m.cfg.Model, m.cfg.Thinking); err != nil {
+			m.notice = msg + " (state save failed: " + err.Error() + ")"
 			m.noticeErr = true
 		} else {
-			m.notice = msg + " Saved to config."
+			m.notice = msg + " Saved."
 			m.noticeErr = false
 		}
 	} else {
@@ -1316,12 +1325,12 @@ func (m *tuiModel) setThinkingLevel(level string) bool {
 		display = "provider default"
 	}
 	msg := fmt.Sprintf("Thinking set to %s on %s.", display, m.cfg.Model)
-	if m.cfgPath != "" {
-		if err := persistModelSelection(m.cfgPath, m.cfg.Model, m.cfg.Thinking); err != nil {
-			m.notice = msg + " (config save failed: " + err.Error() + ")"
+	if m.statePath != "" {
+		if err := saveModelState(m.statePath, m.cfg.Model, m.cfg.Thinking); err != nil {
+			m.notice = msg + " (state save failed: " + err.Error() + ")"
 			m.noticeErr = true
 		} else {
-			m.notice = msg + " Saved to config."
+			m.notice = msg + " Saved."
 			m.noticeErr = false
 		}
 	} else {
@@ -1496,6 +1505,10 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toolStatus = "Reasoning…"
 			m.pendingText = roundBreak(m.pendingText)
 			m.pendingThinking = roundBreak(m.pendingThinking)
+			m.roundText, m.roundThinking = m.pendingText, m.pendingThinking
+		case "retry":
+			m.pendingText, m.pendingThinking = m.roundText, m.roundThinking
+			m.toolStatus = msg.text
 		case "tool_start":
 			m.pendingTools = append(m.pendingTools, pendingTool{name: msg.text, args: msg.args, id: msg.id})
 			if n := m.runningToolCount(); n > 1 {
@@ -3446,7 +3459,7 @@ When the model calls AskUserQuestion: ↑↓/jk move · enter select · space to
 Go plan usage (5h rolling / 7d / 30d) shows in the footer, refreshed each
 minute and after every turn: dim normally, yellow past 80%, pink at the cap.
 
-Models persist to config.toml, so the last switch sticks across runs.
+Models persist to ~/.config/valen/state.json, so the last switch sticks across runs.
 Thinking levels depend on the model (see /effort picker): muse-spark takes
 minimal/low/medium/high/xhigh, gpt/grok take low…max, glm/deepseek take
 low/high/max or high/max, kimi-k3 is max-only, toggle models take none/high.
@@ -3484,7 +3497,7 @@ func min(a, b int) int {
 	return b
 }
 
-func runTUI(ctx context.Context, cfg Config, cfgPath string, client *openai.Client, registry *Registry, apiKey string) error {
+func runTUI(ctx context.Context, cfg Config, statePath string, client *openai.Client, registry *Registry, apiKey string) error {
 	session, err := newSession(cfg)
 	if err != nil {
 		return fmt.Errorf("session: %w", err)
@@ -3492,7 +3505,7 @@ func runTUI(ctx context.Context, cfg Config, cfgPath string, client *openai.Clie
 	resetTodos()
 	m := newTUIModel(cfg, client, registry, session)
 	m.ctx = ctx
-	m.cfgPath = cfgPath
+	m.statePath = statePath
 	m.apiKey = effectiveGoKey(cfg, apiKey)
 	m.cfg.OpenRouterKey = effectiveOpenRouterKey(cfg)
 	if m.apiKey == "" && m.client == nil {

@@ -117,7 +117,7 @@ func TestTUIApplyModelSwitchWarnsMissingKey(t *testing.T) {
 	m := newTestModel(t, cfg)
 	m.apiKey = ""
 	m.cfg.OpenRouterKey = ""
-	m.cfgPath = ""
+	m.statePath = ""
 
 	m.applyModelSwitch("openrouter/moonshotai/kimi-k3")
 	if m.cfg.Model != "openrouter/moonshotai/kimi-k3" {

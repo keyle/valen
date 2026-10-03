@@ -150,6 +150,12 @@ func cheapestThinking(model string) string {
 // fitSendBudget preserves registry-capped outputs on the wire. Pruning may
 // shorten older history, but fresh results must be available in full.
 func fitSendBudget(content string) string {
+	// Empty tool output must still be a non-empty string on the wire: the
+	// OpenAI client drops empty `content`, and OpenRouter then rejects the
+	// tool message ("text content parts must carry a string text").
+	if strings.TrimSpace(content) == "" {
+		return "(no output)"
+	}
 	return content
 }
 
