@@ -278,3 +278,53 @@ func TestSplitResponsesInputStripsThinking(t *testing.T) {
 		t.Fatalf("answer dropped: %s", raw)
 	}
 }
+
+// TestResponsesThinkingPartIndexes: reasoning deltas carry their summary
+// part index so the live view can start each part on its own line.
+func TestResponsesThinkingPartIndexes(t *testing.T) {
+	stream := responsesSSE(
+		`{"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"delta":"first"}`,
+		`{"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":1,"delta":"second"}`,
+		`{"type":"response.output_text.delta","output_index":1,"content_index":0,"delta":"done"}`,
+		`{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","id":"m_1","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}}`,
+	)
+	var events []Event
+	if _, _, _, err := responsesDetailedTestRound(t, stream, func(ev Event) { events = append(events, ev) }); err != nil {
+		t.Fatal(err)
+	}
+	var thinks []Event
+	for _, ev := range events {
+		if ev.Kind == "thinking_delta" {
+			thinks = append(thinks, ev)
+		}
+	}
+	if len(thinks) != 2 || thinks[0].Index != 0 || thinks[0].Text != "first" || thinks[1].Index != 1 || thinks[1].Text != "second" {
+		t.Fatalf("thinking events lost part index: %+v", thinks)
+	}
+}
+
+// TestResponsesThinkingDoneOnlyEmitsLive: parts that never streamed deltas
+// still reach the live view via their done event; parts that streamed do
+// not double-emit (the committed turn takes the authoritative text).
+func TestResponsesThinkingDoneOnlyEmitsLive(t *testing.T) {
+	stream := responsesSSE(
+		`{"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"delta":"frag"}`,
+		`{"type":"response.reasoning_summary_text.done","output_index":0,"summary_index":0,"text":"frag"}`,
+		`{"type":"response.reasoning_summary_text.done","output_index":0,"summary_index":1,"text":"whole part"}`,
+		`{"type":"response.output_text.delta","output_index":1,"content_index":0,"delta":"done"}`,
+		`{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","id":"m_1","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}}`,
+	)
+	var events []Event
+	if _, _, _, err := responsesDetailedTestRound(t, stream, func(ev Event) { events = append(events, ev) }); err != nil {
+		t.Fatal(err)
+	}
+	var thinks []Event
+	for _, ev := range events {
+		if ev.Kind == "thinking_delta" {
+			thinks = append(thinks, ev)
+		}
+	}
+	if len(thinks) != 2 || thinks[0].Text != "frag" || thinks[0].Index != 0 || thinks[1].Text != "whole part" || thinks[1].Index != 1 {
+		t.Fatalf("done-only part missing or streamed part doubled: %+v", thinks)
+	}
+}

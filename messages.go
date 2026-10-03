@@ -489,9 +489,9 @@ func messagesRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string,
 		return msg, usage, out.Content, nil
 	}
 
-	emit := func(kind, text string) {
+	emit := func(kind, text string, idx int) {
 		if onEvent != nil && text != "" {
-			onEvent(Event{Kind: kind, Text: text})
+			onEvent(Event{Kind: kind, Text: text, Index: idx})
 		}
 	}
 	accs := map[int]*messagesBlockAcc{}
@@ -567,9 +567,9 @@ func messagesRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string,
 			accs[payload.Index] = a
 			order = append(order, payload.Index)
 			if a.block.Type == "text" {
-				emit("text_delta", a.block.Text)
+				emit("text_delta", a.block.Text, 0)
 			} else if a.block.Type == "thinking" {
-				emit("thinking_delta", a.block.Thinking)
+				emit("thinking_delta", a.block.Thinking, payload.Index)
 			}
 		case "content_block_delta":
 			if payload.Delta == nil {
@@ -588,14 +588,14 @@ func messagesRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string,
 					return false
 				}
 				a.text.WriteString(payload.Delta.Text)
-				emit("text_delta", payload.Delta.Text)
+				emit("text_delta", payload.Delta.Text, 0)
 			case "thinking_delta":
 				if a.block.Type != "thinking" {
 					eventErr = errors.New("api: messages: thinking delta in non-thinking block")
 					return false
 				}
 				a.thinking.WriteString(payload.Delta.Thinking)
-				emit("thinking_delta", payload.Delta.Thinking)
+				emit("thinking_delta", payload.Delta.Thinking, payload.Index)
 			case "signature_delta":
 				if a.block.Type != "thinking" {
 					eventErr = errors.New("api: messages: signature delta in non-thinking block")

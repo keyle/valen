@@ -4,8 +4,8 @@
 
 - [x] thinking messages (white) in scrollback would benefit from a timestamp of when they happen, e.g. message (1m3s) <-- when they occurred, 'persisted' on the view when the next thinking reponse comes in.
 - [ ] the content of the chat scrollback is not all aligned. Some have a space in front, or two.
-- [ ] ability to paste a paragraph
-- [ ] shift+enter should insert a line return in the chatbox, it does not (yet!) - fix.
+- [x] ability to paste a paragraph
+- [x] shift+enter should insert a line return in the chatbox, it does not (yet!) - fix. (Kitty `CSI 13;2u` via `>1u` enhancement + xterm `CSI 13;2~`; alt+enter/ctrl+j still work everywhere.)
 - [ ] when working, page up/down temporarly jumps and then gets smashed back down.
 - [ ] related: the wheelmouse should scroll the scrollback, it does not. add this. Scrolling up should go through the history.
 - [ ] show live errors such as backend overloaded, rate limiting, etc. in the thinking but in red?

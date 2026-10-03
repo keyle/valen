@@ -615,6 +615,65 @@ func TestTUIAltEnterAndCtrlJInsertNewline(t *testing.T) {
 	}
 }
 
+// csiMsg stands in for bubbletea's unexported unknown-CSI message: the
+// matcher only relies on the []byte kind plus exact content, which is all
+// bubbletea puts on the loop for unrecognized CSI sequences.
+type csiMsg []byte
+
+func TestParseEnterCSI(t *testing.T) {
+	cases := []struct {
+		seq     string
+		mod     int
+		ok      bool
+		newline bool // mod > 1 inserts a newline instead of submitting
+	}{
+		{"\x1b[13;2u", 2, true, true},  // Kitty shift+enter
+		{"\x1b[13;2~", 2, true, true},  // xterm modifyOtherKeys shift+enter
+		{"\x1b[13;3u", 3, true, true},  // alt+enter under enhancement
+		{"\x1b[13;5u", 5, true, true},  // ctrl+enter under enhancement
+		{"\x1b[13u", 1, true, false},   // unmodified enter stays submit
+		{"\x1b[13~", 1, true, false},   // unmodified enter stays submit
+		{"\x1b[A", 0, false, false},    // unrelated CSI (up)
+		{"\x1b[13;2", 0, false, false}, // truncated
+		{"\x1b[13;xu", 0, false, false},
+		{"hello", 0, false, false},
+		{"", 0, false, false},
+	}
+	for _, c := range cases {
+		mod, ok := parseEnterCSI([]byte(c.seq))
+		if ok != c.ok || mod != c.mod {
+			t.Fatalf("parseEnterCSI(%q) = (%d,%v), want (%d,%v)", c.seq, mod, ok, c.mod, c.ok)
+		}
+	}
+}
+
+func TestTUIShiftEnterCSIInsertsNewline(t *testing.T) {
+	for _, seq := range []string{"\x1b[13;2u", "\x1b[13;2~", "\x1b[13;3u", "\x1b[13;5u"} {
+		m := newTestModel(t, testConfig("https://unused"))
+		m.input.SetValue("hello")
+		updated, _ := m.Update(csiMsg(seq))
+		if updated.(*tuiModel).busy {
+			t.Fatalf("%q should not submit", seq)
+		}
+		if got := m.input.Value(); got != "hello\n" {
+			t.Fatalf("%q should insert newline, got %q", seq, got)
+		}
+	}
+}
+
+func TestTUIEnterCSINoModifierSubmitsLikeEnter(t *testing.T) {
+	// Bare CSI 13u is unmodified enter: empty input is a no-op (same as the
+	// enter key), and it must never insert a newline.
+	m := newTestModel(t, testConfig("https://unused"))
+	_, _ = m.Update(csiMsg("\x1b[13u"))
+	if m.busy {
+		t.Fatal("bare CSI enter with empty input should not submit")
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("bare CSI enter should not insert newline, got %q", got)
+	}
+}
+
 func TestTUIDefaultSystemHintsAgents(t *testing.T) {
 	h := seedHistory(Config{})
 	if len(h) != 1 || h[0].Role != openai.ChatMessageRoleSystem {
@@ -751,7 +810,7 @@ func TestTUIStatusShowsPhase(t *testing.T) {
 		t.Fatalf("done status=%q", m.toolStatus)
 	}
 	_, _ = m.Update(toolEventMsg{kind: "thinking_delta", text: "hmm"})
-	if m.toolStatus != "thinking…" {
+	if m.toolStatus != "Reasoning…" {
 		t.Fatalf("thinking status=%q", m.toolStatus)
 	}
 	_, _ = m.Update(toolEventMsg{kind: "text_delta", text: "answer"})
@@ -761,6 +820,72 @@ func TestTUIStatusShowsPhase(t *testing.T) {
 	_, _ = m.Update(toolEventMsg{kind: "tool_start", text: "read", args: `{"path":"a"}`})
 	if m.toolStatus != "⏺ read…" {
 		t.Fatalf("back-to-tool status=%q", m.toolStatus)
+	}
+}
+
+func TestAppendThinkingDeltaBoundaries(t *testing.T) {
+	// Fragments within one part concatenate exactly (no shredding).
+	s, cur := appendThinkingDelta("", "Hel", 0, 0)
+	s, cur = appendThinkingDelta(s, "lo", 0, cur)
+	if s != "Hello" || cur != 0 {
+		t.Fatalf("fragments glued wrong: %q/%d", s, cur)
+	}
+	// A new part starts on its own line.
+	s, cur = appendThinkingDelta(s, "Reading config", 1, cur)
+	if s != "Hello\nReading config" || cur != 1 {
+		t.Fatalf("part boundary missing newline: %q/%d", s, cur)
+	}
+	// Same part continues on the new line without another break.
+	s, cur = appendThinkingDelta(s, " more", 1, cur)
+	if s != "Hello\nReading config more" {
+		t.Fatalf("continuation broke: %q", s)
+	}
+	// No doubled newlines when either side already breaks.
+	s, cur = appendThinkingDelta("a\n", "b", 1, 0)
+	if s != "a\nb" {
+		t.Fatalf("doubled head newline: %q", s)
+	}
+	s, _ = appendThinkingDelta("a", "\nb", 1, 0)
+	if s != "a\nb" {
+		t.Fatalf("doubled tail newline: %q", s)
+	}
+	// Empty deltas are no-ops and don't advance the part.
+	s, cur = appendThinkingDelta("a", "", 1, 0)
+	if s != "a" || cur != 0 {
+		t.Fatalf("empty delta changed state: %q/%d", s, cur)
+	}
+}
+
+// TestTUIThinkingPartsSeparateLiveLines: reasoning updates on different
+// summary parts land on their own lines in the live view, matching the
+// committed join of final parts (muse streams status-like updates with no
+// trailing newline, which used to glue into one wrapped line).
+func TestTUIThinkingPartsSeparateLiveLines(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	_, _ = m.Update(toolEventMsg{kind: "thinking_delta", text: "Checking the repo layout", idx: 0})
+	_, _ = m.Update(toolEventMsg{kind: "thinking_delta", text: "Reading the config file", idx: 1})
+	if m.pendingThinking != "Checking the repo layout\nReading the config file" {
+		t.Fatalf("live thinking glued: %q", m.pendingThinking)
+	}
+}
+
+func TestThinkDurShowsSubSecond(t *testing.T) {
+	for durMs, want := range map[int64]string{
+		0:     "",
+		1:     " (1ms)",
+		342:   " (342ms)",
+		1500:  " (1.5s)",
+		12000: " (12s)",
+		63000: " (1m3s)",
+	} {
+		if got := thinkDurSuffix(durMs); got != want {
+			t.Fatalf("thinkDurSuffix(%d) = %q, want %q", durMs, got, want)
+		}
+		if durMs > 0 {
+			if got := toolDurSuffix(durMs); got != want {
+				t.Fatalf("toolDurSuffix(%d) = %q, want %q", durMs, got, want)
+			}
+		}
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -181,6 +182,8 @@ type toolEventMsg struct {
 	args   string
 	output string
 	id     string // tool call ID: matches rows by call, not by name
+	durMs  int64  // wall execution time on tool_result
+	idx    int    // reasoning part index on thinking_delta (see Event.Index)
 }
 
 // pendingTool is one in-flight or finished tool call in the live transcript.
@@ -190,6 +193,7 @@ type pendingTool struct {
 	output string
 	done   bool
 	id     string
+	durMs  int64
 }
 
 // turnDoneMsg carries the finished turn back to the UI thread.
@@ -291,6 +295,7 @@ type tuiModel struct {
 	pendingTools    []pendingTool
 	pendingText     string
 	pendingThinking string
+	pendingThinkIdx int // reasoning part index of the pendingThinking tail
 	lastStreamFlush time.Time
 	// chatCache memoizes the rendered committed turns so streaming deltas
 	// only re-render the live pending block, not the whole history. Committed
@@ -602,12 +607,13 @@ func (m *tuiModel) runningToolCount() int {
 // finishPendingTool marks the in-flight tool call done, matched by call ID
 // so parallel same-name calls keep their own outputs. Empty IDs fall back to
 // the latest name match (older event sources).
-func (m *tuiModel) finishPendingTool(id, name, output string) {
+func (m *tuiModel) finishPendingTool(id, name, output string, durMs int64) {
 	if id != "" {
 		for i := range m.pendingTools {
 			if m.pendingTools[i].id == id && !m.pendingTools[i].done {
 				m.pendingTools[i].done = true
 				m.pendingTools[i].output = output
+				m.pendingTools[i].durMs = durMs
 				return
 			}
 		}
@@ -616,10 +622,11 @@ func (m *tuiModel) finishPendingTool(id, name, output string) {
 		if m.pendingTools[i].name == name && !m.pendingTools[i].done {
 			m.pendingTools[i].done = true
 			m.pendingTools[i].output = output
+			m.pendingTools[i].durMs = durMs
 			return
 		}
 	}
-	m.pendingTools = append(m.pendingTools, pendingTool{name: name, output: output, done: true})
+	m.pendingTools = append(m.pendingTools, pendingTool{name: name, output: output, done: true, durMs: durMs})
 }
 
 // flushStream re-renders the live transcript, throttled so a flood of deltas
@@ -839,10 +846,11 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	m.busy = true
 	m.pendingPrompt = trimmed
 	m.pendingSince = time.Now()
-	m.toolStatus = "Contacting model…"
+	m.toolStatus = "Reasoning…"
 	m.pendingTools = nil
 	m.pendingText = ""
 	m.pendingThinking = ""
+	m.pendingThinkIdx = 0
 	m.lastStreamFlush = time.Time{}
 	m.notice = ""
 	m.done = make(chan struct{})
@@ -859,6 +867,7 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 		h := hist
 		var tools []ToolRecord
 		var thinking, answer string
+		thinkIdx := 0
 		onEvent := func(ev Event) {
 			switch ev.Kind {
 			case "tool_start":
@@ -867,16 +876,17 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 				for i := len(tools) - 1; i >= 0; i-- {
 					if tools[i].ID == ev.ID && tools[i].Name == ev.Text {
 						tools[i].Output = ev.Output
+						tools[i].DurMs = ev.DurMs
 						break
 					}
 				}
 			case "text_delta":
 				answer = appendStreamText(answer, ev.Text)
 			case "thinking_delta":
-				thinking = appendStreamText(thinking, ev.Text)
+				thinking, thinkIdx = appendThinkingDelta(thinking, ev.Text, ev.Index, thinkIdx)
 			}
 			if prog != nil {
-				prog.Send(toolEventMsg{kind: ev.Kind, text: ev.Text, args: ev.Args, output: ev.Output, id: ev.ID})
+				prog.Send(toolEventMsg{kind: ev.Kind, text: ev.Text, args: ev.Args, output: ev.Output, id: ev.ID, durMs: ev.DurMs, idx: ev.Index})
 			}
 		}
 		reply, usage, err := runTurn(ctx, cfg, client, apiKey, httpClient, registry, &h, onEvent)
@@ -1023,6 +1033,7 @@ func (m *tuiModel) startFreshSession() {
 	m.pendingTools = nil
 	m.pendingText = ""
 	m.pendingThinking = ""
+	m.pendingThinkIdx = 0
 	m.toolStatus = ""
 	m.cancel = nil
 	m.chatCache, m.chatCacheTurns = "", 0
@@ -1243,7 +1254,7 @@ func (m *tuiModel) exportTranscript() (string, bool) {
 			fmt.Fprintf(&b, "<details><summary>thinking%s</summary>\n\n%s\n\n</details>\n\n", thinkDurSuffix(t.DurMs), t.Thinking)
 		}
 		for _, tr := range t.Tools {
-			fmt.Fprintf(&b, "> tool `%s` `%s`\n>\n> %s\n\n", tr.Name, truncatePlain(tr.Args, 120), truncatePlain(tr.Output, 2000))
+			fmt.Fprintf(&b, "> tool `%s` `%s`%s\n>\n> %s\n\n", tr.Name, truncatePlain(tr.Args, 120), toolDurSuffix(tr.DurMs), truncatePlain(tr.Output, 2000))
 		}
 		if t.Reply != "" {
 			fmt.Fprintf(&b, "%s\n\n", t.Reply)
@@ -1261,6 +1272,20 @@ func (m *tuiModel) exportTranscript() (string, bool) {
 // Update drives the Bubble Tea loop. Single in-process runtime, no server.
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+
+	// CSI-u / modifyOtherKeys enter: shift+enter (and friends) that legacy
+	// terminals collapse into plain enter. mod 1 is unmodified enter, so it
+	// submits like the enter key; any modifier inserts a newline instead.
+	if mod, ok := enterCSIMod(msg); ok {
+		if m.ask != nil || m.mode != viewChat {
+			return m, nil
+		}
+		if mod == 1 {
+			return m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+		}
+		m.insertInputNewline()
+		return m, nil
+	}
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -1303,7 +1328,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case toolEventMsg:
 		switch msg.kind {
 		case "round_start":
-			m.toolStatus = msg.text + " - contacting model"
+			m.toolStatus = "Reasoning…"
 		case "tool_start":
 			m.pendingTools = append(m.pendingTools, pendingTool{name: msg.text, args: msg.args, id: msg.id})
 			if n := m.runningToolCount(); n > 1 {
@@ -1312,7 +1337,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.toolStatus = "⏺ " + msg.text + "…"
 			}
 		case "tool_result":
-			m.finishPendingTool(msg.id, msg.text, msg.output)
+			m.finishPendingTool(msg.id, msg.text, msg.output, msg.durMs)
 			if n := m.runningToolCount(); n > 0 {
 				m.toolStatus = fmt.Sprintf("✓ %s · %d still running", msg.text, n)
 			} else {
@@ -1324,8 +1349,8 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flushStream()
 			return m, nil
 		case "thinking_delta":
-			m.pendingThinking = appendStreamText(m.pendingThinking, msg.text)
-			m.toolStatus = "thinking…"
+			m.pendingThinking, m.pendingThinkIdx = appendThinkingDelta(m.pendingThinking, msg.text, msg.idx, m.pendingThinkIdx)
+			m.toolStatus = "Reasoning…"
 			m.flushStream()
 			return m, nil
 		default:
@@ -1433,6 +1458,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingTools = nil
 		m.pendingText = ""
 		m.pendingThinking = ""
+		m.pendingThinkIdx = 0
 		m.cancel = nil
 		if m.session != nil {
 			if err := m.session.append(turn); err != nil {
@@ -1517,6 +1543,46 @@ func isCancel(err error) bool {
 // modifier-newline keys (shift+enter / alt+enter / ctrl+j).
 func (m *tuiModel) insertInputNewline() {
 	m.input.InsertRune('\n')
+}
+
+// parseEnterCSI matches the byte sequences terminals send for modifier+enter
+// once a disambiguating mode is on: Kitty's CSI 13;mod u and xterm
+// modifyOtherKeys' CSI 13;mod ~. mod follows the CSI-u convention
+// (1 none, 2 shift, 3 alt, 4 shift+alt, 5 ctrl, …); absent means 1.
+func parseEnterCSI(seq []byte) (mod int, ok bool) {
+	// ESC [ 1 3 [; mod] (u | ~)
+	if len(seq) < 4 || seq[0] != 0x1b || seq[1] != '[' || seq[2] != '1' || seq[3] != '3' {
+		return 0, false
+	}
+	rest := seq[4:]
+	if len(rest) == 1 && (rest[0] == 'u' || rest[0] == '~') {
+		return 1, true
+	}
+	if len(rest) >= 3 && rest[0] == ';' && (rest[len(rest)-1] == 'u' || rest[len(rest)-1] == '~') {
+		n := 0
+		for _, c := range rest[1 : len(rest)-1] {
+			if c < '0' || c > '9' {
+				return 0, false
+			}
+			n = n*10 + int(c-'0')
+		}
+		if n >= 1 && n <= 16 {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+// enterCSIMod reports the CSI-u/modifyOtherKeys enter modifier for a message
+// carrying one of the parseEnterCSI sequences. Bubbletea reports those as an
+// unexported unknown-CSI message — the only []byte-kind message on the loop —
+// so kind+content matching is precise without naming that type.
+func enterCSIMod(msg tea.Msg) (int, bool) {
+	v := reflect.ValueOf(msg)
+	if !v.IsValid() || v.Kind() != reflect.Slice || v.Type().Elem().Kind() != reflect.Uint8 {
+		return 0, false
+	}
+	return parseEnterCSI(v.Bytes())
 }
 
 func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1639,9 +1705,10 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Keep the spinner ticking while the turn runs.
 		return m, tea.Batch(cmd, m.spinner.Tick)
 	case "shift+enter", "alt+enter", "ctrl+j":
-		// shift+enter is indistinguishable from enter on legacy terminals
-		// (both arrive as "enter"), so alt+enter and ctrl+j are the working
-		// modifier-newlines today; shift+enter stays for Kitty-capable ones.
+		// "shift+enter" only arrives from terminals that report it as a
+		// distinct key; most send plain enter unless Kitty enhancement is
+		// on (pushed in runTUI, decoded above as CSI 13;2u). alt+enter and
+		// ctrl+j are the bindings that work everywhere.
 		m.insertInputNewline()
 		return m, nil
 	case "pgup", "pgdown", "ctrl+d":
@@ -1816,7 +1883,7 @@ func (m *tuiModel) statusView() string {
 		elapsed := time.Since(m.pendingSince).Round(time.Second)
 		tool := m.toolStatus
 		if tool == "" {
-			tool = "thinking…"
+			tool = "Reasoning…"
 		}
 		left = statusBusyStyle.Render(fmt.Sprintf("%s working  %s  %s", m.spinner.View(), tool, elapsed))
 	} else {
@@ -1961,11 +2028,37 @@ func thinkDurSuffix(durMs int64) string {
 	return " (" + formatThinkDur(time.Duration(durMs)*time.Millisecond) + ")"
 }
 
-// formatThinkDur rounds to seconds so the header reads 12s / 1m3s, matching
-// the live status elapsed.
+// toolDurSuffix renders per-tool execution time, e.g. " (342ms)", " (1.5s)".
+// Empty when unknown so pre-existing sessions render unchanged.
+func toolDurSuffix(durMs int64) string {
+	if durMs <= 0 {
+		return ""
+	}
+	return " (" + formatToolDur(time.Duration(durMs)*time.Millisecond) + ")"
+}
+
+// formatToolDur keeps ms precision under a second and one decimal under a
+// minute so short tools still show useful times; longer ones match think.
+func formatToolDur(d time.Duration) string {
+	return formatThinkDur(d)
+}
+
+// formatThinkDur keeps ms precision under a second so short reasoning
+// bursts and fast tools show useful times; longer ones round to seconds
+// so the header reads 12s / 1m3s, matching the live status elapsed.
 func formatThinkDur(d time.Duration) string {
 	if d < 0 {
 		d = 0
+	}
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	if d < time.Minute {
+		s := float64(d) / float64(time.Second)
+		if s >= 10 {
+			return fmt.Sprintf("%.0fs", s)
+		}
+		return fmt.Sprintf("%.1fs", s)
 	}
 	return d.Round(time.Second).String()
 }
@@ -2036,7 +2129,7 @@ func (m *tuiModel) renderTurnFull(t *Turn) string {
 		b.WriteString(m.wrapPlain("✦ thinking"+thinkDurSuffix(t.DurMs)+"\n"+t.Thinking) + "\n\n")
 	}
 	for _, tr := range t.Tools {
-		b.WriteString(m.wrapPlain(fmt.Sprintf("⏺ %s\nargs: %s\n%s", tr.Name, tr.Args, tr.Output)) + "\n\n")
+		b.WriteString(m.wrapPlain(fmt.Sprintf("⏺ %s%s\nargs: %s\n%s", tr.Name, toolDurSuffix(tr.DurMs), tr.Args, tr.Output)) + "\n\n")
 	}
 	if t.Error != nil {
 		b.WriteString(m.wrapPlain("✗ "+t.Error.Title+"\n"+t.Error.Details) + "\n\n")
@@ -2058,7 +2151,7 @@ func (m *tuiModel) renderToolLine(tr ToolRecord) string {
 	// and committed. Anything unparseable falls through to the default row.
 	if tr.Name == "todowrite" || tr.Name == "todoread" {
 		if lines, ok := todoChecklistLines(tr); ok {
-			out := toolLineStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("⏺ %s", tr.Name), cw-2))
+			out := toolLineStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("⏺ %s%s", tr.Name, toolDurSuffix(tr.DurMs)), cw-2))
 			for _, ln := range lines {
 				out += "\n" + toolDimStyle.Width(cw).Render(breakLongWords(ln, cw-2))
 			}
@@ -2066,7 +2159,7 @@ func (m *tuiModel) renderToolLine(tr ToolRecord) string {
 		}
 	}
 	args := truncateRunes(strings.TrimSpace(tr.Args), maxText)
-	label := fmt.Sprintf("⏺ %s  %s", tr.Name, args)
+	label := fmt.Sprintf("⏺ %s  %s%s", tr.Name, args, toolDurSuffix(tr.DurMs))
 	// Tool styles carry PaddingLeft(2), so break two short of cw.
 	if tr.Err != "" || strings.HasPrefix(strings.TrimSpace(tr.Output), "error:") {
 		return toolErrStyle.Width(cw).Render(breakLongWords("✗ "+label, cw-2))
@@ -2085,7 +2178,7 @@ func (m *tuiModel) renderToolLine(tr ToolRecord) string {
 // in the scrollback; finished tools render the usual line plus preview.
 func (m *tuiModel) renderPendingTool(t pendingTool) string {
 	if t.done {
-		return m.renderToolLine(ToolRecord{Name: t.name, Args: t.args, Output: t.output})
+		return m.renderToolLine(ToolRecord{Name: t.name, Args: t.args, Output: t.output, DurMs: t.durMs})
 	}
 	cw := m.contentWidth()
 	maxText := cw - 4
@@ -2135,7 +2228,7 @@ func (m *tuiModel) renderPending(w int) string {
 
 	tool := m.toolStatus
 	if tool == "" {
-		tool = "thinking…"
+		tool = "Reasoning…"
 	}
 	status := statusBusyStyle.Render(tool) + "  " + metaStyle.Render("esc cancels")
 	parts = append(parts, status)
@@ -2159,6 +2252,20 @@ func appendStreamText(s, delta string) string {
 		s = s[1:]
 	}
 	return s
+}
+
+// appendThinkingDelta accumulates one reasoning update into the live view.
+// Fragments within a summary part concatenate exactly; the first delta of
+// a new part starts on its own line, mirroring the committed join of final
+// summary parts. cur tracks the part index of the tail.
+func appendThinkingDelta(s, delta string, idx, cur int) (string, int) {
+	if delta == "" {
+		return s, cur
+	}
+	if s != "" && idx != cur && !strings.HasSuffix(s, "\n") && !strings.HasPrefix(delta, "\n") {
+		s += "\n"
+	}
+	return appendStreamText(s, delta), idx
 }
 
 // Stream chunks are arbitrary token fragments, not lines. Preserve whitespace
@@ -2614,6 +2721,14 @@ func runTUI(ctx context.Context, cfg Config, cfgPath string, client *openai.Clie
 	m.apiKey = apiKey
 	m.httpClient = newHTTPClient(cfg)
 	askPrompter = m.askPrompt
+	// Push Kitty progressive enhancement, disambiguate mode only: shift+enter
+	// then arrives as CSI 13;2u instead of plain enter (decoded in Update),
+	// while unmodified enter still sends CR and submits as before. Terminals
+	// without support ignore the private CSI; pop restores on exit. runTUI
+	// only runs on a TTY (see the isTTY gate in main), so this never lands
+	// in a pipe.
+	fmt.Fprint(os.Stdout, "\x1b[>1u")
+	defer fmt.Fprint(os.Stdout, "\x1b[<u")
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	m.prog = p
 	_, err = p.Run()

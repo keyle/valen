@@ -19,6 +19,8 @@ type ToolRecord struct {
 	Args   string `json:"args"`
 	Output string `json:"output"`
 	Err    string `json:"err,omitempty"`
+	// DurMs is wall execution time of this call, shown as e.g. "⏺ shell (1.2s)".
+	DurMs int64 `json:"dur_ms,omitempty"`
 }
 
 type Usage struct {

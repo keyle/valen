@@ -467,9 +467,9 @@ func responsesRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string
 		return fold(out)
 	}
 
-	emit := func(kind, text string) {
+	emit := func(kind, text string, idx int) {
 		if onEvent != nil && text != "" {
-			onEvent(Event{Kind: kind, Text: text})
+			onEvent(Event{Kind: kind, Text: text, Index: idx})
 		}
 	}
 	// Builders keep many small deltas linear in total response size. Complete
@@ -553,7 +553,7 @@ func responsesRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string
 					acc.text[payload.ContentIndex].WriteString(part.Text)
 				}
 				acc.text[payload.ContentIndex].WriteString(payload.Delta)
-				emit("text_delta", payload.Delta)
+				emit("text_delta", payload.Delta, 0)
 			}
 		case "response.reasoning_summary_text.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.done", "response.reasoning_text.done":
 			acc := itemAt()
@@ -566,6 +566,13 @@ func responsesRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string
 			part.Type = "summary_text"
 			if strings.HasSuffix(payload.Type, ".done") {
 				part.Text = payload.Text
+				// Done-only parts never streamed deltas, so the live view
+				// has nothing yet: emit the authoritative text. Parts that
+				// streamed stay as-is; the committed turn takes the
+				// authoritative text and the live view keeps its preview.
+				if _, seen := acc.summary[payload.SummaryIndex]; !seen {
+					emit("thinking_delta", payload.Text, payload.SummaryIndex)
+				}
 				delete(acc.summary, payload.SummaryIndex)
 			} else {
 				if acc.summary == nil {
@@ -573,10 +580,15 @@ func responsesRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string
 				}
 				if acc.summary[payload.SummaryIndex] == nil {
 					acc.summary[payload.SummaryIndex] = &strings.Builder{}
-					acc.summary[payload.SummaryIndex].WriteString(part.Text)
+					// An added item may already carry summary text that the
+					// live view never saw; emit the seed before its deltas.
+					if part.Text != "" {
+						acc.summary[payload.SummaryIndex].WriteString(part.Text)
+						emit("thinking_delta", part.Text, payload.SummaryIndex)
+					}
 				}
 				acc.summary[payload.SummaryIndex].WriteString(payload.Delta)
-				emit("thinking_delta", payload.Delta)
+				emit("thinking_delta", payload.Delta, payload.SummaryIndex)
 			}
 		case "response.output_item.added", "response.output_item.done":
 			if payload.Item != nil {

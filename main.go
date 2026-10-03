@@ -424,6 +424,13 @@ type Event struct {
 	// ID carries the tool call ID on tool_start/tool_result so the UI
 	// matches rows by call, not by name (parallel same-name calls).
 	ID string
+	// DurMs carries wall execution time on tool_result.
+	DurMs int64
+	// Index carries the reasoning part index on thinking_delta (Responses
+	// summary_index, messages content-block index). A new part starts on
+	// its own line in the live view, mirroring the committed join of
+	// final parts; fragments within a part concatenate exactly.
+	Index int
 }
 
 type turnConfigKey struct{}
@@ -654,6 +661,7 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 	type result struct {
 		index  int
 		output string
+		durMs  int64
 	}
 	results := make(chan result, len(calls))
 	out := make([]openai.ChatCompletionMessage, len(calls))
@@ -663,7 +671,7 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
-				results <- result{i, "error: " + ctx.Err().Error()}
+				results <- result{i, "error: " + ctx.Err().Error(), 0}
 				return
 			}
 			defer func() { <-sem }()
@@ -674,8 +682,9 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 			} else {
 				output = registry.Run(ctx, tc.Function.Name, tc.Function.Arguments)
 			}
+			durMs := time.Since(t0).Milliseconds()
 			dvlog.Logf("tool %s args=%dB dur=%s out=%dB %q", tc.Function.Name, len(tc.Function.Arguments), dvlog.Dur(time.Since(t0)), len(output), dvlog.Preview(tc.Function.Arguments, 160))
-			results <- result{i, output}
+			results <- result{i, output, durMs}
 		}(i, tc)
 	}
 	for range calls {
@@ -683,7 +692,7 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 		tc := calls[res.index]
 		out[res.index] = openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: tc.ID, Content: res.output}
 		if onEvent != nil {
-			onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: res.output, ID: tc.ID})
+			onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: res.output, ID: tc.ID, DurMs: res.durMs})
 		}
 	}
 	dvlog.Logf("batch %d tools total=%s", len(calls), dvlog.Dur(time.Since(batch0)))
@@ -705,9 +714,10 @@ func runToolCallsSerial(ctx context.Context, registry *Registry, calls []openai.
 		} else {
 			res = registry.Run(ctx, tc.Function.Name, tc.Function.Arguments)
 		}
+		durMs := time.Since(t0).Milliseconds()
 		dvlog.Logf("tool %s args=%dB dur=%s out=%dB serial %q", tc.Function.Name, len(tc.Function.Arguments), dvlog.Dur(time.Since(t0)), len(res), dvlog.Preview(tc.Function.Arguments, 160))
 		if onEvent != nil {
-			onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: res, ID: tc.ID})
+			onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: res, ID: tc.ID, DurMs: durMs})
 		}
 		out = append(out, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: tc.ID, Content: res})
 	}
