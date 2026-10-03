@@ -83,6 +83,26 @@ func TestWebSearchReportsHTTPError(t *testing.T) {
 	}
 }
 
+func TestWebFetchUsesBrowserUserAgent(t *testing.T) {
+	var gotUA string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		fmt.Fprint(w, "<html><body>hi</body></html>")
+	}))
+	defer srv.Close()
+
+	out, err := WebFetchTool().Fn(context.Background(), fmt.Sprintf(`{"url":%q}`, srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "hi" {
+		t.Fatalf("body=%q", out)
+	}
+	if gotUA != browserUserAgent || gotUA == userAgent {
+		t.Fatalf("web fetch must send the browser UA, got %q", gotUA)
+	}
+}
+
 func TestWebFetchStripsScriptsAndTags(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `<html><head><style>p{color:red}</style><script>var x = "SECRET";</script></head>

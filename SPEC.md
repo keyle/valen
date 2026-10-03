@@ -51,7 +51,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `base_url` | string | `https://opencode.ai/zen/go/v1` | API base; the transport path (`/chat/completions`, `/messages`, `/responses`) is appended per model |
 | `api_key_env` | string | `OPENCODE_GO_API_KEY` | Name of the env var holding the key, not the key itself |
 | `session_id` | string | `ses-<unixnano>` | Stable per conversation; sent as `x-opencode-session` |
-| `system` | string | built-in default (mirrors `config.toml`) | System prompt; empty uses the built-in default (helpful assistant, MCP-capable thinking agent with fast tool loopback, batch independent calls in one block, check AGENTS.md first). The shipped `config.toml` sets it explicitly — edit there to override |
+| `system` | string | built-in default (mirrors `config.toml`) | System prompt; empty uses the built-in default (helpful assistant, MCP-capable thinking agent with fast tool loopback, batch independent calls in one block, act within 1–2 rounds once the change is statable, check AGENTS.md first). The shipped `config.toml` sets it explicitly — edit there to override |
 | `max_rounds` | int | `100` | Hard stop on tool-loop iterations |
 | `max_stagnant_rounds` | int | `25` | Stall guard: abort a turn whose tool loop runs this many rounds with calls but no `write`/`edit`/`task` (exploring without acting); raise for long research turns |
 | `max_context_tokens` | int | `300000` | Fail-fast budget per round (est. runes/4): over-budget history aborts the turn with guidance instead of a doomed send |
@@ -72,8 +72,10 @@ Chat requests are `POST {base_url}/chat/completions` with
 request:
 
 - `x-opencode-session: <stable id>` — routing and prompt-cache affinity
-- `User-Agent: <iPad Safari>` — a browser identity, not a generic SDK string
-  (providers return fuller, cleaner responses to it; one const in `main.go`)
+- `User-Agent: valen/<version> (opencode-compatible agent harness)` — an
+  honest SDK identity (`version` stamps via `make prod` ldflags, else `dev`).
+  `web_search`/`web_fetch` instead send a browser UA, where scraped sites'
+  bot defenses expect one.
 
 On chat both are stamped by `headerTransport` in `main.go`, so they survive
 retries and apply to every call the OpenAI client makes. The `messages` and
@@ -176,10 +178,12 @@ error: "stopped after N rounds without a final answer"
   tool call repeats a third consecutive time (multi-call batches break the
      chain). A stall guard (`loopGuards`) aborts the turn after
    `max_stagnant_rounds` rounds with tool calls but no `write`/`edit`/`task`
-   (shell probing doesn't count — it looks busy while changing nothing), and
-   appends one ephemeral batching reminder after 3 consecutive single-call
-   rounds (stripped at turn end, so later turns stay clean; question rounds
-   pause both counters). `maybeAutoCompact` keeps every send lean: prune runs unconditionally
+   (shell probing doesn't count — it looks busy while changing nothing).
+   Before that, it appends ephemeral reminders: a batching nudge after 3
+   consecutive single-call rounds, and an act-now nudge at 15 stagnant rounds
+   inviting the model to advance (skipped when the limit is 15 or less).
+   Both strip at turn end, so later turns stay clean; question rounds pause
+   all counters. `maybeAutoCompact` keeps every send lean: prune runs unconditionally
   (cheap, local — file reads are disposable since tools re-read them, so all
   but the newest 2 collapse to path/range descriptors while user decisions
   never shrink and other outputs keep the newest 40k tokens), then the head

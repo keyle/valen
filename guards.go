@@ -22,6 +22,11 @@ const (
 	defaultMaxStagnantRounds = 25
 	batchNudgeStreak         = 3
 	batchNudgeText           = "[ephemeral nudge — not part of the task] Batch all independent tool calls in the same block instead of one per round; keep dependent calls sequential."
+	// actNudgeStagnant fires one act reminder this many stagnant rounds in,
+	// inviting the model to advance before the stall guard aborts the turn.
+	// Below the default limit; limits at or under it skip straight to the stop.
+	actNudgeStagnant = 15
+	actNudgeText     = "[ephemeral nudge — not part of the task] You have explored for many rounds without calling write/edit/task. You likely already hold what you need: make the change now, or call AskUserQuestion to state what blocks you."
 )
 
 // isActingTool reports calls that change code or delegate work: the only
@@ -39,6 +44,7 @@ type loopGuards struct {
 	stagnantLimit int
 	singleStreak  int
 	stagnant      int
+	actNudged     bool
 }
 
 func newLoopGuards(cfg Config) loopGuards {
@@ -50,51 +56,58 @@ func newLoopGuards(cfg Config) loopGuards {
 }
 
 // note consumes one round's tool calls. nudge asks the caller to append the
-// batching reminder; stop aborts the turn when the stall limit trips.
-func (g *loopGuards) note(calls []openai.ToolCall) (nudge bool, stop error) {
+// batching reminder, act asks for the act-now reminder; stop aborts the turn
+// when the stall limit trips.
+func (g *loopGuards) note(calls []openai.ToolCall) (nudge, act bool, stop error) {
 	if len(calls) == 0 {
-		return false, nil
+		return false, false, nil
 	}
 	for _, tc := range calls {
-		// Interactive questions pause both counters: waiting on the human
-		// is neither batching failure nor stalling.
+		// Interactive questions pause all counters: waiting on the human
+		// is neither batching failure, stalling, nor progress.
 		if tc.Function.Name == "AskUserQuestion" {
-			return false, nil
+			return false, false, nil
 		}
 		if isActingTool(tc.Function.Name) {
-			g.singleStreak, g.stagnant = 0, 0
-			return false, nil
+			g.singleStreak, g.stagnant, g.actNudged = 0, 0, false
+			return false, false, nil
 		}
 	}
 	g.stagnant++
 	if g.stagnantLimit > 0 && g.stagnant >= g.stagnantLimit {
-		return false, stagnantError(g.stagnant)
+		return false, false, stagnantError(g.stagnant)
+	}
+	if !g.actNudged && g.stagnantLimit > actNudgeStagnant && g.stagnant == actNudgeStagnant {
+		g.actNudged = true
+		act = true
 	}
 	if len(calls) == 1 {
 		g.singleStreak++
 		if g.singleStreak >= batchNudgeStreak {
 			g.singleStreak = 0
-			return true, nil
+			return true, act, nil
 		}
 	} else {
 		g.singleStreak = 0
 	}
-	return false, nil
+	return false, act, nil
 }
 
 func stagnantError(rounds int) error {
 	return fmt.Errorf("stopped: %d rounds with tool calls but no write/edit/task — the loop is exploring without acting; narrow the task, delegate exploration to task, or /clear (raise max_stagnant_rounds to allow longer research)", rounds)
 }
 
-// stripNudges removes ephemeral batching reminders at turn end so they never
-// leak into later turns, the session log, or token estimates. Exact match
-// only — user text mentioning batching is untouched.
+// stripNudges removes ephemeral reminders at turn end so they never leak
+// into later turns, the session log, or token estimates. Exact match only —
+// user text mentioning batching is untouched.
 func stripNudges(history *[]openai.ChatCompletionMessage) {
 	h := *history
 	out := h[:0]
 	for _, m := range h {
-		if m.Role == openai.ChatMessageRoleUser && strings.TrimSpace(m.Content) == batchNudgeText {
-			continue
+		if m.Role == openai.ChatMessageRoleUser {
+			if c := strings.TrimSpace(m.Content); c == batchNudgeText || c == actNudgeText {
+				continue
+			}
 		}
 		out = append(out, m)
 	}

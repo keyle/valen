@@ -85,6 +85,15 @@ func TestLoadConfigRejectsMissingFile(t *testing.T) {
 	}
 }
 
+func TestUserAgentIdentities(t *testing.T) {
+	if !strings.HasPrefix(userAgent, "valen/") || !strings.Contains(userAgent, "opencode") {
+		t.Fatalf("API UA must be an honest valen identity: %q", userAgent)
+	}
+	if !strings.Contains(browserUserAgent, "Mozilla") || browserUserAgent == userAgent {
+		t.Fatalf("web UA must stay a browser string: %q", browserUserAgent)
+	}
+}
+
 func TestHeaderTransportStampsIdentity(t *testing.T) {
 	var gotSession, gotUA string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -31,16 +31,25 @@ const (
 	// history. Assumption (reversible via max_context_tokens): well under
 	// the smallest catalog model's limit, over any healthy session.
 	defaultMaxContextTokens = 300000
-	// userAgent rides as iPad Safari, not a bot/generic SDK string.
-	// Assumption (reversible by editing one const): providers return fuller,
-	// cleaner responses to a browser UA than to an automation identity.
-	userAgent = "Mozilla/5.0 (iPad; CPU OS 18_7_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1"
 	// defaultSystem applies when `system` is unset in config.toml. It keeps
 	// the agent MCP-capable with a fast tool loopback and points blank
 	// sessions at AGENTS.md first. Batching guidance is explicit so the model
 	// emits parallel calls in one block instead of one tool per round.
-	defaultSystem = "You are a helpful assistant. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, todowrite, todoread, task, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it. Work fast: batch all independent tool calls in the same block (parallel read/glob/grep/shell); prefer grep/glob to locate before reading. For research and bounded multi-step work, delegate to the task subagent (explore for locating code, general for one step) instead of sprawling the main loop. For any task needing 3+ steps, you MUST call todowrite FIRST before any file reads or edits, keep exactly one in_progress, and update it after each step (mark completed only after verification). Keep each round lean: re-read files instead of resending them."
+	defaultSystem = "You are a helpful assistant. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, todowrite, todoread, task, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it. Work fast: batch all independent tool calls in the same block (parallel read/glob/grep/shell); prefer grep/glob to locate before reading. For research and bounded multi-step work, delegate to the task subagent (explore for locating code, general for one step) instead of sprawling the main loop. For any task needing 3+ steps, you MUST call todowrite FIRST before any file reads or edits, keep exactly one in_progress, and update it after each step (mark completed only after verification). Act fast: once you can state the change, call write/edit within the next round or two — do not re-read files you already hold, and do not research library internals for a local-edit task. Exploring without acting is failure. Keep each round lean: re-read files instead of resending them."
 )
+
+// version is the binary version; `make prod` stamps it via
+// -ldflags -X main.version (dev builds report "dev").
+var version = "dev"
+
+// userAgent identifies valen to the OpenCode APIs: an honest SDK string,
+// not a spoofed browser — Go's TLS fingerprint doesn't match Safari anyway,
+// so a Safari UA to an API looks more bot-like, not less.
+var userAgent = "valen/" + version + " (opencode-compatible agent harness)"
+
+// browserUserAgent is only for web_search/web_fetch, where the scraped
+// sites' bot defenses expect a browser.
+const browserUserAgent = "Mozilla/5.0 (iPad; CPU OS 18_7_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1"
 
 // effectiveSystem returns the configured system prompt, or the built-in
 // default when none is set.
@@ -724,12 +733,18 @@ func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey 
 		// Keep long turns lean between rounds: prune-only, no blocking
 		// summary in the hot loop (summaries fire between turns).
 		leanHistoryForNextRound(cfg, history)
-		if nudge, stop := guards.note(msg.ToolCalls); stop != nil {
+		if nudge, act, stop := guards.note(msg.ToolCalls); stop != nil {
 			dlogf("stall guard tripped after %d stagnant rounds", guards.stagnant)
 			return openai.ChatCompletionMessage{}, usage, stop
-		} else if nudge {
-			dlogf("batch nudge appended after single-call streak")
-			*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: batchNudgeText})
+		} else {
+			if nudge {
+				dlogf("batch nudge appended after single-call streak")
+				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: batchNudgeText})
+			}
+			if act {
+				dlogf("act nudge appended after %d stagnant rounds", guards.stagnant)
+				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: actNudgeText})
+			}
 		}
 	}
 	return openai.ChatCompletionMessage{}, usage, fmt.Errorf("stopped after %d rounds without a final answer", cfg.MaxRounds)

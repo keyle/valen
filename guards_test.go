@@ -23,20 +23,20 @@ func guardCalls(names ...string) []openai.ToolCall {
 func TestLoopGuardsNudgeAfterStreak(t *testing.T) {
 	g := newLoopGuards(Config{MaxStagnantRounds: 100})
 	for i := 0; i < 2; i++ {
-		if nudge, stop := g.note(guardCalls("read")); nudge || stop != nil {
+		if nudge, _, stop := g.note(guardCalls("read")); nudge || stop != nil {
 			t.Fatalf("round %d: nudge=%v stop=%v", i+1, nudge, stop)
 		}
 	}
-	if nudge, stop := g.note(guardCalls("read")); !nudge || stop != nil {
+	if nudge, _, stop := g.note(guardCalls("read")); !nudge || stop != nil {
 		t.Fatalf("3rd single must nudge: nudge=%v stop=%v", nudge, stop)
 	}
 	// Streak resets after firing: next nudge comes after 3 more singles.
 	for i := 0; i < 2; i++ {
-		if nudge, _ := g.note(guardCalls("read")); nudge {
+		if nudge, _, _ := g.note(guardCalls("read")); nudge {
 			t.Fatalf("early re-nudge at +%d", i+1)
 		}
 	}
-	if nudge, _ := g.note(guardCalls("read")); !nudge {
+	if nudge, _, _ := g.note(guardCalls("read")); !nudge {
 		t.Fatal("6th single must re-nudge")
 	}
 }
@@ -45,12 +45,12 @@ func TestLoopGuardsMultiResetsStreak(t *testing.T) {
 	g := newLoopGuards(Config{MaxStagnantRounds: 100})
 	g.note(guardCalls("read"))
 	g.note(guardCalls("read"))
-	if nudge, _ := g.note(guardCalls("read", "grep")); nudge {
+	if nudge, _, _ := g.note(guardCalls("read", "grep")); nudge {
 		t.Fatal("multi-call batch must reset the streak, not nudge")
 	}
 	g.note(guardCalls("read"))
 	g.note(guardCalls("read"))
-	if nudge, _ := g.note(guardCalls("read")); !nudge {
+	if nudge, _, _ := g.note(guardCalls("read")); !nudge {
 		t.Fatal("streak restarts after multi-call batch")
 	}
 }
@@ -59,16 +59,16 @@ func TestLoopGuardsActingResets(t *testing.T) {
 	g := newLoopGuards(Config{MaxStagnantRounds: 4})
 	g.note(guardCalls("read"))
 	g.note(guardCalls("read"))
-	if nudge, stop := g.note(guardCalls("write")); nudge || stop != nil {
+	if nudge, _, stop := g.note(guardCalls("write")); nudge || stop != nil {
 		t.Fatalf("acting call: nudge=%v stop=%v", nudge, stop)
 	}
 	// Counters restarted: 3 more non-acting rounds stay under the limit.
 	for i := 0; i < 3; i++ {
-		if _, stop := g.note(guardCalls("read")); stop != nil {
+		if _, _, stop := g.note(guardCalls("read")); stop != nil {
 			t.Fatalf("round +%d after acting call must not stop: %v", i+1, stop)
 		}
 	}
-	if _, stop := g.note(guardCalls("read")); stop == nil {
+	if _, _, stop := g.note(guardCalls("read")); stop == nil {
 		t.Fatal("limit must trip 4 stagnant rounds after the reset")
 	}
 }
@@ -77,7 +77,7 @@ func TestLoopGuardsStagnantStops(t *testing.T) {
 	g := newLoopGuards(Config{MaxStagnantRounds: 3})
 	g.note(guardCalls("read"))
 	g.note(guardCalls("shell"))
-	_, stop := g.note(guardCalls("grep"))
+	_, _, stop := g.note(guardCalls("grep"))
 	if stop == nil || !strings.Contains(stop.Error(), "3 rounds") || !strings.Contains(stop.Error(), "write/edit/task") {
 		t.Fatalf("stop=%v", stop)
 	}
@@ -86,13 +86,13 @@ func TestLoopGuardsStagnantStops(t *testing.T) {
 func TestLoopGuardsAskPauses(t *testing.T) {
 	g := newLoopGuards(Config{MaxStagnantRounds: 100})
 	for i := 0; i < 5; i++ {
-		if nudge, stop := g.note(guardCalls("AskUserQuestion")); nudge || stop != nil {
+		if nudge, _, stop := g.note(guardCalls("AskUserQuestion")); nudge || stop != nil {
 			t.Fatalf("question round must pause counters: nudge=%v stop=%v", nudge, stop)
 		}
 	}
 	g.note(guardCalls("read"))
 	g.note(guardCalls("read"))
-	if nudge, _ := g.note(guardCalls("read")); !nudge {
+	if nudge, _, _ := g.note(guardCalls("read")); !nudge {
 		t.Fatal("questions must not pollute the single-call streak")
 	}
 }
@@ -106,6 +106,46 @@ func TestLoopGuardsDefaultLimit(t *testing.T) {
 	}
 }
 
+func TestLoopGuardsActNudge(t *testing.T) {
+	g := newLoopGuards(Config{MaxStagnantRounds: 25})
+	for i := 1; i < actNudgeStagnant; i++ {
+		if _, act, stop := g.note(guardCalls("read")); act || stop != nil {
+			t.Fatalf("round %d: act=%v stop=%v", i, act, stop)
+		}
+	}
+	if _, act, stop := g.note(guardCalls("read")); !act || stop != nil {
+		t.Fatalf("round %d must act-nudge: act=%v stop=%v", actNudgeStagnant, act, stop)
+	}
+	// Once per stagnant run: no repeat on the next round.
+	if _, act, _ := g.note(guardCalls("read")); act {
+		t.Fatal("act nudge must fire once per stagnant run")
+	}
+	// Acting resets it: a fresh run nudges again at the same mark.
+	g.note(guardCalls("edit"))
+	for i := 1; i < actNudgeStagnant; i++ {
+		g.note(guardCalls("read"))
+	}
+	if _, act, _ := g.note(guardCalls("read")); !act {
+		t.Fatal("act nudge must re-arm after an acting call")
+	}
+}
+
+func TestLoopGuardsNoActNudgeWhenLimitLow(t *testing.T) {
+	g := newLoopGuards(Config{MaxStagnantRounds: 7})
+	for i := 1; i <= 7; i++ {
+		_, act, stop := g.note(guardCalls("read"))
+		if act {
+			t.Fatalf("round %d: no room for an act nudge under a limit of 7", i)
+		}
+		if i < 7 && stop != nil {
+			t.Fatalf("round %d: early stop %v", i, stop)
+		}
+		if i == 7 && stop == nil {
+			t.Fatal("limit of 7 must stop on the 7th stagnant round")
+		}
+	}
+}
+
 func TestStripNudges(t *testing.T) {
 	h := []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleUser, Content: "please batch these reads"},
@@ -113,6 +153,7 @@ func TestStripNudges(t *testing.T) {
 		{Role: openai.ChatMessageRoleUser, Content: batchNudgeText},
 		{Role: openai.ChatMessageRoleTool, ToolCallID: "c1", Content: "out"},
 		{Role: openai.ChatMessageRoleUser, Content: "  " + batchNudgeText + "  "},
+		{Role: openai.ChatMessageRoleUser, Content: actNudgeText},
 	}
 	stripNudges(&h)
 	if len(h) != 3 {

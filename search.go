@@ -117,7 +117,7 @@ func fetch(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", browserUserAgent)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err

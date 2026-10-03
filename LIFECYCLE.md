@@ -252,6 +252,8 @@ missing feature.
   doesn't reset it. Raise for long research turns.
 - Batching nudge — 3 consecutive single-call rounds append one ephemeral
   user reminder to batch independent calls; stripped at turn end.
+- Act nudge — at 15 stagnant rounds one ephemeral reminder invites the model
+  to make the change now or ask what blocks it; still stripped at turn end.
   Question rounds pause both counters.
 - Retry — 429/502/503/504 + network errors, 3 attempts, 300ms→800ms
   backoff, bodies drained for connection reuse, `Retry-After` not yet
