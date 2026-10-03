@@ -9,6 +9,7 @@ import (
 
 	"github.com/sashabaranov/go-openai"
 	"valen/internal/dvlog"
+	"valen/internal/guard"
 )
 
 // compaction.go: summary-mode compaction, send-side only (disk JSONL stays
@@ -17,10 +18,10 @@ import (
 // resending rounds × history every round. Summaries also fire early (keep*3)
 // on huge budgets so sessions compact often, not just near the limit.
 //
-// Pruning runs on every send: file reads are disposable (tools re-read them),
-// so older reads collapse to path/range descriptors while user decisions
-// never shrink. The summary keeps file identities + decisions verbatim and
-// forgets code content.
+// Pruning preserves the latest two user turns and shields another 40k tokens
+// of older tool outputs. Beyond those shields, reads collapse to path/range
+// descriptors while user decisions never shrink. Summaries retain file
+// identities and decisions, not file content or private thinking.
 //
 // The summary itself runs through the existing runTurn loop on a cheap model
 // ([compaction] model, default = session model with minimal thinking), so all
@@ -34,9 +35,6 @@ const (
 	// Newest tool-output tokens protected from pruning; older outputs are
 	// shortened in place. Matches opencode's PRUNE_PROTECT semantics.
 	compactionPruneProtectTokens = 40000
-	// Newest read outputs kept intact: file content is freshest right after
-	// the read, and anything older re-reads cheaply via read {path, offset}.
-	compactionKeepReadsIntact = 2
 	// Auto-compaction also triggers at keep*this even on huge budgets, so big
 	// sessions compact early and often instead of resending rounds × history
 	// all the way to the fail-fast limit.
@@ -149,31 +147,10 @@ func cheapestThinking(model string) string {
 	return ""
 }
 
-// sendToolOutputChars caps tool-result bytes placed on the wire per round,
-// mirroring opencode's TOOL_OUTPUT_MAX_CHARS. Stored history keeps the full
-// 16k registry output (session log stays lossless); only the request copy
-// shrinks, so rounds stop re-uploading rounds × full results. User decisions
-// (AskUserQuestion answers) and file reads are exempt — decisions must be
-// seen verbatim, and reads are the model's working set (already tool-capped,
-// pruned to descriptors past the newest 2).
-const sendToolOutputChars = 2000
-
-// fitSendBudget cuts a tool result to the per-round send budget with a
-// marker telling the model how to see more (re-run narrower). Short results,
-// decision outputs, and file reads pass through untouched: reads are already
-// capped (~12KB) by the read tool and prune collapses all but the newest 2
-// to descriptors in stored history, so exempting them only ever sends the
-// fresh working set — truncating them is what strands the model re-reading
-// files it can never hold.
+// fitSendBudget preserves registry-capped outputs on the wire. Pruning may
+// shorten older history, but fresh results must be available in full.
 func fitSendBudget(content string) string {
-	if isDecisionOutput(content) || isReadOutput(content) {
-		return content
-	}
-	r := []rune(content)
-	if len(r) <= sendToolOutputChars {
-		return content
-	}
-	return string(r[:sendToolOutputChars]) + fmt.Sprintf("\n[send-truncated %d chars: full result kept in session log — re-run the tool narrower to see more]", len(r)-sendToolOutputChars)
+	return content
 }
 
 // truncateHead cuts s to max runes with a marker, keeping the head.
@@ -200,8 +177,9 @@ func serializeForSummary(history []openai.ChatCompletionMessage) string {
 		case openai.ChatMessageRoleUser:
 			b.WriteString("[User]: " + describeForSummary(m.Content) + "\n")
 		case openai.ChatMessageRoleAssistant:
-			if strings.TrimSpace(m.Content) != "" {
-				b.WriteString("[Assistant]: " + truncateHead(describeForSummary(m.Content), compactionToolOutputMaxChars*2) + "\n")
+			_, answer := splitThinking(m.Content)
+			if answer != "" {
+				b.WriteString("[Assistant]: " + truncateHead(describeForSummary(answer), compactionToolOutputMaxChars*2) + "\n")
 			}
 			for _, tc := range m.ToolCalls {
 				args := truncateHead(strings.TrimSpace(tc.Function.Arguments), compactionToolOutputMaxChars)
@@ -228,6 +206,8 @@ func serializeForSummary(history []openai.ChatCompletionMessage) string {
 // it matters. It returns false for non-read output.
 func readDescriptor(content string) (string, bool) {
 	t := strings.TrimSpace(content)
+	// Re-pruning a descriptor must retain its next-offset hint.
+	t = strings.TrimSuffix(t, "\n[content dropped — re-read with read {path, offset} to restore]")
 	if !strings.HasPrefix(t, "File ") {
 		return "", false
 	}
@@ -282,91 +262,90 @@ func isMostlyOpaque(s string) bool {
 	return ws < 4000/20
 }
 
-// splitForCompaction keeps leading system messages plus the newest tail
-// within keepTokens; everything between is the compactable head. It returns
-// head (to summarize, possibly including a prior summary) and tail (kept
-// verbatim). An existing summary block at the head of the body is folded
-// into head so repeats update in place instead of stacking.
+// isCompactionUser excludes guard reminders from genuine turn boundaries.
+func isCompactionUser(m openai.ChatCompletionMessage) bool {
+	if m.Role != openai.ChatMessageRoleUser {
+		return false
+	}
+	switch strings.TrimSpace(m.Content) {
+	case guard.BatchNudgeText, guard.ActNudgeText, guard.StallRecoveryText, guard.ClaimChallengeText:
+		return false
+	}
+	return true
+}
+
+// splitForCompaction keeps whole user turns, including every call/result
+// transaction. keepTokens is soft: the current request and its entire turn
+// stay verbatim even when oversized. Leading systems are handled by the caller.
 func splitForCompaction(history []openai.ChatCompletionMessage, keepTokens int) (head, tail []openai.ChatCompletionMessage) {
 	sys := 0
 	for sys < len(history) && history[sys].Role == openai.ChatMessageRoleSystem {
 		sys++
 	}
 	body := history[sys:]
-	if len(body) == 0 {
-		return nil, history
+	if estimateTokens(body) <= keepTokens {
+		return nil, body
 	}
 	total := 0
 	split := len(body)
 	for i := len(body) - 1; i >= 0; i-- {
-		if total+estimateTokens(body[i:i+1]) > keepTokens {
-			split = i + 1
-			break
-		}
 		total += estimateTokens(body[i : i+1])
-		split = i
+		if isCompactionUser(body[i]) {
+			if split < len(body) && total > keepTokens {
+				break
+			}
+			split = i
+		}
 	}
-	if split <= 0 {
-		return body, history[sys:sys]
+	if split == len(body) || split == 0 {
+		return nil, body
 	}
 	return body[:split], body[split:]
 }
 
 // pruneOldToolOutputs shrinks older tool results in place and returns the
-// reclaimed token estimate. Policy: file reads are disposable (tools re-read
-// them) — only the newest 2 stay intact, older ones collapse to path/range
-// descriptors. User decisions (AskUserQuestion answers) never shrink. Other
-// outputs keep the newest 40k tokens and shorten to 2000 chars past that.
-// The call record (assistant tool_call) always stays.
+// reclaimed token estimate. The latest two genuine user turns stay intact;
+// older reads and other outputs share a 40k-token shield. Decisions and call
+// records never shrink. Even histories without users keep the freshest batch.
 func pruneOldToolOutputs(history []openai.ChatCompletionMessage) int {
 	reclaimed := 0
-	// Phase 1: older reads collapse to descriptors, newest stay intact.
-	seenReads := 0
+	protectedStart := len(history)
+	users := 0
+	freshBatch := false
 	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Role != openai.ChatMessageRoleTool || !isReadOutput(history[i].Content) {
-			continue
+		if !freshBatch && history[i].Role == openai.ChatMessageRoleAssistant && len(history[i].ToolCalls) > 0 {
+			protectedStart = min(protectedStart, i)
+			freshBatch = true
 		}
-		seenReads++
-		if seenReads <= compactionKeepReadsIntact {
-			continue
+		if isCompactionUser(history[i]) {
+			protectedStart = min(protectedStart, i)
+			users++
+			if users == 2 {
+				break
+			}
 		}
-		d, ok := readDescriptor(history[i].Content)
-		if !ok || d == history[i].Content {
+	}
+	kept := 0
+	for i := protectedStart - 1; i >= 0; i-- {
+		m := history[i]
+		if m.Role != openai.ChatMessageRoleTool || isDecisionOutput(m.Content) {
 			continue
 		}
 		before := estimateTokens(history[i : i+1])
-		history[i].Content = d
-		reclaimed += before - estimateTokens(history[i:i+1])
-	}
-	// Phase 2: other shrinkable outputs share the 40k newest-tokens shield.
-	protect := compactionPruneProtectTokens
-	var idx []int
-	for i := range history {
-		if history[i].Role != openai.ChatMessageRoleTool || isReadOutput(history[i].Content) || isDecisionOutput(history[i].Content) {
+		kept += before
+		if kept <= compactionPruneProtectTokens {
 			continue
 		}
-		idx = append(idx, i)
-	}
-	kept := 0
-	prunedFrom := -1
-	for k := len(idx) - 1; k >= 0; k-- {
-		t := estimateTokens(history[idx[k] : idx[k]+1])
-		if kept+t > protect {
-			prunedFrom = k
-			break
-		}
-		kept += t
-	}
-	if prunedFrom >= 0 {
-		for _, k := range idx[:prunedFrom+1] {
-			m := history[k]
-			before := estimateTokens([]openai.ChatCompletionMessage{m})
-			short := truncateHead(describeForSummary(m.Content), compactionToolOutputMaxChars)
-			if short == m.Content {
-				continue
+		short, read := readDescriptor(m.Content)
+		if !read {
+			short = truncateHead(describeForSummary(m.Content), compactionToolOutputMaxChars)
+			if short != m.Content {
+				short += "\n[pruned: older tool output shortened]"
 			}
-			history[k].Content = short + "\n[pruned: older tool output shortened]"
-			reclaimed += before - estimateTokens(history[k:k+1])
+		}
+		if short != m.Content && len([]rune(short)) < len([]rune(m.Content)) {
+			history[i].Content = short
+			reclaimed += before - estimateTokens(history[i:i+1])
 		}
 	}
 	return reclaimed
@@ -375,7 +354,7 @@ func pruneOldToolOutputs(history []openai.ChatCompletionMessage) int {
 // isContextOverflow reports provider rejections meaning "history too long",
 // the signal to compact once and retry instead of failing.
 func isContextOverflow(err error) bool {
-	if err == nil {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	var te *transportError
@@ -397,9 +376,17 @@ func overflowStatusMessage(status int, msg string) bool {
 	if status == http.StatusRequestEntityTooLarge {
 		return true
 	}
+	if status != 0 && status != http.StatusBadRequest && status != http.StatusUnprocessableEntity {
+		return false
+	}
 	lower := strings.ToLower(msg)
-	for _, k := range []string{"too long", "too large", "context", "exceed", "max tokens", "max_tokens", "token limit", "context length", "request entity too large"} {
+	for _, k := range []string{"context_length_exceeded", "context too long", "prompt is too long", "prompt too long", "input is too long", "input too long", "too many tokens", "request entity too large"} {
 		if strings.Contains(lower, k) {
+			return true
+		}
+	}
+	for _, subject := range []string{"context length", "context window", "input tokens", "input token limit", "input token count", "prompt tokens"} {
+		if strings.Contains(lower, subject) && (strings.Contains(lower, "exceed") || strings.Contains(lower, "too long") || strings.Contains(lower, "too large")) {
 			return true
 		}
 	}
@@ -435,9 +422,6 @@ func summarizeHead(ctx context.Context, cfg Config, client *openai.Client, apiKe
 		return "", err
 	}
 	_, answer := splitThinking(msg.Content)
-	if strings.TrimSpace(answer) == "" {
-		answer = strings.TrimSpace(msg.Content)
-	}
 	if answer == "" {
 		return "", fmt.Errorf("compaction: empty summary from %s", model)
 	}
@@ -465,7 +449,7 @@ func compactHistory(ctx context.Context, cfg Config, client *openai.Client, apiK
 	}
 	previous := ""
 	if strings.HasPrefix(head[0].Content, compactionSummaryPrefix) && head[0].Role == openai.ChatMessageRoleAssistant {
-		previous = strings.TrimPrefix(head[0].Content, compactionSummaryPrefix)
+		_, previous = splitThinking(strings.TrimPrefix(head[0].Content, compactionSummaryPrefix))
 		head = head[1:]
 		if len(head) == 0 {
 			return "", false, nil
@@ -478,8 +462,16 @@ func compactHistory(ctx context.Context, cfg Config, client *openai.Client, apiK
 	if maxHead < 4000 {
 		maxHead = 4000
 	}
-	if est := len([]rune(headText)) / 4; est > maxHead {
-		headText = truncateHead(headText, maxHead*4)
+	headRunes, previousRunes := []rune(headText), []rune(previous)
+	if len(headRunes)+len(previousRunes) > maxHead*4 {
+		// Drop the oldest prefix, including prior-summary text before new work.
+		if len(headRunes) >= maxHead*4 {
+			headText = string(headRunes[len(headRunes)-maxHead*4:])
+			previous = ""
+		} else {
+			keepPrevious := maxHead*4 - len(headRunes)
+			previous = string(previousRunes[len(previousRunes)-keepPrevious:])
+		}
 		headText = "[older head truncated to fit summarizer budget]\n" + headText
 	}
 	summary, err := summarizeHead(ctx, cfg, client, apiKey, hc, headText, previous)
@@ -493,7 +485,7 @@ func compactHistory(ctx context.Context, cfg Config, client *openai.Client, apiK
 }
 
 // maybeAutoCompact keeps every send lean: prune runs unconditionally (cheap,
-// local — old reads collapse to descriptors every turn), then a summary fires
+// local — unprotected old reads collapse to descriptors), then a summary fires
 // past the threshold. It returns true when history shrank by either path.
 func maybeAutoCompact(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, history *[]openai.ChatCompletionMessage) bool {
 	if !compactionAuto(cfg) {
@@ -508,8 +500,8 @@ func maybeAutoCompact(ctx context.Context, cfg Config, client *openai.Client, ap
 }
 
 // leanHistoryForNextRound keeps a long tool loop's per-round sends lean with
-// a cheap local prune only (no network): older reads collapse to descriptors
-// every round. Summaries fire between turns via maybeAutoCompact and on
+// a cheap local prune only (no network), preserving the latest two user turns.
+// Summaries fire between turns via maybeAutoCompact and on
 // overflow retry, never blocking the hot tool loop with an extra LLM call.
 // This keeps prefix-cache affinity (bytes stay stable) and avoids doubling
 // latency once past the soft threshold.

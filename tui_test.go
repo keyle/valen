@@ -11,37 +11,96 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sashabaranov/go-openai"
 )
 
-func testConfig(url string) Config {
-	return Config{Model: "m", BaseURL: url, APIKeyEnv: "TEST_KEY", SessionID: "ses-tui", MaxRounds: 4}
+func TestTUIStreamChunksPreserveTextAndRollingTail(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	for _, text := range []string{"Hel", "lo", " ", "world", "\n", "\t", "next", "\n\n"} {
+		_, _ = m.Update(toolEventMsg{kind: "text_delta", text: text})
+	}
+	if m.pendingText != "Hello world\n\tnext\n\n" {
+		t.Fatalf("chunks changed: %q", m.pendingText)
+	}
+	for _, appendText := range []func(string, string) string{appendStreamLine, appendStreamText} {
+		s := appendText(strings.Repeat("x", 32768), "latest")
+		if len(s) != 32768 || !strings.HasSuffix(s, "latest") {
+			t.Fatal("capped stream froze instead of keeping the newest text")
+		}
+		s = appendText("old", strings.Repeat("y", 40000)+"newest")
+		if len(s) != 32768 || !strings.HasSuffix(s, "newest") || strings.Contains(s, "old") {
+			t.Fatal("oversized chunk did not keep its tail")
+		}
+		s = appendText(strings.Repeat("\u00e9", 16384), "z")
+		if !utf8.ValidString(s) || len(s) > 32768 || !strings.HasSuffix(s, "z") {
+			t.Fatal("rolling cap split a UTF-8 rune")
+		}
+	}
 }
 
-func newTestModel(t *testing.T, cfg Config) *tuiModel {
-	t.Helper()
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
-	session, err := newSession(cfg)
+func TestTUIModelSwitchReseedsFamilyWithoutLosingHistory(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.history = append(m.history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: "working state"})
+	for _, model := range []string{"kimi-k3", "claude-sonnet-4-6", "gpt-6"} {
+		m.applyModelSwitch(model)
+		if len(m.history) != 2 || m.history[1].Content != "working state" || m.history[0].Content != effectiveSystem(m.cfg) {
+			t.Fatalf("switch to %s lost history or retained old system", model)
+		}
+	}
+	m.cfg.System = "custom system"
+	m.applyModelSwitch("glm-5.3")
+	if m.history[0].Content != "custom system" {
+		t.Fatal("model switch ignored explicit system override")
+	}
+	m.history = m.history[1:]
+	m.applyModelSwitch("kimi-k3")
+	if len(m.history) != 2 || m.history[1].Content != "working state" {
+		t.Fatal("reseeding missing system dropped conversation")
+	}
+}
+
+func TestTUICompletionUsesRequestTimeModelAndEffort(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"reply"}}]}`)
+	}))
+	defer srv.Close()
+	cfg := testConfig(srv.URL)
+	cfg.Model, cfg.Thinking = "glm-5.3", "high"
+	m := newTestModel(t, cfg)
+	cmd := m.submit("work")
+	m.applyModelSwitch("kimi-k3")
+	m.applyThinkingSwitch("max")
+	_, _ = m.Update(cmd())
+	turn := m.session.Turns[0]
+	if turn.Model != "glm-5.3" || turn.Effort != "high" || m.session.Model != "glm-5.3" || m.session.Effort != "high" {
+		t.Fatalf("request attributed to later settings: %+v", turn)
+	}
+	if turn.History[0].Content != effectiveSystem(cfg) || m.history[0].Content != effectiveSystem(m.cfg) {
+		t.Fatal("completion overwrote the next model's system or mutated the checkpoint")
+	}
+}
+
+func TestTUIFailedStreamRetainsPartialProgress(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// Force an incomplete body after delivering a valid chunk.
+		w.Header().Set("Content-Length", "1000")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"partial thinking\",\"content\":\"partial answer\"}}]}\n\n")
+	}))
+	defer srv.Close()
+	m := newTestModel(t, testConfig(srv.URL))
+	runSubmit(t, m, "work")
+	turns, err := loadSession(m.session.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := newTUIModel(cfg, newClient(cfg, "key"), NewRegistry(), session)
-	m.ctx = context.Background()
-	m.apiKey = "key"
-	return m
-}
-
-func runSubmit(t *testing.T, m *tuiModel, prompt string) {
-	t.Helper()
-	cmd := m.submit(prompt)
-	if cmd == nil {
-		t.Fatalf("submit %q returned nil cmd (busy=%v notice=%q)", prompt, m.busy, m.notice)
+	if len(turns) != 1 || turns[0].Error == nil || turns[0].Reply != "partial answer" || turns[0].Thinking != "partial thinking" || len(turns[0].History) != 2 {
+		t.Fatalf("failed stream discarded partial progress: %+v", turns)
 	}
-	msg := cmd()
-	_, _ = m.Update(msg)
 }
 
 func TestTUISessionsListShowsTitlesAndResumes(t *testing.T) {

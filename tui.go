@@ -201,6 +201,8 @@ type turnDoneMsg struct {
 	usage    openai.Usage
 	err      error
 	history  []openai.ChatCompletionMessage
+	model    string
+	effort   string
 }
 
 type historyItem struct {
@@ -701,27 +703,6 @@ func (m *tuiModel) renderMarkdown(s string) string {
 	return strings.TrimSpace(out)
 }
 
-func collectTools(msgs []openai.ChatCompletionMessage) []ToolRecord {
-	byID := map[string]*ToolRecord{}
-	var order []string
-	for _, msg := range msgs {
-		for _, tc := range msg.ToolCalls {
-			byID[tc.ID] = &ToolRecord{Name: tc.Function.Name, Args: tc.Function.Arguments}
-			order = append(order, tc.ID)
-		}
-		if msg.Role == openai.ChatMessageRoleTool {
-			if r, ok := byID[msg.ToolCallID]; ok {
-				r.Output = msg.Content
-			}
-		}
-	}
-	out := make([]ToolRecord, 0, len(order))
-	for _, id := range order {
-		out = append(out, *byID[id])
-	}
-	return out
-}
-
 func truncatePlain(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -874,24 +855,35 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	httpClient := m.httpClient
 	registry := m.registry
 	prog := m.prog
-	beforeLen := len(hist)
 	return func() tea.Msg {
-		h := append([]openai.ChatCompletionMessage(nil), hist...)
+		h := hist
+		var tools []ToolRecord
+		var thinking, answer string
 		onEvent := func(ev Event) {
+			switch ev.Kind {
+			case "tool_start":
+				tools = append(tools, ToolRecord{ID: ev.ID, Name: ev.Text, Args: ev.Args})
+			case "tool_result":
+				for i := len(tools) - 1; i >= 0; i-- {
+					if tools[i].ID == ev.ID && tools[i].Name == ev.Text {
+						tools[i].Output = ev.Output
+						break
+					}
+				}
+			case "text_delta":
+				answer = appendStreamText(answer, ev.Text)
+			case "thinking_delta":
+				thinking = appendStreamText(thinking, ev.Text)
+			}
 			if prog != nil {
 				prog.Send(toolEventMsg{kind: ev.Kind, text: ev.Text, args: ev.Args, output: ev.Output, id: ev.ID})
 			}
 		}
 		reply, usage, err := runTurn(ctx, cfg, client, apiKey, httpClient, registry, &h, onEvent)
-		var thinking, answer string
-		var tools []ToolRecord
-		if len(h) > beforeLen {
-			tools = collectTools(h[beforeLen:])
-		}
 		if err == nil {
 			thinking, answer = splitThinking(reply.Content)
 		}
-		return turnDoneMsg{prompt: trimmed, thinking: thinking, answer: answer, tools: tools, usage: usage, err: err, history: h}
+		return turnDoneMsg{prompt: trimmed, thinking: thinking, answer: answer, tools: tools, usage: usage, err: err, history: h, model: cfg.Model, effort: cfg.Thinking}
 	}
 }
 
@@ -1116,6 +1108,11 @@ func (m *tuiModel) openEffortPicker() {
 func (m *tuiModel) applyModelSwitch(id string) {
 	prevThinking := m.cfg.Thinking
 	m.cfg.Model = id
+	if len(m.history) > 0 && m.history[0].Role == openai.ChatMessageRoleSystem {
+		m.history[0].Content = effectiveSystem(m.cfg)
+	} else {
+		m.history = append(seedHistory(m.cfg), m.history...)
+	}
 	resetNote := ""
 	if !validThinkingLevel(id, m.cfg.Thinking) {
 		m.cfg.Thinking = ""
@@ -1401,7 +1398,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		turn := Turn{
 			At: msg.promptAt(), Prompt: msg.prompt, Thinking: msg.thinking, Reply: msg.answer, Tools: msg.tools,
 			Usage: Usage{Prompt: msg.usage.PromptTokens, Completion: msg.usage.CompletionTokens, Total: msg.usage.TotalTokens},
-			Model: m.cfg.Model, Effort: m.cfg.Thinking,
+			Model: msg.model, Effort: msg.effort, History: msg.history,
 		}
 		if msg.err != nil {
 			fe := friendlyError(msg.err)
@@ -1416,7 +1413,12 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.notice = ""
 		}
-		m.history = msg.history
+		m.history = append([]openai.ChatCompletionMessage(nil), msg.history...)
+		// Model/plan switches during a request apply to the next request, not
+		// the completed turn's attribution or checkpoint.
+		if len(m.history) > 0 && m.history[0].Role == openai.ChatMessageRoleSystem {
+			m.history[0].Content = effectiveSystem(m.cfg)
+		}
 		m.busy = false
 		m.pendingPrompt = ""
 		m.toolStatus = ""
@@ -1429,7 +1431,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.notice = "Session save failed: " + err.Error()
 				m.noticeErr = true
 			} else {
-				m.session.ensureMeta(m.cfg.Model, m.cfg.Thinking)
+				m.session.ensureMeta(msg.model, msg.effort)
 			}
 		}
 		if m.done != nil {
@@ -2103,39 +2105,25 @@ func (m *tuiModel) renderPending(w int) string {
 // stays cheap. The committed history message always keeps the full text.
 func appendStreamText(s, delta string) string {
 	const maxChars = 32768
-	if len(s) >= maxChars || len(s)+len(delta) > maxChars {
-		return s
+	if len(delta) >= maxChars {
+		s = strings.Clone(delta[len(delta)-maxChars:])
+	} else {
+		if len(s)+len(delta) > maxChars {
+			s = s[len(s)+len(delta)-maxChars:]
+		}
+		s += delta
 	}
-	return s + delta
+	// A byte cap must not leave a partial UTF-8 rune at the start of the tail.
+	for len(s) > 0 && s[0]&0xc0 == 0x80 {
+		s = s[1:]
+	}
+	return s
 }
 
-// appendStreamLine accumulates live text deltas so each progress update lands
-// on its own line instead of appending to the end of the same line. Chunks
-// that already carry line breaks keep them; bare appends are separated with
-// a newline. The committed history message still keeps the exact full text;
-// this only affects the live transcript render.
+// Stream chunks are arbitrary token fragments, not lines. Preserve whitespace
+// and concatenate exactly; only the capped rolling tail is discarded.
 func appendStreamLine(s, delta string) string {
-	const maxChars = 32768
-	if strings.TrimSpace(delta) == "" {
-		return s
-	}
-	if len(s) >= maxChars {
-		return s
-	}
-	if s == "" {
-		if len(delta) > maxChars {
-			return delta[:maxChars]
-		}
-		return delta
-	}
-	sep := "\n"
-	if strings.HasSuffix(s, "\n") || strings.HasPrefix(delta, "\n") {
-		sep = ""
-	}
-	if len(s)+len(sep)+len(delta) > maxChars {
-		return s
-	}
-	return s + sep + delta
+	return appendStreamText(s, delta)
 }
 
 // streamTail keeps live transcript renders cheap: only the tail of a long
@@ -2300,31 +2288,64 @@ func (m *tuiModel) sessionItems() []sessionItem {
 // resumeSessionPath loads path into the current TUI state: turns become the
 // transcript and history is rebuilt so the resumed conversation continues.
 func (m *tuiModel) resumeSessionPath(path string) {
+	if m.busy {
+		m.notice = "Working... press esc to cancel before resuming."
+		m.noticeErr = false
+		return
+	}
 	turns, err := loadSession(path)
 	if err != nil {
 		m.notice = "Could not load session: " + err.Error()
 		m.noticeErr = true
 		return
 	}
-	m.session.Path = path
-	m.session.ID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	m.session.Turns = turns
-	m.session.TotalUsage = Usage{}
+	m.session = &Session{Path: path, ID: strings.TrimSuffix(filepath.Base(path), ".jsonl"), Turns: turns}
+	m.cfg.SessionID = m.session.ID
+	m.httpClient = newHTTPClient(m.cfg)
+	if m.apiKey != "" {
+		m.client = newClient(m.cfg, m.apiKey)
+	}
 	for _, t := range turns {
 		m.session.TotalUsage.Prompt += t.Usage.Prompt
 		m.session.TotalUsage.Completion += t.Usage.Completion
 		m.session.TotalUsage.Total += t.Usage.Total
 	}
 	m.history = seedHistory(m.cfg)
-	for _, t := range turns {
-		m.history = append(m.history,
-			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: t.Prompt},
-			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: t.Reply})
+	start := 0
+	for i := len(turns) - 1; i >= 0; i-- {
+		if len(turns[i].History) > 0 {
+			m.history = append([]openai.ChatCompletionMessage(nil), turns[i].History...)
+			start = i + 1
+			break
+		}
+	}
+	for i := start; i < len(turns); i++ {
+		t := turns[i]
+		m.history = append(m.history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: t.Prompt})
+		for j, tr := range t.Tools {
+			id := tr.ID
+			if id == "" {
+				id = fmt.Sprintf("legacy-%d-%d", i, j)
+			}
+			m.history = append(m.history,
+				openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: id, Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: tr.Name, Arguments: tr.Args}}}},
+				openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: id, Content: tr.Output})
+		}
+		if t.Reply != "" {
+			m.history = append(m.history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: t.Reply})
+		}
+	}
+	if len(m.history) > 0 && m.history[0].Role == openai.ChatMessageRoleSystem {
+		m.history[0].Content = effectiveSystem(m.cfg)
 	}
 	restoreTodosFromTurns(turns)
 	if meta, err := loadSessionMeta(metaPath(path)); err == nil {
 		m.session.Title, m.session.Model, m.session.Effort = meta.Title, meta.Model, meta.Effort
 	}
+	m.pendingPrompt, m.pendingText, m.pendingThinking, m.toolStatus = "", "", "", ""
+	m.pendingTools = nil
+	m.cancel = nil
+	m.chatCache, m.chatCacheTurns = "", 0
 	m.notice = "Resumed " + m.session.ID + " (" + itoa(len(turns)) + " turns)."
 	m.noticeErr = false
 	m.show(viewChat)

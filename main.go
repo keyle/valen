@@ -8,12 +8,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -29,6 +29,7 @@ const (
 	defaultAPIKeyEnv  = "OPENCODE_GO_API_KEY"
 	defaultMaxRounds  = 100
 	defaultMaxTokens  = 16384
+	defaultRequestTimeoutSeconds = 300
 	// defaultMaxContextTokens fail-fasts absurd sends: stateless transports
 	// resend all of history every round, so burn compounds as rounds ×
 	// history. Assumption (reversible via max_context_tokens): well under
@@ -80,9 +81,8 @@ type Config struct {
 	MaxRounds        int    `toml:"max_rounds"`
 	MaxContextTokens int    `toml:"max_context_tokens"`
 	MaxTokens        int    `toml:"max_tokens"`
-	// MaxStagnantRounds aborts a turn whose tool loop runs this many rounds
-	// with calls but no write/edit/task (exploring without acting). Zero
-	// means the default (25); raise for long research turns.
+	RequestTimeoutSeconds int `toml:"request_timeout_seconds"`
+	// MaxStagnantRounds bounds consecutive identical tool batches, not research.
 	MaxStagnantRounds int `toml:"max_stagnant_rounds"`
 	// Plan starts the session in plan mode: read-only investigation
 	// (write/edit/mutating shell blocked, task explore-only) with the plan
@@ -174,6 +174,9 @@ func loadConfig(path string) (Config, error) {
 	}
 	if cfg.MaxTokens == 0 {
 		cfg.MaxTokens = defaultMaxTokens
+	}
+	if cfg.RequestTimeoutSeconds <= 0 {
+		cfg.RequestTimeoutSeconds = defaultRequestTimeoutSeconds
 	}
 	if cfg.MaxStagnantRounds <= 0 {
 		cfg.MaxStagnantRounds = guard.DefaultMaxStagnantRounds
@@ -329,7 +332,8 @@ func start() error {
 	// over client/config here where they live.
 	if !registry.Has("task") {
 		if err := registry.Add(TaskTool(func(ctx context.Context, prompt, kind string) (string, error) {
-			return runTask(ctx, cfg, client, apiKey, newHTTPClient(cfg), prompt, kind)
+			turnCfg := currentTurnConfig(ctx, cfg)
+			return runTask(ctx, turnCfg, newClient(turnCfg, apiKey), apiKey, newHTTPClient(turnCfg), prompt, kind)
 		})); err != nil {
 			return fmt.Errorf("register task: %w", err)
 		}
@@ -375,6 +379,10 @@ func isTTY(f *os.File) bool {
 // web fetch/search. Keep-alive reuse avoids a fresh TCP+TLS handshake per
 // round; caps stay on the tool-output side, not here.
 var sharedTransport = &http.Transport{
+	Proxy: http.ProxyFromEnvironment,
+	DialContext: (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+	TLSHandshakeTimeout: 10 * time.Second,
+	ResponseHeaderTimeout: 60 * time.Second,
 	MaxIdleConns:        100,
 	MaxIdleConnsPerHost: 20,
 	IdleConnTimeout:     90 * time.Second,
@@ -406,7 +414,7 @@ func readPrompt(args []string) (string, error) {
 
 // Event reports progress during a turn so frontends stay responsive.
 type Event struct {
-	Kind string // "tool_start", "tool_result", "text_delta", "thinking_delta"
+	Kind string // "round_start", "tool_start", "tool_result", "text_delta", "thinking_delta"
 	Text string
 	// Args carries tool JSON arguments on tool_start; Output carries the
 	// tool result on tool_result.
@@ -417,6 +425,23 @@ type Event struct {
 	ID string
 }
 
+type turnConfigKey struct{}
+
+func currentTurnConfig(ctx context.Context, fallback Config) Config {
+	if cfg, ok := ctx.Value(turnConfigKey{}).(Config); ok {
+		return cfg
+	}
+	return fallback
+}
+
+func requestTimeout(cfg Config) time.Duration {
+	seconds := cfg.RequestTimeoutSeconds
+	if seconds <= 0 {
+		seconds = defaultRequestTimeoutSeconds
+	}
+	return time.Duration(seconds) * time.Second
+}
+
 // runTurn drives the tool loop for one user turn. history grows in place with
 // assistant and tool messages so the caller can keep the conversation going.
 // It dispatches on model transport: chat (/chat/completions), messages
@@ -424,6 +449,7 @@ type Event struct {
 // non-chat transports convert per round and fold replies back. A 400 that
 // lists valid thinking levels is learned to disk for next time.
 func runTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
+	ctx = context.WithValue(ctx, turnConfigKey{}, cfg)
 	// Plan mode gates at the tool Fns via ctx, so mark it once here and
 	// every nested call (tools, task subagent) inherits read-only.
 	if cfg.Plan {
@@ -481,10 +507,7 @@ func dispatchTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey
 	return msg, usage, err
 }
 
-// chatSendMessages builds the per-round request copy: identical to history
-// except tool results shrink to the send budget (A2). Stored history keeps
-// full outputs; the wire copy stays small so stateless replays don't
-// re-upload rounds × 16k results.
+// chatSendMessages builds the wire copy without modifying stored history.
 func chatSendMessages(history []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
 	out := make([]openai.ChatCompletionMessage, len(history))
 	for i, m := range history {
@@ -501,43 +524,19 @@ func chatSendMessages(history []openai.ChatCompletionMessage) []openai.ChatCompl
 // many run at once.
 const maxParallelTools = 8
 
-// mcpMu serializes MCP tool calls per server: one stdio JSON-RPC server
-// shares one stdin pipe, so concurrent writes to the SAME server could
-// interleave requests. Different servers are independent and run fully
-// parallel; builtins run fully parallel. Ditched the old global mutex that
-// let one slow MCP server stall every other server's batch.
-var mcpMu = newMCPMutex()
-
-// mcpMutex holds one mutex per MCP server prefix (<server>__<tool>).
-type mcpMutex struct {
-	mu      sync.Mutex
-	servers map[string]*sync.Mutex
-}
-
-func newMCPMutex() *mcpMutex {
-	return &mcpMutex{servers: map[string]*sync.Mutex{}}
-}
-
-// lock returns the mutex for the server prefix of a namespaced tool name.
-func (m *mcpMutex) lock(name string) *sync.Mutex {
-	server, _, _ := strings.Cut(name, "__")
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	l, ok := m.servers[server]
-	if !ok {
-		l = &sync.Mutex{}
-		m.servers[server] = l
-	}
-	return l
-}
-
-// isMCPTool reports namespaced MCP tools (<server>__<tool>).
-func isMCPTool(name string) bool { return strings.Contains(name, "__") }
-
 // loopFingerprint identifies a tool call for repeat detection: same tool
 // with the same (normalized) arguments doing the same work.
 func loopFingerprint(tc openai.ToolCall) string {
-	return tc.Function.Name + "\x00" + normalizeArgs(tc.Function.Arguments)
+	args := normalizeArgs(tc.Function.Arguments)
+	var value any
+	decoder := json.NewDecoder(strings.NewReader(args))
+	decoder.UseNumber()
+	if decoder.Decode(&value) == nil {
+		if canonical, err := json.Marshal(value); err == nil {
+			args = string(canonical)
+		}
+	}
+	return tc.Function.Name + "\x00" + args
 }
 
 // doomLoopTool reports the tool name when calls would repeat the same single
@@ -552,6 +551,9 @@ func doomLoopTool(history []openai.ChatCompletionMessage, calls []openai.ToolCal
 	found := 0
 	for i := len(history) - 1; i >= 0 && found < 2; i-- {
 		m := history[i]
+		if m.Role == openai.ChatMessageRoleUser || (m.Role == openai.ChatMessageRoleAssistant && len(m.ToolCalls) == 0) {
+			break
+		}
 		if m.Role != openai.ChatMessageRoleAssistant || len(m.ToolCalls) == 0 {
 			continue
 		}
@@ -624,17 +626,17 @@ func checkContextBudget(cfg Config, history []openai.ChatCompletionMessage, tool
 	return nil
 }
 
-// runToolCalls executes one round's tool calls and returns the tool messages
-// in request order. Batches without AskUserQuestion run with bounded
-// parallelism; batches containing AskUserQuestion run sequentially so the
-// single interactive overlay/stdin stays deterministic. onEvent emissions
-// stay in request order for the TUI timeline.
+// Only known read-only builtins may overlap. Mutating, interactive and unknown
+// tools run serially; the registry owns its central gates (including MCP).
+// The coordinator emits results as completed, but history stays request-ordered.
 func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCall, onEvent func(Event)) []openai.ChatCompletionMessage {
 	if len(calls) == 0 {
 		return nil
 	}
 	for _, tc := range calls {
-		if tc.Function.Name == "AskUserQuestion" {
+		switch tc.Function.Name {
+		case "read", "glob", "grep", "web_search", "web_fetch":
+		default:
 			return runToolCallsSerial(ctx, registry, calls, onEvent)
 		}
 	}
@@ -647,40 +649,46 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 		}
 	}
 	batch0 := time.Now()
-	outs := make([]string, len(calls))
+	type result struct {
+		index int
+		output string
+	}
+	results := make(chan result, len(calls))
+	out := make([]openai.ChatCompletionMessage, len(calls))
 	sem := make(chan struct{}, maxParallelTools)
-	var wg sync.WaitGroup
 	for i, tc := range calls {
-		wg.Add(1)
 		go func(i int, tc openai.ToolCall) {
-			defer wg.Done()
-			sem <- struct{}{}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				results <- result{i, "error: " + ctx.Err().Error()}
+				return
+			}
 			defer func() { <-sem }()
 			t0 := time.Now()
-			if isMCPTool(tc.Function.Name) {
-				mu := mcpMu.lock(tc.Function.Name)
-				mu.Lock()
-				defer mu.Unlock()
+			var output string
+			if err := ctx.Err(); err != nil {
+				output = "error: " + err.Error()
+			} else {
+				output = registry.Run(ctx, tc.Function.Name, tc.Function.Arguments)
 			}
-			outs[i] = registry.Run(ctx, tc.Function.Name, tc.Function.Arguments)
-			dvlog.Logf("tool %s args=%dB dur=%s out=%dB %q", tc.Function.Name, len(tc.Function.Arguments), dvlog.Dur(time.Since(t0)), len(outs[i]), dvlog.Preview(tc.Function.Arguments, 160))
+			dvlog.Logf("tool %s args=%dB dur=%s out=%dB %q", tc.Function.Name, len(tc.Function.Arguments), dvlog.Dur(time.Since(t0)), len(output), dvlog.Preview(tc.Function.Arguments, 160))
+			results <- result{i, output}
 		}(i, tc)
 	}
-	wg.Wait()
-	dvlog.Logf("batch %d tools total=%s", len(calls), dvlog.Dur(time.Since(batch0)))
-	if onEvent != nil {
-		for i, tc := range calls {
-			onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: outs[i], ID: tc.ID})
+	for range calls {
+		res := <-results
+		tc := calls[res.index]
+		out[res.index] = openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: tc.ID, Content: res.output}
+		if onEvent != nil {
+			onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: res.output, ID: tc.ID})
 		}
 	}
-	out := make([]openai.ChatCompletionMessage, 0, len(calls))
-	for i, tc := range calls {
-		out = append(out, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: tc.ID, Content: outs[i]})
-	}
+	dvlog.Logf("batch %d tools total=%s", len(calls), dvlog.Dur(time.Since(batch0)))
 	return out
 }
 
-// runToolCallsSerial is the sequential fallback for interactive batches.
+// runToolCallsSerial preserves execution order for potentially dependent calls.
 func runToolCallsSerial(ctx context.Context, registry *Registry, calls []openai.ToolCall, onEvent func(Event)) []openai.ChatCompletionMessage {
 	batch0 := time.Now()
 	out := make([]openai.ChatCompletionMessage, 0, len(calls))
@@ -689,118 +697,141 @@ func runToolCallsSerial(ctx context.Context, registry *Registry, calls []openai.
 			onEvent(Event{Kind: "tool_start", Text: tc.Function.Name, Args: tc.Function.Arguments, ID: tc.ID})
 		}
 		t0 := time.Now()
-		res := registry.Run(ctx, tc.Function.Name, tc.Function.Arguments)
+		var res string
+		if err := ctx.Err(); err != nil {
+			res = "error: " + err.Error()
+		} else {
+			res = registry.Run(ctx, tc.Function.Name, tc.Function.Arguments)
+		}
 		dvlog.Logf("tool %s args=%dB dur=%s out=%dB serial %q", tc.Function.Name, len(tc.Function.Arguments), dvlog.Dur(time.Since(t0)), len(res), dvlog.Preview(tc.Function.Arguments, 160))
 		if onEvent != nil {
 			onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: res, ID: tc.ID})
 		}
 		out = append(out, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: tc.ID, Content: res})
 	}
-	dvlog.Logf("batch %d tools serial total=%s", len(calls), dvlog.Dur(time.Since(batch0)))
+	dvlog.Logf("batch %d tools total=%s serial", len(calls), dvlog.Dur(time.Since(batch0)))
 	return out
 }
 
-// runChatTurn is the /chat/completions tool loop, streaming each round.
-func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
+// runModelTurn owns execution policy; round owns only transport and replay.
+func runModelTurn(ctx context.Context, cfg Config, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event), round func(context.Context, []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error)) (openai.ChatCompletionMessage, openai.Usage, error) {
 	var usage openai.Usage
-	guards := guard.New(cfg.MaxStagnantRounds)
-	recovering := false
-	challenges := 0
 	defer guard.StripNudges(history)
-	for round := 0; round < cfg.MaxRounds; round++ {
-		toolsTok := requestToolsTokens(registry)
+	guard.StripNudges(history)
+	toolsTok := requestToolsTokens(registry)
+	maxStagnant := cfg.MaxStagnantRounds
+	if maxStagnant <= 0 {
+		maxStagnant = guard.DefaultMaxStagnantRounds
+	}
+	var previousBatch string
+	identical := 0
+	for n := 0; n < cfg.MaxRounds; n++ {
+		if err := ctx.Err(); err != nil {
+			return openai.ChatCompletionMessage{}, usage, err
+		}
 		if err := checkContextBudget(cfg, *history, toolsTok); err != nil {
 			return openai.ChatCompletionMessage{}, usage, err
 		}
-		req := openai.ChatCompletionRequest{Model: cfg.Model, Messages: chatSendMessages(*history), Tools: registry.OpenAITools()}
+		if onEvent != nil {
+			onEvent(Event{Kind: "round_start", Text: fmt.Sprintf("Round %d/%d", n+1, cfg.MaxRounds)})
+		}
+		t0 := time.Now()
+		msg, u, err := round(ctx, *history)
+		usage.PromptTokens += u.PromptTokens
+		usage.CompletionTokens += u.CompletionTokens
+		usage.TotalTokens += u.TotalTokens
+		dvlog.Logf("round %d %s dur=%s in=%d out=%d content=%dB calls=%s err=%v", n+1, modelTransport(cfg.Model), dvlog.Dur(time.Since(t0)), u.PromptTokens, u.CompletionTokens, len(msg.Content), dvlog.CallsLine(msg.ToolCalls), err)
+		if err != nil {
+			return openai.ChatCompletionMessage{}, usage, err
+		}
+		if err := ctx.Err(); err != nil {
+			return openai.ChatCompletionMessage{}, usage, err
+		}
+		if err := validateModelReply(msg); err != nil {
+			return openai.ChatCompletionMessage{}, usage, err
+		}
+		if len(msg.ToolCalls) == 0 {
+			*history = append(*history, msg)
+			return msg, usage, nil
+		}
+		if name := doomLoopTool(*history, msg.ToolCalls); name != "" {
+			return openai.ChatCompletionMessage{}, usage, doomLoopError(name)
+		}
+		fingerprints := make([]string, len(msg.ToolCalls))
+		for i, tc := range msg.ToolCalls {
+			fingerprints[i] = loopFingerprint(tc)
+		}
+		// Preserve batch order: serial writes with reversed order are different work.
+		batch, _ := json.Marshal(fingerprints)
+		if string(batch) == previousBatch {
+			identical++
+		} else {
+			previousBatch, identical = string(batch), 1
+		}
+		if identical > maxStagnant {
+			return openai.ChatCompletionMessage{}, usage, fmt.Errorf("stopped: tool batch repeated for %d consecutive rounds (max_stagnant_rounds=%d)", identical, maxStagnant)
+		}
+		*history = append(*history, msg)
+		*history = append(*history, runToolCalls(ctx, registry, msg.ToolCalls, onEvent)...)
+		if err := ctx.Err(); err != nil {
+			return openai.ChatCompletionMessage{}, usage, err
+		}
+		leanHistoryForNextRound(cfg, history)
+	}
+	return openai.ChatCompletionMessage{}, usage, fmt.Errorf("stopped after %d rounds without a final answer", cfg.MaxRounds)
+}
+
+// Visible completion and valid calls are required regardless of transport.
+func validateModelReply(msg openai.ChatCompletionMessage) error {
+	if len(msg.ToolCalls) == 0 {
+		_, answer := splitThinking(msg.Content)
+		if strings.TrimSpace(answer) == "" {
+			return errors.New("api: empty choices in response (no visible answer or tool calls)")
+		}
+	}
+	ids := make(map[string]bool, len(msg.ToolCalls))
+	for _, tc := range msg.ToolCalls {
+		if strings.TrimSpace(tc.ID) == "" || strings.TrimSpace(tc.Function.Name) == "" || tc.Type != openai.ToolTypeFunction {
+			return errors.New("api: incomplete tool call (missing id, name or function type)")
+		}
+		if ids[tc.ID] {
+			return fmt.Errorf("api: duplicate tool call ID %q", tc.ID)
+		}
+		ids[tc.ID] = true
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(tc.Function.Arguments), &object); err != nil || object == nil {
+			return fmt.Errorf("api: invalid tool arguments for %q", tc.ID)
+		}
+	}
+	return nil
+}
+
+func outputTokens(cfg Config) int {
+	if cfg.MaxTokens > 0 {
+		return cfg.MaxTokens
+	}
+	return defaultMaxTokens
+}
+
+// runChatTurn keeps fallback capability local to this execution loop.
+func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
+	stream := true
+	tools := registry.OpenAITools()
+	return runModelTurn(ctx, cfg, registry, history, onEvent, func(ctx context.Context, history []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
+		req := openai.ChatCompletionRequest{Model: cfg.Model, Messages: chatSendMessages(history), Tools: tools, MaxTokens: outputTokens(cfg)}
 		if cfg.Temperature != nil {
 			req.Temperature = *cfg.Temperature
 		}
 		applyThinkingToRequest(&req, cfg.Model, cfg.Thinking)
-		if dvlog.Enabled() {
-			if sendBytes, ok := dvlog.SendBytes(req); ok {
-				dvlog.Logf("round %d chat %s toolstok~%d sendbytes=%d\n%s", round+1, dvlog.HistoryLine(*history, estimateTokens(*history)), toolsTok, sendBytes, dvlog.TailDetail(req.Messages, 6))
-			} else {
-				dvlog.Logf("round %d chat %s toolstok~%d", round+1, dvlog.HistoryLine(*history, estimateTokens(*history)), toolsTok)
-			}
-		}
-
-		r0 := time.Now()
-		via := "stream"
-		msg, roundUsage, err := chatRoundStream(ctx, cfg, apiKey, hc, req, onEvent)
-		if err != nil {
+		if stream {
+			msg, usage, err := chatRoundStream(ctx, cfg, apiKey, hc, req, onEvent)
 			if !isStreamRejected(err) {
-				dvlog.Logf("round %d chat err=%v dur=%s", round+1, err, dvlog.Dur(time.Since(r0)))
-				return openai.ChatCompletionMessage{}, usage, err
+				return msg, usage, err
 			}
-			via = "unary"
-			msg, roundUsage, err = chatRoundOnce(ctx, cfg, apiKey, hc, req)
-			if err != nil {
-				dvlog.Logf("round %d chat unary err=%v dur=%s", round+1, err, dvlog.Dur(time.Since(r0)))
-				return openai.ChatCompletionMessage{}, usage, err
-			}
+			stream = false
 		}
-		dvlog.Logf("round %d chat %s dur=%s in=%d out=%d content=%dB calls=%s", round+1, via, dvlog.Dur(time.Since(r0)),
-			roundUsage.PromptTokens, roundUsage.CompletionTokens, len(msg.Content), dvlog.CallsLine(msg.ToolCalls))
-		usage.PromptTokens += roundUsage.PromptTokens
-		usage.CompletionTokens += roundUsage.CompletionTokens
-		usage.TotalTokens += roundUsage.TotalTokens
-
-		if name := doomLoopTool(*history, msg.ToolCalls); name != "" {
-			return openai.ChatCompletionMessage{}, usage, doomLoopError(name)
-		}
-		*history = append(*history, msg)
-		if len(msg.ToolCalls) == 0 {
-			// Claim-vs-action check: tools ran but none acted, and the reply
-			// claims a code change — challenge once-ish instead of finishing
-			// on an unmade change. Recovery summaries are exempt by design.
-			if !recovering && challenges < guard.MaxClaimChallenges && guards.FalseClaim(msg.Content) {
-				challenges++
-				dvlog.Logf("claim challenge %d: reply claims a change with no acting call", challenges)
-				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: guard.ClaimChallengeText})
-				continue
-			}
-			return msg, usage, nil
-		}
-		if recovering {
-			// Recovery round answered with tools attached: take the text,
-			// leave the calls unexecuted, and finish the turn instead of
-			// dying on the stall.
-			if strings.TrimSpace(msg.Content) == "" {
-				return openai.ChatCompletionMessage{}, usage, guard.StagnantError(guards.Stagnant())
-			}
-			(*history)[len(*history)-1].ToolCalls = nil
-			dvlog.Logf("stall recovery: finishing with text, %d tool call(s) declined", len(msg.ToolCalls))
-			final := msg
-			final.ToolCalls = nil
-			return final, usage, nil
-		}
-
-		*history = append(*history, runToolCalls(ctx, registry, msg.ToolCalls, onEvent)...)
-		// Keep long turns lean between rounds: prune-only, no blocking
-		// summary in the hot loop (summaries fire between turns).
-		leanHistoryForNextRound(cfg, history)
-		if nudge, act, stop := guards.Note(msg.ToolCalls); stop != nil {
-			dvlog.Logf("stall guard tripped after %d stagnant rounds", guards.Stagnant())
-			if recovering {
-				return openai.ChatCompletionMessage{}, usage, stop
-			}
-			recovering = true
-			dvlog.Logf("stall recovery: one final round under no-tools instruction")
-			*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: guard.StallRecoveryText})
-			continue
-		} else {
-			if nudge {
-				dvlog.Logf("batch nudge appended after single-call streak")
-				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: guard.BatchNudgeText})
-			}
-			if act {
-				dvlog.Logf("act nudge appended after %d stagnant rounds", guards.Stagnant())
-				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: guard.ActNudgeText})
-			}
-		}
-	}
-	return openai.ChatCompletionMessage{}, usage, fmt.Errorf("stopped after %d rounds without a final answer", cfg.MaxRounds)
+		return chatRoundOnce(ctx, cfg, apiKey, hc, req)
+	})
 }
 
 func chatEndpoint(baseURL string) string {

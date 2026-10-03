@@ -9,12 +9,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
-	"time"
 
 	"github.com/sashabaranov/go-openai"
-	"valen/internal/dvlog"
-	"valen/internal/guard"
 )
 
 func responsesEndpoint(baseURL string) string {
@@ -30,6 +28,7 @@ type responsesTool struct {
 
 type responsesRequest struct {
 	Model        string          `json:"model"`
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
 	Input        []any           `json:"input"`
 	Instructions string          `json:"instructions,omitempty"`
 	Tools        []responsesTool `json:"tools,omitempty"`
@@ -38,6 +37,7 @@ type responsesRequest struct {
 	Reasoning    map[string]any  `json:"reasoning,omitempty"`
 	Store        bool            `json:"store"`
 	Stream       bool            `json:"stream,omitempty"`
+	Include      []string        `json:"include,omitempty"`
 }
 
 type responsesContent struct {
@@ -51,24 +51,27 @@ type responsesSummaryPart struct {
 }
 
 type responsesOutputItem struct {
-	Type      string                 `json:"type"`
-	ID        string                 `json:"id,omitempty"`
-	CallID    string                 `json:"call_id,omitempty"`
-	Name      string                 `json:"name,omitempty"`
-	Arguments string                 `json:"arguments,omitempty"`
-	Role      string                 `json:"role,omitempty"`
-	Phase     string                 `json:"phase,omitempty"`
-	Content   []responsesContent     `json:"content,omitempty"`
-	Summary   []responsesSummaryPart `json:"summary,omitempty"`
-	Status    string                 `json:"status,omitempty"`
+	Type             string                 `json:"type"`
+	ID               string                 `json:"id,omitempty"`
+	CallID           string                 `json:"call_id,omitempty"`
+	Name             string                 `json:"name,omitempty"`
+	Arguments        string                 `json:"arguments,omitempty"`
+	Role             string                 `json:"role,omitempty"`
+	Phase            string                 `json:"phase,omitempty"`
+	Content          []responsesContent     `json:"content,omitempty"`
+	Summary          []responsesSummaryPart `json:"summary,omitempty"`
+	Status           string                 `json:"status,omitempty"`
+	EncryptedContent string                 `json:"encrypted_content,omitempty"`
 }
 
 type responsesResponse struct {
-	ID     string                `json:"id"`
-	Model  string                `json:"model"`
-	Status string                `json:"status,omitempty"`
-	Output []responsesOutputItem `json:"output"`
-	Usage  struct {
+	ID                string                `json:"id"`
+	Model             string                `json:"model"`
+	Status            string                `json:"status,omitempty"`
+	Output            []responsesOutputItem `json:"output"`
+	Error             json.RawMessage       `json:"error,omitempty"`
+	IncompleteDetails json.RawMessage       `json:"incomplete_details,omitempty"`
+	Usage             struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
 		TotalTokens  int `json:"total_tokens"`
@@ -103,9 +106,14 @@ func responsesReasoning(level string) map[string]any {
 
 // splitResponsesInput converts OpenAI-shaped history into Responses
 // instructions plus a stateless input array. Assistant text that precedes a
-// function call is tagged phase "commentary" (Meta requires it); reasoning
-// items are omitted in v1 (chain-of-thought continuity is a follow-up).
+// function call is tagged phase "commentary" (Meta requires it).
 func splitResponsesInput(history []openai.ChatCompletionMessage) (string, []any) {
+	return splitResponsesInputNative(history, nil)
+}
+
+// Native output is scoped to the active turn, keyed by the assistant's first
+// tool call ID. Replay it verbatim rather than flattening reasoning or phases.
+func splitResponsesInputNative(history []openai.ChatCompletionMessage, native map[string][]responsesOutputItem) (string, []any) {
 	var system []string
 	input := make([]any, 0, len(history))
 	for _, m := range history {
@@ -117,26 +125,37 @@ func splitResponsesInput(history []openai.ChatCompletionMessage) (string, []any)
 		case "user":
 			input = append(input, map[string]any{"role": "user", "content": m.Content})
 		case "assistant":
+			if len(m.ToolCalls) > 0 {
+				if items := native[m.ToolCalls[0].ID]; len(items) > 0 {
+					for _, item := range items {
+						input = append(input, item)
+					}
+					continue
+				}
+			}
+			content := m.Content
+			if strings.Contains(content, "<think>") {
+				_, content = splitThinking(content)
+			}
 			if len(m.ToolCalls) == 0 {
-				input = append(input, map[string]any{
-					"role":    "assistant",
-					"content": []any{map[string]any{"type": "output_text", "text": m.Content}},
-				})
+				if strings.TrimSpace(content) != "" {
+					input = append(input, map[string]any{
+						"role":    "assistant",
+						"content": []any{map[string]any{"type": "output_text", "text": content}},
+					})
+				}
 				continue
 			}
-			if strings.TrimSpace(m.Content) != "" {
+			if strings.TrimSpace(content) != "" {
 				input = append(input, map[string]any{
 					"type":    "message",
 					"role":    "assistant",
 					"phase":   "commentary",
-					"content": []any{map[string]any{"type": "output_text", "text": m.Content}},
+					"content": []any{map[string]any{"type": "output_text", "text": content}},
 				})
 			}
 			for _, tc := range m.ToolCalls {
 				args := strings.TrimSpace(tc.Function.Arguments)
-				if args == "" {
-					args = "{}"
-				}
 				input = append(input, map[string]any{
 					"type":      "function_call",
 					"call_id":   tc.ID,
@@ -156,26 +175,24 @@ func splitResponsesInput(history []openai.ChatCompletionMessage) (string, []any)
 }
 
 func parseResponsesError(status int, body []byte) *transportError {
-	var oa struct {
-		Error struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-			Code    string `json:"code"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &oa); err == nil && oa.Error.Message != "" {
-		return &transportError{Transport: "responses", Status: status, Message: oa.Error.Message}
-	}
-	var flat struct {
-		Message string `json:"message"`
-		Error   string `json:"error"`
-	}
-	if err := json.Unmarshal(body, &flat); err == nil {
-		if flat.Message != "" {
-			return &transportError{Transport: "responses", Status: status, Message: flat.Message}
+	var detail func(any) string
+	detail = func(v any) string {
+		if s, ok := v.(string); ok {
+			return strings.TrimSpace(s)
 		}
-		if flat.Error != "" {
-			return &transportError{Transport: "responses", Status: status, Message: flat.Error}
+		if obj, ok := v.(map[string]any); ok {
+			for _, key := range []string{"message", "error", "response", "incomplete_details", "reason", "code", "status", "type"} {
+				if s := detail(obj[key]); s != "" {
+					return s
+				}
+			}
+		}
+		return ""
+	}
+	var decoded any
+	if err := json.Unmarshal(body, &decoded); err == nil {
+		if msg := detail(decoded); msg != "" {
+			return &transportError{Transport: "responses", Status: status, Message: msg}
 		}
 	}
 	msg := strings.TrimSpace(string(body))
@@ -188,8 +205,19 @@ func parseResponsesError(status int, body []byte) *transportError {
 	return &transportError{Transport: "responses", Status: status, Message: msg}
 }
 
+func responsesResponseError(resp responsesResponse) error {
+	if (len(resp.Error) > 0 && string(resp.Error) != "null") || (resp.Status != "" && resp.Status != "completed") {
+		raw, _ := json.Marshal(resp)
+		return parseResponsesError(0, raw)
+	}
+	return nil
+}
+
 func callResponsesOnce(ctx context.Context, hc *http.Client, cfg Config, apiKey string, req responsesRequest) (responsesResponse, error) {
 	var out responsesResponse
+	if !req.Store && len(req.Include) == 0 {
+		req.Include = []string{"reasoning.encrypted_content"}
+	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return out, err
@@ -225,15 +253,19 @@ func callResponsesOnce(ctx context.Context, hc *http.Client, cfg Config, apiKey 
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return out, fmt.Errorf("api: responses: decode: %w", err)
 	}
-	return out, nil
+	return out, responsesResponseError(out)
 }
 
 // responsesReplyToOpenAI folds Responses output items back into an
 // OpenAI-shaped assistant message. Reasoning summaries become <think> blocks
 // so the existing UI collapse keeps working.
 func responsesReplyToOpenAI(resp responsesResponse) (openai.ChatCompletionMessage, error) {
+	if err := responsesResponseError(resp); err != nil {
+		return openai.ChatCompletionMessage{}, err
+	}
 	var text, thinking []string
 	var calls []openai.ToolCall
+	callIDs := make(map[string]bool)
 	for _, item := range resp.Output {
 		switch item.Type {
 		case "message":
@@ -248,11 +280,16 @@ func responsesReplyToOpenAI(resp responsesResponse) (openai.ChatCompletionMessag
 				id = item.ID
 			}
 			args := strings.TrimSpace(item.Arguments)
-			if args == "" {
-				args = "{}"
+			var object map[string]json.RawMessage
+			if strings.TrimSpace(id) == "" || strings.TrimSpace(item.Name) == "" {
+				return openai.ChatCompletionMessage{}, errors.New("api: responses: function call missing ID or name")
 			}
-			if !json.Valid([]byte(args)) {
-				args = "{}"
+			if callIDs[id] {
+				return openai.ChatCompletionMessage{}, fmt.Errorf("api: responses: duplicate function call ID %q", id)
+			}
+			callIDs[id] = true
+			if err := json.Unmarshal([]byte(args), &object); err != nil || object == nil {
+				return openai.ChatCompletionMessage{}, fmt.Errorf("api: responses: invalid arguments for function call %q", id)
 			}
 			calls = append(calls, openai.ToolCall{
 				ID:   id,
@@ -271,11 +308,12 @@ func responsesReplyToOpenAI(resp responsesResponse) (openai.ChatCompletionMessag
 		}
 	}
 	content := strings.Join(text, "")
+	_, answer := splitThinking(content)
+	if strings.TrimSpace(answer) == "" && len(calls) == 0 {
+		return openai.ChatCompletionMessage{}, errors.New("api: empty choices in responses response")
+	}
 	if t := strings.TrimSpace(strings.Join(thinking, "\n")); t != "" {
 		content = "<think>" + t + "</think>" + content
-	}
-	if strings.TrimSpace(content) == "" && len(calls) == 0 {
-		return openai.ChatCompletionMessage{}, errors.New("api: empty choices in responses response")
 	}
 	return openai.ChatCompletionMessage{
 		Role:      openai.ChatMessageRoleAssistant,
@@ -289,25 +327,23 @@ func responsesReplyToOpenAI(resp responsesResponse) (openai.ChatCompletionMessag
 // transport. Rounds stream SSE when the provider accepts it, else fall back
 // to one unary call.
 func runResponsesTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
-	var usage openai.Usage
 	tools := registry.ResponsesTools()
 	reasoning := responsesReasoning(cfg.Thinking)
-	guards := guard.New(cfg.MaxStagnantRounds)
-	recovering := false
-	challenges := 0
-	defer guard.StripNudges(history)
-	for round := 0; round < cfg.MaxRounds; round++ {
-		toolsTok := requestToolsTokens(registry)
-		if err := checkContextBudget(cfg, *history, toolsTok); err != nil {
-			return openai.ChatCompletionMessage{}, usage, err
-		}
-		instructions, input := splitResponsesInput(*history)
+	if strings.HasPrefix(strings.ToLower(cfg.Model), "gpt-") && cfg.Thinking == "none" {
+		reasoning = map[string]any{"effort": "none"}
+	}
+	native := make(map[string][]responsesOutputItem)
+	stream := true
+	return runModelTurn(ctx, cfg, registry, history, onEvent, func(ctx context.Context, history []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
+		instructions, input := splitResponsesInputNative(history, native)
 		req := responsesRequest{
 			Model:        cfg.Model,
+			MaxOutputTokens: outputTokens(cfg),
 			Input:        input,
 			Instructions: instructions,
 			Reasoning:    reasoning,
 			Store:        false,
+			Stream: stream,
 		}
 		if len(tools) > 0 {
 			req.Tools = tools
@@ -316,156 +352,71 @@ func runResponsesTurn(ctx context.Context, cfg Config, client *openai.Client, ap
 		if cfg.Temperature != nil {
 			req.Temperature = cfg.Temperature
 		}
-		if dvlog.Enabled() {
-			if sendBytes, ok := dvlog.SendBytes(req); ok {
-				dvlog.Logf("round %d responses %s toolstok~%d sendbytes=%d", round+1, dvlog.HistoryLine(*history, estimateTokens(*history)), toolsTok, sendBytes)
-			} else {
-				dvlog.Logf("round %d responses %s toolstok~%d", round+1, dvlog.HistoryLine(*history, estimateTokens(*history)), toolsTok)
-			}
+		msg, usage, items, err := responsesRoundStreamDetailed(ctx, cfg, apiKey, hc, req, onEvent)
+		if stream && isStreamRejected(err) {
+			stream, req.Stream = false, false
+			msg, usage, items, err = responsesRoundStreamDetailed(ctx, cfg, apiKey, hc, req, onEvent)
 		}
-
-		r0 := time.Now()
-		via := "stream"
-		sreq := req
-		sreq.Stream = true
-		msg, roundUsage, err := responsesRoundStream(ctx, cfg, apiKey, hc, sreq, onEvent)
-		if err != nil {
-			if !isStreamRejected(err) {
-				dvlog.Logf("round %d responses err=%v dur=%s", round+1, err, dvlog.Dur(time.Since(r0)))
-				return openai.ChatCompletionMessage{}, usage, err
-			}
-			via = "unary"
-			resp, err := callResponsesOnce(ctx, hc, cfg, apiKey, req)
-			if err != nil {
-				dvlog.Logf("round %d responses unary err=%v dur=%s", round+1, err, dvlog.Dur(time.Since(r0)))
-				return openai.ChatCompletionMessage{}, usage, err
-			}
-			usage.PromptTokens += resp.Usage.InputTokens
-			usage.CompletionTokens += resp.Usage.OutputTokens
-			if resp.Usage.TotalTokens != 0 {
-				usage.TotalTokens += resp.Usage.TotalTokens
-			} else {
-				usage.TotalTokens += resp.Usage.InputTokens + resp.Usage.OutputTokens
-			}
-
-			msg, err = responsesReplyToOpenAI(resp)
-			if err != nil {
-				return openai.ChatCompletionMessage{}, usage, err
-			}
-			roundUsage = openai.Usage{}
-		} else {
-			usage.PromptTokens += roundUsage.PromptTokens
-			usage.CompletionTokens += roundUsage.CompletionTokens
-			usage.TotalTokens += roundUsage.TotalTokens
+		if err == nil && len(msg.ToolCalls) > 0 {
+			native[msg.ToolCalls[0].ID] = items
 		}
-		dvlog.Logf("round %d responses %s dur=%s in=%d out=%d content=%dB calls=%s", round+1, via, dvlog.Dur(time.Since(r0)),
-			roundUsage.PromptTokens, roundUsage.CompletionTokens, len(msg.Content), dvlog.CallsLine(msg.ToolCalls))
-
-		if name := doomLoopTool(*history, msg.ToolCalls); name != "" {
-			return openai.ChatCompletionMessage{}, usage, doomLoopError(name)
-		}
-		*history = append(*history, msg)
-		if len(msg.ToolCalls) == 0 {
-			// Claim-vs-action check: tools ran but none acted, and the reply
-			// claims a code change — challenge once-ish instead of finishing
-			// on an unmade change. Recovery summaries are exempt by design.
-			if !recovering && challenges < guard.MaxClaimChallenges && guards.FalseClaim(msg.Content) {
-				challenges++
-				dvlog.Logf("claim challenge %d: reply claims a change with no acting call", challenges)
-				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: guard.ClaimChallengeText})
-				continue
-			}
-			return msg, usage, nil
-		}
-		if recovering {
-			// Recovery round answered with tools attached: take the text,
-			// leave the calls unexecuted, and finish the turn instead of
-			// dying on the stall.
-			if strings.TrimSpace(msg.Content) == "" {
-				return openai.ChatCompletionMessage{}, usage, guard.StagnantError(guards.Stagnant())
-			}
-			(*history)[len(*history)-1].ToolCalls = nil
-			dvlog.Logf("stall recovery: finishing with text, %d tool call(s) declined", len(msg.ToolCalls))
-			final := msg
-			final.ToolCalls = nil
-			return final, usage, nil
-		}
-		*history = append(*history, runToolCalls(ctx, registry, msg.ToolCalls, onEvent)...)
-		// Same per-round lean as the chat loop: prune-only, no blocking summary.
-		leanHistoryForNextRound(cfg, history)
-		if nudge, act, stop := guards.Note(msg.ToolCalls); stop != nil {
-			dvlog.Logf("stall guard tripped after %d stagnant rounds", guards.Stagnant())
-			if recovering {
-				return openai.ChatCompletionMessage{}, usage, stop
-			}
-			recovering = true
-			dvlog.Logf("stall recovery: one final round under no-tools instruction")
-			*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: guard.StallRecoveryText})
-			continue
-		} else {
-			if nudge {
-				dvlog.Logf("batch nudge appended after single-call streak")
-				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: guard.BatchNudgeText})
-			}
-			if act {
-				dvlog.Logf("act nudge appended after %d stagnant rounds", guards.Stagnant())
-				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: guard.ActNudgeText})
-			}
-		}
-	}
-	return openai.ChatCompletionMessage{}, usage, fmt.Errorf("stopped after %d rounds without a final answer", cfg.MaxRounds)
-}
-
-type responsesCallAcc struct {
-	id   string
-	name string
-	args strings.Builder
+		return msg, usage, err
+	})
 }
 
 // responsesRoundStream runs one round as Responses SSE, emitting text and
-// reasoning deltas live. A unary JSON body folds through
-// responsesReplyToOpenAI. The completed event carries usage; when deltas
-// produced nothing usable, the completed response object is folded instead.
+// reasoning deltas live. Native output is available through the detailed API.
 func responsesRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Client, req responsesRequest, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
+	msg, usage, _, err := responsesRoundStreamDetailed(ctx, cfg, apiKey, hc, req, onEvent)
+	return msg, usage, err
+}
+
+// responsesRoundStreamDetailed returns native output separately from display
+// content. The transport closure can retain it for active tool continuations;
+// no native metadata is emitted to the UI or stored in ordinary history.
+func responsesRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string, hc *http.Client, req responsesRequest, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, []responsesOutputItem, error) {
 	var usage openai.Usage
+	if !req.Store && len(req.Include) == 0 {
+		req.Include = []string{"reasoning.encrypted_content"}
+	}
 	headers := map[string]string{}
 	if apiKey != "" {
 		headers["Authorization"] = "Bearer " + apiKey
 	}
 	resp, err := postAPI(ctx, hc, cfg, responsesEndpoint(cfg.BaseURL), req, headers)
 	if err != nil {
-		return openai.ChatCompletionMessage{}, usage, err
+		return openai.ChatCompletionMessage{}, usage, nil, err
 	}
 	defer resp.Body.Close()
 	br := bufio.NewReader(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode != http.StatusOK {
 		raw, err := io.ReadAll(br)
 		if err != nil {
-			return openai.ChatCompletionMessage{}, usage, err
+			return openai.ChatCompletionMessage{}, usage, nil, err
 		}
-		return openai.ChatCompletionMessage{}, usage, parseResponsesError(resp.StatusCode, raw)
+		return openai.ChatCompletionMessage{}, usage, nil, parseResponsesError(resp.StatusCode, raw)
 	}
 	sse, raw, err := splitBodyMode(br)
 	if err != nil {
-		return openai.ChatCompletionMessage{}, usage, err
+		return openai.ChatCompletionMessage{}, usage, nil, err
+	}
+	fold := func(out responsesResponse) (openai.ChatCompletionMessage, openai.Usage, []responsesOutputItem, error) {
+		usage := openai.Usage{PromptTokens: out.Usage.InputTokens, CompletionTokens: out.Usage.OutputTokens, TotalTokens: out.Usage.TotalTokens}
+		if usage.TotalTokens == 0 {
+			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		}
+		msg, err := responsesReplyToOpenAI(out)
+		if err != nil {
+			return openai.ChatCompletionMessage{}, usage, nil, err
+		}
+		return msg, usage, out.Output, nil
 	}
 	if !sse {
 		var out responsesResponse
 		if err := json.Unmarshal(raw, &out); err != nil {
-			return openai.ChatCompletionMessage{}, usage, fmt.Errorf("api: responses: decode: %w", err)
+			return openai.ChatCompletionMessage{}, usage, nil, fmt.Errorf("api: responses: decode: %w", err)
 		}
-		msg, err := responsesReplyToOpenAI(out)
-		if err != nil {
-			return openai.ChatCompletionMessage{}, usage, err
-		}
-		usage.PromptTokens += out.Usage.InputTokens
-		usage.CompletionTokens += out.Usage.OutputTokens
-		if out.Usage.TotalTokens != 0 {
-			usage.TotalTokens += out.Usage.TotalTokens
-		} else {
-			usage.TotalTokens += out.Usage.InputTokens + out.Usage.OutputTokens
-		}
-		return msg, usage, nil
+		return fold(out)
 	}
 
 	emit := func(kind, text string) {
@@ -473,123 +424,169 @@ func responsesRoundStream(ctx context.Context, cfg Config, apiKey string, hc *ht
 			onEvent(Event{Kind: kind, Text: text})
 		}
 	}
-	var text, thinking strings.Builder
-	accs := map[int]*responsesCallAcc{}
-	var order []int
+	// Builders keep many small deltas linear in total response size. Complete
+	// item/argument events replace these accumulators rather than appending.
+	type streamedItem struct {
+		item    responsesOutputItem
+		text    map[int]*strings.Builder
+		summary map[int]*strings.Builder
+		args    *strings.Builder
+	}
+	items := map[int]*streamedItem{}
 	var completed *responsesResponse
-	var scanErr error
-	scanErr = scanSSE(ctx, br, func(ev sseEvent) bool {
+	var eventErr error
+	scanErr := scanSSE(ctx, br, func(ev sseEvent) bool {
 		if strings.TrimSpace(ev.data) == "[DONE]" {
 			return false
 		}
 		var payload struct {
-			Type        string `json:"type"`
-			OutputIndex *int   `json:"output_index"`
-			Delta       string `json:"delta"`
-			Item        *struct {
-				Type      string `json:"type"`
-				ID        string `json:"id"`
-				CallID    string `json:"call_id"`
-				Name      string `json:"name"`
-				Arguments string `json:"arguments"`
-			} `json:"item"`
-			Response *responsesResponse `json:"response"`
-			Message  string             `json:"message"`
-			Error    string             `json:"error"`
+			Type         string               `json:"type"`
+			OutputIndex  *int                 `json:"output_index"`
+			ContentIndex int                  `json:"content_index"`
+			SummaryIndex int                  `json:"summary_index"`
+			ItemID       string               `json:"item_id"`
+			Delta        string               `json:"delta"`
+			Text         string               `json:"text"`
+			Arguments    string               `json:"arguments"`
+			Item         *responsesOutputItem `json:"item"`
+			Response     *responsesResponse   `json:"response"`
 		}
 		if err := json.Unmarshal([]byte(ev.data), &payload); err != nil {
-			return true
+			eventErr = fmt.Errorf("api: responses: decode event: %w", err)
+			return false
+		}
+		if payload.Type == "" {
+			payload.Type = ev.name
+		}
+		idx := 0
+		if payload.OutputIndex != nil {
+			idx = *payload.OutputIndex
+		} else if payload.ItemID != "" {
+			for i, item := range items {
+				if item.item.ID == payload.ItemID {
+					idx = i
+					break
+				}
+			}
+		}
+		// Bound indexes before allocating content/summary slots on untrusted SSE.
+		if idx < 0 || payload.ContentIndex < 0 || payload.ContentIndex > 1024 || payload.SummaryIndex < 0 || payload.SummaryIndex > 1024 {
+			eventErr = errors.New("api: responses: invalid event index")
+			return false
+		}
+		itemAt := func() *streamedItem {
+			if items[idx] == nil {
+				items[idx] = &streamedItem{item: responsesOutputItem{ID: payload.ItemID}}
+			}
+			return items[idx]
 		}
 		switch payload.Type {
 		case "error", "response.failed", "response.incomplete":
-			msg := payload.Message
-			if msg == "" {
-				msg = payload.Error
-			}
-			if msg == "" {
-				msg = payload.Type
-			}
-			scanErr = &transportError{Transport: "responses", Status: 0, Message: msg}
+			eventErr = parseResponsesError(0, []byte(ev.data))
 			return false
-		case "response.output_text.delta":
-			text.WriteString(payload.Delta)
-			emit("text_delta", payload.Delta)
-		case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
-			thinking.WriteString(payload.Delta)
-			emit("thinking_delta", payload.Delta)
-		case "response.output_item.added":
-			if payload.Item == nil || payload.Item.Type != "function_call" || payload.OutputIndex == nil {
-				return true
+		case "response.output_text.delta", "response.output_text.done":
+			acc := itemAt()
+			item := &acc.item
+			item.Type, item.Role = "message", "assistant"
+			for len(item.Content) <= payload.ContentIndex {
+				item.Content = append(item.Content, responsesContent{})
 			}
-			idx := *payload.OutputIndex
-			if _, ok := accs[idx]; !ok {
-				order = append(order, idx)
+			part := &item.Content[payload.ContentIndex]
+			part.Type = "output_text"
+			if payload.Type == "response.output_text.done" {
+				part.Text = payload.Text
+				delete(acc.text, payload.ContentIndex)
+			} else {
+				if acc.text == nil {
+					acc.text = make(map[int]*strings.Builder)
+				}
+				if acc.text[payload.ContentIndex] == nil {
+					acc.text[payload.ContentIndex] = &strings.Builder{}
+					acc.text[payload.ContentIndex].WriteString(part.Text)
+				}
+				acc.text[payload.ContentIndex].WriteString(payload.Delta)
+				emit("text_delta", payload.Delta)
 			}
-			accs[idx] = &responsesCallAcc{id: payload.Item.CallID, name: payload.Item.Name}
-			if accs[idx].id == "" {
-				accs[idx].id = payload.Item.ID
+		case "response.reasoning_summary_text.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.done", "response.reasoning_text.done":
+			acc := itemAt()
+			item := &acc.item
+			item.Type = "reasoning"
+			for len(item.Summary) <= payload.SummaryIndex {
+				item.Summary = append(item.Summary, responsesSummaryPart{})
 			}
-		case "response.function_call_arguments.delta":
-			idx := 0
-			if payload.OutputIndex != nil {
-				idx = *payload.OutputIndex
+			part := &item.Summary[payload.SummaryIndex]
+			part.Type = "summary_text"
+			if strings.HasSuffix(payload.Type, ".done") {
+				part.Text = payload.Text
+				delete(acc.summary, payload.SummaryIndex)
+			} else {
+				if acc.summary == nil {
+					acc.summary = make(map[int]*strings.Builder)
+				}
+				if acc.summary[payload.SummaryIndex] == nil {
+					acc.summary[payload.SummaryIndex] = &strings.Builder{}
+					acc.summary[payload.SummaryIndex].WriteString(part.Text)
+				}
+				acc.summary[payload.SummaryIndex].WriteString(payload.Delta)
+				emit("thinking_delta", payload.Delta)
 			}
-			a := accs[idx]
-			if a == nil {
-				a = &responsesCallAcc{}
-				accs[idx] = a
-				order = append(order, idx)
+		case "response.output_item.added", "response.output_item.done":
+			if payload.Item != nil {
+				items[idx] = &streamedItem{item: *payload.Item}
 			}
-			a.args.WriteString(payload.Delta)
+		case "response.function_call_arguments.delta", "response.function_call_arguments.done":
+			acc := itemAt()
+			acc.item.Type = "function_call"
+			if payload.Type == "response.function_call_arguments.done" {
+				acc.item.Arguments = payload.Arguments
+				acc.args = nil
+			} else {
+				if acc.args == nil {
+					acc.args = &strings.Builder{}
+					acc.args.WriteString(acc.item.Arguments)
+				}
+				acc.args.WriteString(payload.Delta)
+			}
 		case "response.completed":
-			if payload.Response != nil {
-				completed = payload.Response
+			completed = payload.Response
+			if completed == nil {
+				eventErr = errors.New("api: responses: response.completed missing response")
 			}
 			return false
 		}
 		return true
 	})
+	// scanSSE returns nil when the callback stops; keep its error separate.
+	if eventErr != nil {
+		return openai.ChatCompletionMessage{}, usage, nil, eventErr
+	}
 	if scanErr != nil {
-		return openai.ChatCompletionMessage{}, usage, scanErr
+		return openai.ChatCompletionMessage{}, usage, nil, scanErr
 	}
-	if completed != nil {
-		usage.PromptTokens += completed.Usage.InputTokens
-		usage.CompletionTokens += completed.Usage.OutputTokens
-		if completed.Usage.TotalTokens != 0 {
-			usage.TotalTokens += completed.Usage.TotalTokens
-		} else {
-			usage.TotalTokens += completed.Usage.InputTokens + completed.Usage.OutputTokens
+	if completed == nil {
+		return openai.ChatCompletionMessage{}, usage, nil, errors.New("api: responses: stream ended without response.completed")
+	}
+	// Gateways sometimes send an empty final output. Only then use accumulated
+	// items; a nonempty final output is authoritative, even after text deltas.
+	if len(completed.Output) == 0 {
+		order := make([]int, 0, len(items))
+		for idx := range items {
+			order = append(order, idx)
 		}
-		if strings.TrimSpace(text.String()) == "" && len(order) == 0 {
-			msg, err := responsesReplyToOpenAI(*completed)
-			if err != nil {
-				return openai.ChatCompletionMessage{}, usage, err
+		sort.Ints(order)
+		for _, idx := range order {
+			acc := items[idx]
+			for i, text := range acc.text {
+				acc.item.Content[i].Text = text.String()
 			}
-			return msg, usage, nil
+			for i, summary := range acc.summary {
+				acc.item.Summary[i].Text = summary.String()
+			}
+			if acc.args != nil {
+				acc.item.Arguments = acc.args.String()
+			}
+			completed.Output = append(completed.Output, acc.item)
 		}
 	}
-	var calls []openai.ToolCall
-	for _, idx := range order {
-		a := accs[idx]
-		calls = append(calls, openai.ToolCall{
-			ID:   a.id,
-			Type: openai.ToolTypeFunction,
-			Function: openai.FunctionCall{
-				Name:      a.name,
-				Arguments: a.args.String(),
-			},
-		})
-	}
-	content := text.String()
-	if t := strings.TrimSpace(thinking.String()); t != "" {
-		content = "<think>" + t + "</think>" + content
-	}
-	if strings.TrimSpace(content) == "" && len(calls) == 0 {
-		return openai.ChatCompletionMessage{}, usage, errors.New("api: empty choices in responses response")
-	}
-	return openai.ChatCompletionMessage{
-		Role:      openai.ChatMessageRoleAssistant,
-		Content:   content,
-		ToolCalls: calls,
-	}, usage, nil
+	return fold(*completed)
 }

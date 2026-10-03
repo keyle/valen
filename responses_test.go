@@ -151,18 +151,17 @@ func TestSplitResponsesInput(t *testing.T) {
 	}
 }
 
-// TestSplitResponsesInputSendBudget: long outputs shrink on the wire while
-// stored history keeps the full text.
-func TestSplitResponsesInputSendBudget(t *testing.T) {
-	long := strings.Repeat("z", sendToolOutputChars+1000)
+// Fresh, registry-capped tool results remain intact on the wire and in history.
+func TestSplitResponsesInputPreservesToolResults(t *testing.T) {
+	long := strings.Repeat("z", 16000)
 	history := []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleTool, ToolCallID: "call-1", Content: long},
 	}
 	_, input := splitResponsesInput(history)
 	item, _ := input[0].(map[string]any)
 	content, _ := item["output"].(string)
-	if len([]rune(content)) > sendToolOutputChars+200 || !strings.Contains(content, "send-truncated") {
-		t.Fatalf("wire copy must shrink: %d runes", len([]rune(content)))
+	if content != long {
+		t.Fatalf("wire copy must preserve the full result: %d runes", len([]rune(content)))
 	}
 	if history[0].Content != long {
 		t.Fatal("stored history must keep the full result")

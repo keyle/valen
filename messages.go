@@ -10,18 +10,11 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/sashabaranov/go-openai"
-	"valen/internal/dvlog"
-	"valen/internal/guard"
 )
 
 const (
-	// messagesMaxTokensFloor keeps hand-built Config values (tests, old
-	// callers) from requesting a uselessly small answer; configured
-	// max_tokens wins above it.
-	messagesMaxTokensFloor = 8192
 	messagesThinkingBudget = 4096
 	anthropicVersion       = "2023-06-01"
 )
@@ -30,10 +23,7 @@ const (
 // wins, otherwise the 16k default. Ditched the old hardcoded 8192 — long
 // answers needed an extra full-history round to finish.
 func messagesMaxTokens(cfg Config) int {
-	if cfg.MaxTokens > messagesMaxTokensFloor {
-		return cfg.MaxTokens
-	}
-	return defaultMaxTokens
+	return outputTokens(cfg)
 }
 
 // transportError carries an HTTP failure from a non-chat transport so
@@ -83,10 +73,48 @@ type messagesBlock struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
 	Thinking  string          `json:"thinking,omitempty"`
+	Signature string          `json:"signature,omitempty"`
+	Data      string          `json:"data,omitempty"`
 	ID        string          `json:"id,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
+	raw       map[string]json.RawMessage
+}
+
+// Keep native fields (including empty and provider-specific fields) intact
+// when replaying signed thinking and its accompanying content blocks.
+func (b *messagesBlock) UnmarshalJSON(data []byte) error {
+	type block messagesBlock
+	var decoded block
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(data, &decoded.raw); err != nil {
+		return err
+	}
+	*b = messagesBlock(decoded)
+	return nil
+}
+
+func (b messagesBlock) MarshalJSON() ([]byte, error) {
+	type block messagesBlock
+	data, err := json.Marshal(block(b))
+	if err != nil || b.raw == nil {
+		return data, err
+	}
+	fields := make(map[string]json.RawMessage, len(b.raw))
+	for key, value := range b.raw {
+		fields[key] = value
+	}
+	var current map[string]json.RawMessage
+	if err := json.Unmarshal(data, &current); err != nil {
+		return nil, err
+	}
+	for key, value := range current {
+		fields[key] = value
+	}
+	return json.Marshal(fields)
 }
 
 type messagesResponse struct {
@@ -163,6 +191,16 @@ func messagesThinking(level string) map[string]any {
 // prompt plus user/assistant turns. Tool results become user tool_result
 // blocks; assistant tool calls become tool_use blocks.
 func splitChatHistory(history []openai.ChatCompletionMessage) (string, []messagesMessage) {
+	return splitMessagesHistory(history)
+}
+
+func splitMessagesHistory(history []openai.ChatCompletionMessage) (string, []messagesMessage) {
+	return splitMessagesHistoryNative(history, nil)
+}
+
+// Native blocks are scoped to the active turn and keyed by its first tool
+// call ID. Settled history falls back to ordinary text without UI thinking.
+func splitMessagesHistoryNative(history []openai.ChatCompletionMessage, native map[string][]messagesBlock) (string, []messagesMessage) {
 	var system []string
 	msgs := make([]messagesMessage, 0, len(history))
 	for _, m := range history {
@@ -174,24 +212,26 @@ func splitChatHistory(history []openai.ChatCompletionMessage) (string, []message
 		case "user":
 			msgs = append(msgs, messagesMessage{Role: "user", Content: m.Content})
 		case "assistant":
+			if len(m.ToolCalls) > 0 {
+				if blocks, ok := native[m.ToolCalls[0].ID]; ok {
+					msgs = append(msgs, messagesMessage{Role: "assistant", Content: blocks})
+					continue
+				}
+			}
+			_, content := splitThinking(m.Content)
 			if len(m.ToolCalls) == 0 {
-				msgs = append(msgs, messagesMessage{Role: "assistant", Content: m.Content})
+				if content != "" {
+					msgs = append(msgs, messagesMessage{Role: "assistant", Content: content})
+				}
 				continue
 			}
 			blocks := make([]any, 0, len(m.ToolCalls)+1)
-			if strings.TrimSpace(m.Content) != "" {
-				blocks = append(blocks, map[string]any{"type": "text", "text": m.Content})
+			if content != "" {
+				blocks = append(blocks, map[string]any{"type": "text", "text": content})
 			}
 			for _, tc := range m.ToolCalls {
-				var input any = map[string]any{}
 				args := strings.TrimSpace(tc.Function.Arguments)
-				if args == "" {
-					args = "{}"
-				}
-				if err := json.Unmarshal([]byte(args), &input); err != nil {
-					input = map[string]any{}
-				}
-				blocks = append(blocks, map[string]any{"type": "tool_use", "id": tc.ID, "name": tc.Function.Name, "input": input})
+				blocks = append(blocks, map[string]any{"type": "tool_use", "id": tc.ID, "name": tc.Function.Name, "input": json.RawMessage(args)})
 			}
 			msgs = append(msgs, messagesMessage{Role: "assistant", Content: blocks})
 		case "tool":
@@ -208,6 +248,7 @@ func splitChatHistory(history []openai.ChatCompletionMessage) (string, []message
 // message's final content block, so everything above it (system, tools,
 // settled history) is prefix-cacheable. String content becomes one cached
 // text block; block slices gain cache_control on their last map.
+// Native block slices stay untouched for exact continuation replay.
 func stampLastBlockCache(msgs []messagesMessage) {
 	if len(msgs) == 0 {
 		return
@@ -305,6 +346,9 @@ func callMessagesOnce(ctx context.Context, hc *http.Client, cfg Config, apiKey s
 // as <think> so the existing UI collapse keeps working; redacted thinking
 // (opaque) is dropped.
 func messagesReplyToOpenAI(resp messagesResponse) (openai.ChatCompletionMessage, error) {
+	if resp.StopReason == "max_tokens" {
+		return openai.ChatCompletionMessage{}, errors.New("api: messages: incomplete response (max_tokens)")
+	}
 	var text, thinking []string
 	var calls []openai.ToolCall
 	for _, b := range resp.Content {
@@ -321,11 +365,11 @@ func messagesReplyToOpenAI(resp messagesResponse) (openai.ChatCompletionMessage,
 			continue
 		case "tool_use":
 			args := strings.TrimSpace(string(b.Input))
-			if args == "" {
-				args = "{}"
+			if strings.TrimSpace(b.ID) == "" || strings.TrimSpace(b.Name) == "" {
+				return openai.ChatCompletionMessage{}, errors.New("api: messages: incomplete tool call (missing id or name)")
 			}
-			if !json.Valid([]byte(args)) {
-				args = "{}"
+			if !json.Valid([]byte(args)) || !strings.HasPrefix(args, "{") {
+				return openai.ChatCompletionMessage{}, fmt.Errorf("api: messages: invalid tool arguments for %s", b.ID)
 			}
 			calls = append(calls, openai.ToolCall{
 				ID:   b.ID,
@@ -338,11 +382,12 @@ func messagesReplyToOpenAI(resp messagesResponse) (openai.ChatCompletionMessage,
 		}
 	}
 	content := strings.Join(text, "")
+	_, answer := splitThinking(content)
+	if strings.TrimSpace(answer) == "" && len(calls) == 0 {
+		return openai.ChatCompletionMessage{}, errors.New("api: empty choices in messages response")
+	}
 	if t := strings.TrimSpace(strings.Join(thinking, "\n")); t != "" {
 		content = "<think>" + t + "</think>" + content
-	}
-	if strings.TrimSpace(content) == "" && len(calls) == 0 {
-		return openai.ChatCompletionMessage{}, errors.New("api: empty choices in messages response")
 	}
 	return openai.ChatCompletionMessage{
 		Role:      openai.ChatMessageRoleAssistant,
@@ -356,25 +401,19 @@ func messagesReplyToOpenAI(resp messagesResponse) (openai.ChatCompletionMessage,
 // converts to Anthropic wire format and folds the reply back. Rounds stream
 // SSE when the provider accepts it, else fall back to one unary call.
 func runMessagesTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
-	var usage openai.Usage
 	tools := registry.MessagesTools()
 	thinking := messagesThinking(cfg.Thinking)
-	guards := guard.New(cfg.MaxStagnantRounds)
-	recovering := false
-	challenges := 0
-	defer guard.StripNudges(history)
-	for round := 0; round < cfg.MaxRounds; round++ {
-		toolsTok := requestToolsTokens(registry)
-		if err := checkContextBudget(cfg, *history, toolsTok); err != nil {
-			return openai.ChatCompletionMessage{}, usage, err
-		}
-		system, msgs := splitChatHistory(*history)
+	native := make(map[string][]messagesBlock)
+	stream := true
+	return runModelTurn(ctx, cfg, registry, history, onEvent, func(ctx context.Context, history []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
+		system, msgs := splitMessagesHistoryNative(history, native)
 		req := messagesRequest{
 			Model:     cfg.Model,
 			MaxTokens: messagesMaxTokens(cfg),
 			System:    messagesSystemParam(system),
 			Messages:  msgs,
 			Thinking:  thinking,
+			Stream: stream,
 		}
 		if len(tools) > 0 {
 			req.Tools = tools
@@ -383,114 +422,36 @@ func runMessagesTurn(ctx context.Context, cfg Config, client *openai.Client, api
 		if cfg.Temperature != nil {
 			req.Temperature = cfg.Temperature
 		}
-		if dvlog.Enabled() {
-			if sendBytes, ok := dvlog.SendBytes(req); ok {
-				dvlog.Logf("round %d messages %s toolstok~%d sendbytes=%d", round+1, dvlog.HistoryLine(*history, estimateTokens(*history)), toolsTok, sendBytes)
-			} else {
-				dvlog.Logf("round %d messages %s toolstok~%d", round+1, dvlog.HistoryLine(*history, estimateTokens(*history)), toolsTok)
-			}
+		msg, usage, blocks, err := messagesRoundStreamDetailed(ctx, cfg, apiKey, hc, req, onEvent)
+		if stream && isStreamRejected(err) {
+			stream, req.Stream = false, false
+			msg, usage, blocks, err = messagesRoundStreamDetailed(ctx, cfg, apiKey, hc, req, onEvent)
 		}
-
-		r0 := time.Now()
-		via := "stream"
-		sreq := req
-		sreq.Stream = true
-		msg, roundUsage, err := messagesRoundStream(ctx, cfg, apiKey, hc, sreq, onEvent)
-		if err != nil {
-			if !isStreamRejected(err) {
-				dvlog.Logf("round %d messages err=%v dur=%s", round+1, err, dvlog.Dur(time.Since(r0)))
-				return openai.ChatCompletionMessage{}, usage, err
-			}
-			via = "unary"
-			resp, err := callMessagesOnce(ctx, hc, cfg, apiKey, req)
-			if err != nil {
-				dvlog.Logf("round %d messages unary err=%v dur=%s", round+1, err, dvlog.Dur(time.Since(r0)))
-				return openai.ChatCompletionMessage{}, usage, err
-			}
-			usage.PromptTokens += resp.Usage.InputTokens
-			usage.CompletionTokens += resp.Usage.OutputTokens
-			usage.TotalTokens += resp.Usage.InputTokens + resp.Usage.OutputTokens
-
-			msg, err = messagesReplyToOpenAI(resp)
-			if err != nil {
-				return openai.ChatCompletionMessage{}, usage, err
-			}
-			roundUsage = openai.Usage{}
-		} else {
-			usage.PromptTokens += roundUsage.PromptTokens
-			usage.CompletionTokens += roundUsage.CompletionTokens
-			usage.TotalTokens += roundUsage.TotalTokens
+		if err == nil && len(msg.ToolCalls) > 0 {
+			native[msg.ToolCalls[0].ID] = blocks
 		}
-		dvlog.Logf("round %d messages %s dur=%s in=%d out=%d content=%dB calls=%s", round+1, via, dvlog.Dur(time.Since(r0)),
-			roundUsage.PromptTokens, roundUsage.CompletionTokens, len(msg.Content), dvlog.CallsLine(msg.ToolCalls))
-
-		if name := doomLoopTool(*history, msg.ToolCalls); name != "" {
-			return openai.ChatCompletionMessage{}, usage, doomLoopError(name)
-		}
-		*history = append(*history, msg)
-		if len(msg.ToolCalls) == 0 {
-			// Claim-vs-action check: tools ran but none acted, and the reply
-			// claims a code change — challenge once-ish instead of finishing
-			// on an unmade change. Recovery summaries are exempt by design.
-			if !recovering && challenges < guard.MaxClaimChallenges && guards.FalseClaim(msg.Content) {
-				challenges++
-				dvlog.Logf("claim challenge %d: reply claims a change with no acting call", challenges)
-				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: guard.ClaimChallengeText})
-				continue
-			}
-			return msg, usage, nil
-		}
-		if recovering {
-			// Recovery round answered with tools attached: take the text,
-			// leave the calls unexecuted, and finish the turn instead of
-			// dying on the stall.
-			if strings.TrimSpace(msg.Content) == "" {
-				return openai.ChatCompletionMessage{}, usage, guard.StagnantError(guards.Stagnant())
-			}
-			(*history)[len(*history)-1].ToolCalls = nil
-			dvlog.Logf("stall recovery: finishing with text, %d tool call(s) declined", len(msg.ToolCalls))
-			final := msg
-			final.ToolCalls = nil
-			return final, usage, nil
-		}
-		*history = append(*history, runToolCalls(ctx, registry, msg.ToolCalls, onEvent)...)
-		// Same per-round lean as the chat loop: prune-only, no blocking summary.
-		leanHistoryForNextRound(cfg, history)
-		if nudge, act, stop := guards.Note(msg.ToolCalls); stop != nil {
-			dvlog.Logf("stall guard tripped after %d stagnant rounds", guards.Stagnant())
-			if recovering {
-				return openai.ChatCompletionMessage{}, usage, stop
-			}
-			recovering = true
-			dvlog.Logf("stall recovery: one final round under no-tools instruction")
-			*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: guard.StallRecoveryText})
-			continue
-		} else {
-			if nudge {
-				dvlog.Logf("batch nudge appended after single-call streak")
-				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: guard.BatchNudgeText})
-			}
-			if act {
-				dvlog.Logf("act nudge appended after %d stagnant rounds", guards.Stagnant())
-				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: guard.ActNudgeText})
-			}
-		}
-	}
-	return openai.ChatCompletionMessage{}, usage, fmt.Errorf("stopped after %d rounds without a final answer", cfg.MaxRounds)
+		return msg, usage, err
+	})
 }
 
 type messagesBlockAcc struct {
-	kind     string // "text", "thinking", "tool_use"
-	id       string
-	name     string
-	text     strings.Builder
-	thinking strings.Builder
-	input    strings.Builder
+	block      messagesBlock
+	stopped    bool
+	inputDelta bool
+	text       strings.Builder
+	thinking   strings.Builder
+	signature  strings.Builder
+	input      strings.Builder
 }
 
-// messagesRoundStream runs one round as Anthropic SSE, emitting text/thinking
-// deltas live. A unary JSON body folds through messagesReplyToOpenAI.
 func messagesRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Client, req messagesRequest, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
+	msg, usage, _, err := messagesRoundStreamDetailed(ctx, cfg, apiKey, hc, req, onEvent)
+	return msg, usage, err
+}
+
+// messagesRoundStreamDetailed also returns native content for active tool
+// continuation. Unary responses use Content directly, without reconstruction.
+func messagesRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string, hc *http.Client, req messagesRequest, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, []messagesBlock, error) {
 	var usage openai.Usage
 	headers := map[string]string{}
 	if apiKey != "" {
@@ -500,34 +461,34 @@ func messagesRoundStream(ctx context.Context, cfg Config, apiKey string, hc *htt
 	headers["anthropic-version"] = anthropicVersion
 	resp, err := postAPI(ctx, hc, cfg, messagesEndpoint(cfg.BaseURL), req, headers)
 	if err != nil {
-		return openai.ChatCompletionMessage{}, usage, err
+		return openai.ChatCompletionMessage{}, usage, nil, err
 	}
 	defer resp.Body.Close()
 	br := bufio.NewReader(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode != http.StatusOK {
 		raw, err := io.ReadAll(br)
 		if err != nil {
-			return openai.ChatCompletionMessage{}, usage, err
+			return openai.ChatCompletionMessage{}, usage, nil, err
 		}
-		return openai.ChatCompletionMessage{}, usage, parseMessagesError(resp.StatusCode, raw)
+		return openai.ChatCompletionMessage{}, usage, nil, parseMessagesError(resp.StatusCode, raw)
 	}
 	sse, raw, err := splitBodyMode(br)
 	if err != nil {
-		return openai.ChatCompletionMessage{}, usage, err
+		return openai.ChatCompletionMessage{}, usage, nil, err
 	}
 	if !sse {
 		var out messagesResponse
 		if err := json.Unmarshal(raw, &out); err != nil {
-			return openai.ChatCompletionMessage{}, usage, fmt.Errorf("api: messages: decode: %w", err)
-		}
-		msg, err := messagesReplyToOpenAI(out)
-		if err != nil {
-			return openai.ChatCompletionMessage{}, usage, err
+			return openai.ChatCompletionMessage{}, usage, nil, fmt.Errorf("api: messages: decode: %w", err)
 		}
 		usage.PromptTokens += out.Usage.InputTokens
 		usage.CompletionTokens += out.Usage.OutputTokens
 		usage.TotalTokens += out.Usage.InputTokens + out.Usage.OutputTokens
-		return msg, usage, nil
+		msg, err := messagesReplyToOpenAI(out)
+		if err != nil {
+			return openai.ChatCompletionMessage{}, usage, nil, err
+		}
+		return msg, usage, out.Content, nil
 	}
 
 	emit := func(kind, text string) {
@@ -537,17 +498,10 @@ func messagesRoundStream(ctx context.Context, cfg Config, apiKey string, hc *htt
 	}
 	accs := map[int]*messagesBlockAcc{}
 	var order []int
-	at := func(idx int) *messagesBlockAcc {
-		a := accs[idx]
-		if a == nil {
-			a = &messagesBlockAcc{}
-			accs[idx] = a
-			order = append(order, idx)
-		}
-		return a
-	}
-	var scanErr error
-	scanErr = scanSSE(ctx, br, func(ev sseEvent) bool {
+	var eventErr error
+	var stopReason string
+	var terminal bool
+	scanErr := scanSSE(ctx, br, func(ev sseEvent) bool {
 		if strings.TrimSpace(ev.data) == "[DONE]" {
 			return false
 		}
@@ -560,115 +514,153 @@ func messagesRoundStream(ctx context.Context, cfg Config, apiKey string, hc *htt
 					OutputTokens int `json:"output_tokens"`
 				} `json:"usage"`
 			} `json:"message"`
-			ContentBlock *struct {
-				Type string `json:"type"`
-				ID   string `json:"id"`
-				Name string `json:"name"`
-			} `json:"content_block"`
-			Delta *struct {
+			ContentBlock *messagesBlock `json:"content_block"`
+			Delta        *struct {
 				Type        string `json:"type"`
 				Text        string `json:"text"`
 				Thinking    string `json:"thinking"`
+				Signature   string `json:"signature"`
 				PartialJSON string `json:"partial_json"`
+				StopReason  string `json:"stop_reason"`
 			} `json:"delta"`
 			Usage *struct {
 				InputTokens  int `json:"input_tokens"`
 				OutputTokens int `json:"output_tokens"`
 			} `json:"usage"`
 			Err *struct {
+				Type    string `json:"type"`
 				Message string `json:"message"`
 			} `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(ev.data), &payload); err != nil {
-			return true
+			eventErr = fmt.Errorf("api: messages: decode stream event: %w", err)
+			return false
 		}
 		switch payload.Type {
 		case "error":
-			if payload.Err != nil && payload.Err.Message != "" {
-				scanErr = &transportError{Transport: "messages", Status: 0, Message: payload.Err.Message}
-				return false
+			message := "provider stream error"
+			if payload.Err != nil {
+				if payload.Err.Message != "" {
+					message = payload.Err.Message
+				} else if payload.Err.Type != "" {
+					message = payload.Err.Type
+				}
 			}
-			return true
+			eventErr = &transportError{Transport: "messages", Message: message}
+			return false
 		case "message_start":
 			if payload.Message != nil && payload.Message.Usage != nil {
-				usage.PromptTokens += payload.Message.Usage.InputTokens
-				usage.TotalTokens += payload.Message.Usage.InputTokens
+				usage.PromptTokens = payload.Message.Usage.InputTokens
+				usage.CompletionTokens = payload.Message.Usage.OutputTokens
 			}
 		case "content_block_start":
 			if payload.ContentBlock == nil {
-				return true
+				eventErr = errors.New("api: messages: missing content block")
+				return false
 			}
-			a := at(payload.Index)
-			a.kind = payload.ContentBlock.Type
-			a.id = payload.ContentBlock.ID
-			a.name = payload.ContentBlock.Name
+			if accs[payload.Index] != nil {
+				eventErr = errors.New("api: messages: duplicate content block")
+				return false
+			}
+			a := &messagesBlockAcc{block: *payload.ContentBlock}
+			a.text.WriteString(a.block.Text)
+			a.thinking.WriteString(a.block.Thinking)
+			a.signature.WriteString(a.block.Signature)
+			accs[payload.Index] = a
+			order = append(order, payload.Index)
+			if a.block.Type == "text" {
+				emit("text_delta", a.block.Text)
+			} else if a.block.Type == "thinking" {
+				emit("thinking_delta", a.block.Thinking)
+			}
 		case "content_block_delta":
 			if payload.Delta == nil {
-				return true
+				eventErr = errors.New("api: messages: missing content block delta")
+				return false
 			}
-			a := at(payload.Index)
+			a := accs[payload.Index]
+			if a == nil || a.stopped {
+				eventErr = errors.New("api: messages: delta outside an active content block")
+				return false
+			}
 			switch payload.Delta.Type {
 			case "text_delta":
-				a.kind = "text"
+				if a.block.Type != "text" {
+					eventErr = errors.New("api: messages: text delta in non-text block")
+					return false
+				}
 				a.text.WriteString(payload.Delta.Text)
 				emit("text_delta", payload.Delta.Text)
 			case "thinking_delta":
-				a.kind = "thinking"
+				if a.block.Type != "thinking" {
+					eventErr = errors.New("api: messages: thinking delta in non-thinking block")
+					return false
+				}
 				a.thinking.WriteString(payload.Delta.Thinking)
 				emit("thinking_delta", payload.Delta.Thinking)
+			case "signature_delta":
+				if a.block.Type != "thinking" {
+					eventErr = errors.New("api: messages: signature delta in non-thinking block")
+					return false
+				}
+				a.signature.WriteString(payload.Delta.Signature)
 			case "input_json_delta":
+				if a.block.Type != "tool_use" {
+					eventErr = errors.New("api: messages: input delta in non-tool block")
+					return false
+				}
+				// The initial tool input is a placeholder; deltas carry the
+				// complete replacement JSON, not a suffix of that object.
+				a.inputDelta = true
 				a.input.WriteString(payload.Delta.PartialJSON)
 			}
+		case "content_block_stop":
+			a := accs[payload.Index]
+			if a == nil || a.stopped {
+				eventErr = errors.New("api: messages: stop outside an active content block")
+				return false
+			}
+			a.stopped = true
 		case "message_delta":
+			if payload.Delta != nil && payload.Delta.StopReason != "" {
+				stopReason = payload.Delta.StopReason
+			}
 			if payload.Usage != nil {
-				usage.CompletionTokens += payload.Usage.OutputTokens
-				usage.TotalTokens += payload.Usage.OutputTokens
+				usage.CompletionTokens = payload.Usage.OutputTokens
 			}
 		case "message_stop":
+			terminal = true
 			return false
 		}
 		return true
 	})
-	if scanErr != nil {
-		return openai.ChatCompletionMessage{}, usage, scanErr
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	if eventErr != nil {
+		return openai.ChatCompletionMessage{}, usage, nil, eventErr
 	}
-	var text, thinking []string
-	var calls []openai.ToolCall
+	if scanErr != nil {
+		return openai.ChatCompletionMessage{}, usage, nil, scanErr
+	}
+	if !terminal {
+		return openai.ChatCompletionMessage{}, usage, nil, errors.New("api: messages: incomplete stream (missing message_stop)")
+	}
+	native := make([]messagesBlock, 0, len(order))
 	for _, idx := range order {
 		a := accs[idx]
-		switch a.kind {
-		case "text":
-			text = append(text, a.text.String())
-		case "thinking":
-			thinking = append(thinking, a.thinking.String())
-		case "tool_use":
-			args := strings.TrimSpace(a.input.String())
-			if args == "" {
-				args = "{}"
-			}
-			if !json.Valid([]byte(args)) {
-				args = "{}"
-			}
-			calls = append(calls, openai.ToolCall{
-				ID:   a.id,
-				Type: openai.ToolTypeFunction,
-				Function: openai.FunctionCall{
-					Name:      a.name,
-					Arguments: args,
-				},
-			})
+		if !a.stopped {
+			return openai.ChatCompletionMessage{}, usage, nil, fmt.Errorf("api: messages: unfinished content block %d", idx)
 		}
+		a.block.Text = a.text.String()
+		a.block.Thinking = a.thinking.String()
+		a.block.Signature = a.signature.String()
+		if a.inputDelta {
+			a.block.Input = json.RawMessage(a.input.String())
+		}
+		native = append(native, a.block)
 	}
-	content := strings.Join(text, "")
-	if t := strings.TrimSpace(strings.Join(thinking, "\n")); t != "" {
-		content = "<think>" + t + "</think>" + content
+	msg, err := messagesReplyToOpenAI(messagesResponse{Content: native, StopReason: stopReason})
+	if err != nil {
+		return openai.ChatCompletionMessage{}, usage, nil, err
 	}
-	if strings.TrimSpace(content) == "" && len(calls) == 0 {
-		return openai.ChatCompletionMessage{}, usage, errors.New("api: empty choices in messages response")
-	}
-	return openai.ChatCompletionMessage{
-		Role:      openai.ChatMessageRoleAssistant,
-		Content:   content,
-		ToolCalls: calls,
-	}, usage, nil
+	return msg, usage, native, nil
 }

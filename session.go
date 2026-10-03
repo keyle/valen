@@ -1,17 +1,20 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/sashabaranov/go-openai"
 )
 
 // ToolRecord is one tool invocation within a turn, as the model saw it.
 type ToolRecord struct {
+	ID     string `json:"id,omitempty"`
 	Name   string `json:"name"`
 	Args   string `json:"args"`
 	Output string `json:"output"`
@@ -26,15 +29,16 @@ type Usage struct {
 
 // Turn is one user→assistant exchange, including tool work and any failure.
 type Turn struct {
-	At       time.Time      `json:"at"`
-	Prompt   string         `json:"prompt"`
-	Thinking string         `json:"thinking,omitempty"`
-	Reply    string         `json:"reply"`
-	Tools    []ToolRecord   `json:"tools,omitempty"`
-	Usage    Usage          `json:"usage"`
-	Error    *FriendlyError `json:"error,omitempty"`
-	Model    string         `json:"model,omitempty"`
-	Effort   string         `json:"effort,omitempty"`
+	At       time.Time                      `json:"at"`
+	Prompt   string                         `json:"prompt"`
+	Thinking string                         `json:"thinking,omitempty"`
+	Reply    string                         `json:"reply"`
+	Tools    []ToolRecord                   `json:"tools,omitempty"`
+	Usage    Usage                          `json:"usage"`
+	Error    *FriendlyError                 `json:"error,omitempty"`
+	Model    string                         `json:"model,omitempty"`
+	Effort   string                         `json:"effort,omitempty"`
+	History  []openai.ChatCompletionMessage `json:"history,omitempty"`
 }
 
 // SessionMeta is the sidecar alongside the append-only JSONL: title from the
@@ -149,6 +153,22 @@ func (s *Session) append(t Turn) error {
 	if err != nil {
 		return err
 	}
+	// Disk keeps every checkpoint; memory needs only the latest one. Copy the
+	// slice because the UI reseeds and prunes message contents in place.
+	if len(t.History) > 0 {
+		for i := len(s.Turns) - 1; i >= 0; i-- {
+			if len(s.Turns[i].History) > 0 {
+				s.Turns[i].History = nil
+				break
+			}
+		}
+		t.History = append([]openai.ChatCompletionMessage(nil), t.History...)
+	}
+	// Keep completed work visible even if saving it fails.
+	s.Turns = append(s.Turns, t)
+	s.TotalUsage.Prompt += t.Usage.Prompt
+	s.TotalUsage.Completion += t.Usage.Completion
+	s.TotalUsage.Total += t.Usage.Total
 	f, err := os.OpenFile(s.Path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -157,10 +177,6 @@ func (s *Session) append(t Turn) error {
 	if _, err := f.Write(append(b, '\n')); err != nil {
 		return err
 	}
-	s.Turns = append(s.Turns, t)
-	s.TotalUsage.Prompt += t.Usage.Prompt
-	s.TotalUsage.Completion += t.Usage.Completion
-	s.TotalUsage.Total += t.Usage.Total
 	return nil
 }
 
@@ -171,20 +187,25 @@ func loadSession(path string) ([]Turn, error) {
 	}
 	defer f.Close()
 	var turns []Turn
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1024*1024), 1024*1024)
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(line) == 0 {
-			continue
-		}
+	// A bounded continuation checkpoint can exceed Scanner's old 1 MiB line
+	// limit. Decode one JSONL record at a time without imposing a smaller cap.
+	dec := json.NewDecoder(f)
+	checkpoint := -1
+	for {
 		var t Turn
-		if err := json.Unmarshal(line, &t); err != nil {
+		if err := dec.Decode(&t); err == io.EOF {
+			return turns, nil
+		} else if err != nil {
 			return nil, err
+		}
+		if len(t.History) > 0 {
+			if checkpoint >= 0 {
+				turns[checkpoint].History = nil
+			}
+			checkpoint = len(turns)
 		}
 		turns = append(turns, t)
 	}
-	return turns, sc.Err()
 }
 
 // listSessions returns session JSONL paths, newest first.
