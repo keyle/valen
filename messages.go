@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -357,7 +358,8 @@ func runMessagesTurn(ctx context.Context, cfg Config, client *openai.Client, api
 	tools := registry.MessagesTools()
 	thinking := messagesThinking(cfg.Thinking)
 	for round := 0; round < cfg.MaxRounds; round++ {
-		if err := checkContextBudget(cfg, *history, requestToolsTokens(registry)); err != nil {
+		toolsTok := requestToolsTokens(registry)
+		if err := checkContextBudget(cfg, *history, toolsTok); err != nil {
 			return openai.ChatCompletionMessage{}, usage, err
 		}
 		system, msgs := splitChatHistory(*history)
@@ -375,16 +377,28 @@ func runMessagesTurn(ctx context.Context, cfg Config, client *openai.Client, api
 		if cfg.Temperature != nil {
 			req.Temperature = cfg.Temperature
 		}
+		if debugVerbose {
+			if sendBytes, ok := dvSendBytes(req); ok {
+				dlogf("round %d messages %s toolstok~%d sendbytes=%d", round+1, dvHistoryLine(*history), toolsTok, sendBytes)
+			} else {
+				dlogf("round %d messages %s toolstok~%d", round+1, dvHistoryLine(*history), toolsTok)
+			}
+		}
 
+		r0 := time.Now()
+		via := "stream"
 		sreq := req
 		sreq.Stream = true
 		msg, roundUsage, err := messagesRoundStream(ctx, cfg, apiKey, hc, sreq, onEvent)
 		if err != nil {
 			if !isStreamRejected(err) {
+				dlogf("round %d messages err=%v dur=%s", round+1, err, dvDur(time.Since(r0)))
 				return openai.ChatCompletionMessage{}, usage, err
 			}
+			via = "unary"
 			resp, err := callMessagesOnce(ctx, hc, cfg, apiKey, req)
 			if err != nil {
+				dlogf("round %d messages unary err=%v dur=%s", round+1, err, dvDur(time.Since(r0)))
 				return openai.ChatCompletionMessage{}, usage, err
 			}
 			usage.PromptTokens += resp.Usage.InputTokens
@@ -401,6 +415,8 @@ func runMessagesTurn(ctx context.Context, cfg Config, client *openai.Client, api
 			usage.CompletionTokens += roundUsage.CompletionTokens
 			usage.TotalTokens += roundUsage.TotalTokens
 		}
+		dlogf("round %d messages %s dur=%s in=%d out=%d content=%dB calls=%s", round+1, via, dvDur(time.Since(r0)),
+			roundUsage.PromptTokens, roundUsage.CompletionTokens, len(msg.Content), dvCallsLine(msg.ToolCalls))
 
 		if name := doomLoopTool(*history, msg.ToolCalls); name != "" {
 			return openai.ChatCompletionMessage{}, usage, doomLoopError(name)

@@ -480,6 +480,7 @@ func compactHistory(ctx context.Context, cfg Config, client *openai.Client, apiK
 	}
 	sumMsg := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: compactionSummaryPrefix + summary}
 	*history = append(append(append([]openai.ChatCompletionMessage(nil), systems...), sumMsg), tail...)
+	dlogf("compact summary ok headbytes=%d summary=%dB tail=%s", len(headText), len(summary), dvHistoryLine(tail))
 	return summary, true, nil
 }
 
@@ -508,5 +509,7 @@ func leanHistoryForNextRound(cfg Config, history *[]openai.ChatCompletionMessage
 	if !compactionAuto(cfg) {
 		return
 	}
-	pruneOldToolOutputs(*history)
+	if n := pruneOldToolOutputs(*history); n > 0 {
+		dlogf("lean prune %d outputs %s", n, dvHistoryLine(*history))
+	}
 }

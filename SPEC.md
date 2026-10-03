@@ -322,7 +322,16 @@ go run . ~/Code/something             # TUI rooted at another folder
 go run . -dir ~/Code/something        # same, explicit (also works headless)
 go run . -p "..."                     # one-shot answer on stdout
 go run . -config other.toml < prompt.txt   # headless via pipe
+go run . -p "..." -dv 2> trace.log     # timestamped round/tool/size trace
+go run . -dvlog trace.log              # same, to a file (use in TUI mode)
 ```
+
+Debug trace (`-dv` to stderr, `-dvlog <file>` implies `-dv`): one
+`[dv HH:MM:SS.mmm +elapsed]` line per event — turn start/end with usage,
+per-round history sizes + wire bytes + tail detail, per-round latency with
+server usage, per-tool args/output bytes with durations, batch totals,
+prune/compact actions, and HTTP attempts (status, retry sleeps). Off by
+default; zero hot-loop cost when off.
 
 TUI model controls: `/model [filter]` (ctrl+p) lists the OpenCode Go catalog and
 switches; `/effort [level]` (`/thinking` alias) sets the thinking level for

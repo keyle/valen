@@ -207,13 +207,25 @@ func start() error {
 	cfgPath := flag.String("config", defaultConfigPath, "path to config")
 	dirFlag := flag.String("dir", "", "working directory: sandbox root for file tools and shell")
 	printMode := flag.Bool("p", false, "one-shot: answer the prompt and exit")
+	dvFlag := flag.Bool("dv", false, "debug verbose: timestamped round/tool/size trace to stderr")
+	dvLogFlag := flag.String("dvlog", "", "debug verbose log file (implies -dv; use in TUI mode)")
 	flag.Parse()
 
-	// Resolve the config path before any chdir so relative paths keep working.
+	// Resolve paths before any chdir so relative paths keep working.
 	cfgAbs := *cfgPath
 	if abs, err := filepath.Abs(cfgAbs); err == nil {
 		cfgAbs = abs
 	}
+	dvLogAbs := *dvLogFlag
+	if dvLogAbs != "" {
+		if abs, err := filepath.Abs(dvLogAbs); err == nil {
+			dvLogAbs = abs
+		}
+	}
+	if err := initDebugVerbose(*dvFlag, dvLogAbs); err != nil {
+		return err
+	}
+	defer closeDebugLog()
 
 	tuiMode := !*printMode && isTTY(os.Stdin) && isTTY(os.Stdout)
 	workdir, rest := splitWorkdirArg(*dirFlag, flag.Args(), tuiMode)
@@ -289,6 +301,8 @@ func start() error {
 		}
 	}
 	if !*printMode && isTTY(os.Stdin) && isTTY(os.Stdout) {
+		dlogf("start model=%s transport=%s thinking=%s maxrounds=%d budget~%dtok schemastate~%dtok tools=%d tui=true",
+			cfg.Model, modelTransport(cfg.Model), cfg.Thinking, cfg.MaxRounds, contextBudget(cfg), requestToolsTokens(registry), len(registry.Names()))
 		return runTUI(ctx, cfg, cfgAbs, client, registry, apiKey)
 	}
 
@@ -405,7 +419,13 @@ func dispatchTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey
 	if ctx.Err() != nil {
 		return openai.ChatCompletionMessage{}, openai.Usage{}, ctx.Err()
 	}
+	t0 := time.Now()
+	dlogf("turn start transport=%s %s", modelTransport(cfg.Model), dvHistoryLine(*history))
+	before := estimateTokens(*history)
 	maybeAutoCompact(ctx, cfg, client, apiKey, hc, history)
+	if after := estimateTokens(*history); after != before {
+		dlogf("pre-send compact %dtok->%dtok", before, after)
+	}
 	var msg openai.ChatCompletionMessage
 	var usage openai.Usage
 	var err error
@@ -417,6 +437,8 @@ func dispatchTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey
 	default:
 		msg, usage, err = runChatTurn(ctx, cfg, client, apiKey, hc, registry, history, onEvent)
 	}
+	dlogf("turn end dur=%s err=%v in=%d out=%d total=%d reply=%dB",
+		dvDur(time.Since(t0)), err, usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, len(msg.Content))
 	return msg, usage, err
 }
 
@@ -585,6 +607,7 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 			onEvent(Event{Kind: "tool_start", Text: tc.Function.Name, Args: tc.Function.Arguments, ID: tc.ID})
 		}
 	}
+	batch0 := time.Now()
 	outs := make([]string, len(calls))
 	sem := make(chan struct{}, maxParallelTools)
 	var wg sync.WaitGroup
@@ -594,15 +617,18 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			t0 := time.Now()
 			if isMCPTool(tc.Function.Name) {
 				mu := mcpMu.lock(tc.Function.Name)
 				mu.Lock()
 				defer mu.Unlock()
 			}
 			outs[i] = registry.Run(ctx, tc.Function.Name, tc.Function.Arguments)
+			dlogf("tool %s args=%dB dur=%s out=%dB %q", tc.Function.Name, len(tc.Function.Arguments), dvDur(time.Since(t0)), len(outs[i]), dvPreview(tc.Function.Arguments, 160))
 		}(i, tc)
 	}
 	wg.Wait()
+	dlogf("batch %d tools total=%s", len(calls), dvDur(time.Since(batch0)))
 	if onEvent != nil {
 		for i, tc := range calls {
 			onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: outs[i], ID: tc.ID})
@@ -617,17 +643,21 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 
 // runToolCallsSerial is the sequential fallback for interactive batches.
 func runToolCallsSerial(ctx context.Context, registry *Registry, calls []openai.ToolCall, onEvent func(Event)) []openai.ChatCompletionMessage {
+	batch0 := time.Now()
 	out := make([]openai.ChatCompletionMessage, 0, len(calls))
 	for _, tc := range calls {
 		if onEvent != nil {
 			onEvent(Event{Kind: "tool_start", Text: tc.Function.Name, Args: tc.Function.Arguments, ID: tc.ID})
 		}
+		t0 := time.Now()
 		res := registry.Run(ctx, tc.Function.Name, tc.Function.Arguments)
+		dlogf("tool %s args=%dB dur=%s out=%dB serial %q", tc.Function.Name, len(tc.Function.Arguments), dvDur(time.Since(t0)), len(res), dvPreview(tc.Function.Arguments, 160))
 		if onEvent != nil {
 			onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: res, ID: tc.ID})
 		}
 		out = append(out, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: tc.ID, Content: res})
 	}
+	dlogf("batch %d tools serial total=%s", len(calls), dvDur(time.Since(batch0)))
 	return out
 }
 
@@ -635,7 +665,8 @@ func runToolCallsSerial(ctx context.Context, registry *Registry, calls []openai.
 func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
 	var usage openai.Usage
 	for round := 0; round < cfg.MaxRounds; round++ {
-		if err := checkContextBudget(cfg, *history, requestToolsTokens(registry)); err != nil {
+		toolsTok := requestToolsTokens(registry)
+		if err := checkContextBudget(cfg, *history, toolsTok); err != nil {
 			return openai.ChatCompletionMessage{}, usage, err
 		}
 		req := openai.ChatCompletionRequest{Model: cfg.Model, Messages: chatSendMessages(*history), Tools: registry.OpenAITools()}
@@ -643,17 +674,31 @@ func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey 
 			req.Temperature = *cfg.Temperature
 		}
 		applyThinkingToRequest(&req, cfg.Model, cfg.Thinking)
+		if debugVerbose {
+			if sendBytes, ok := dvSendBytes(req); ok {
+				dlogf("round %d chat %s toolstok~%d sendbytes=%d\n%s", round+1, dvHistoryLine(*history), toolsTok, sendBytes, dvTailDetail(req.Messages, 6))
+			} else {
+				dlogf("round %d chat %s toolstok~%d", round+1, dvHistoryLine(*history), toolsTok)
+			}
+		}
 
+		r0 := time.Now()
+		via := "stream"
 		msg, roundUsage, err := chatRoundStream(ctx, cfg, apiKey, hc, req, onEvent)
 		if err != nil {
 			if !isStreamRejected(err) {
+				dlogf("round %d chat err=%v dur=%s", round+1, err, dvDur(time.Since(r0)))
 				return openai.ChatCompletionMessage{}, usage, err
 			}
+			via = "unary"
 			msg, roundUsage, err = chatRoundOnce(ctx, cfg, apiKey, hc, req)
 			if err != nil {
+				dlogf("round %d chat unary err=%v dur=%s", round+1, err, dvDur(time.Since(r0)))
 				return openai.ChatCompletionMessage{}, usage, err
 			}
 		}
+		dlogf("round %d chat %s dur=%s in=%d out=%d content=%dB calls=%s", round+1, via, dvDur(time.Since(r0)),
+			roundUsage.PromptTokens, roundUsage.CompletionTokens, len(msg.Content), dvCallsLine(msg.ToolCalls))
 		usage.PromptTokens += roundUsage.PromptTokens
 		usage.CompletionTokens += roundUsage.CompletionTokens
 		usage.TotalTokens += roundUsage.TotalTokens
@@ -839,6 +884,8 @@ func chat(ctx context.Context, cfg Config, client *openai.Client, apiKey string,
 	history := make([]openai.ChatCompletionMessage, 0, 8)
 	history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: effectiveSystem(cfg)})
 	history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: prompt})
+	dlogf("start model=%s transport=%s thinking=%s maxrounds=%d budget~%dtok schemastate~%dtok tools=%d headless prompt=%dB %q",
+		cfg.Model, modelTransport(cfg.Model), cfg.Thinking, cfg.MaxRounds, contextBudget(cfg), requestToolsTokens(registry), len(registry.Names()), len(prompt), dvPreview(prompt, 200))
 
 	onEvent := func(ev Event) {
 		if ev.Kind == "tool_start" {

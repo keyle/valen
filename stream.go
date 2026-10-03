@@ -47,6 +47,10 @@ func isRetryableStatus(status int) bool {
 // next attempt so connections reuse. Non-retryable responses return as-is
 // for the caller to parse (including SSE streams).
 func clientDoWithRetry(ctx context.Context, client *http.Client, req *http.Request) (*http.Response, error) {
+	path := ""
+	if req.URL != nil {
+		path = req.URL.Path
+	}
 	for attempt := 0; attempt < retryMaxAttempts; attempt++ {
 		if attempt > 0 && req.GetBody != nil {
 			body, err := req.GetBody()
@@ -55,11 +59,14 @@ func clientDoWithRetry(ctx context.Context, client *http.Client, req *http.Reque
 			}
 			req.Body = body
 		}
+		t0 := time.Now()
 		resp, err := client.Do(req)
 		if err != nil {
 			if ctx.Err() != nil || attempt+1 >= retryMaxAttempts {
+				dlogf("http POST %s attempt=%d err=%v dur=%s terminal", path, attempt+1, err, dvDur(time.Since(t0)))
 				return nil, err
 			}
+			dlogf("http POST %s attempt=%d err=%v dur=%s sleep=%s", path, attempt+1, err, dvDur(time.Since(t0)), retryDelay(attempt))
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -68,8 +75,10 @@ func clientDoWithRetry(ctx context.Context, client *http.Client, req *http.Reque
 			continue
 		}
 		if !isRetryableStatus(resp.StatusCode) || attempt+1 >= retryMaxAttempts {
+			dlogf("http POST %s attempt=%d status=%d dur=%s", path, attempt+1, resp.StatusCode, dvDur(time.Since(t0)))
 			return resp, nil
 		}
+		dlogf("http POST %s attempt=%d status=%d dur=%s sleep=%s", path, attempt+1, resp.StatusCode, dvDur(time.Since(t0)), retryDelay(attempt))
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 		resp.Body.Close()
 		select {
@@ -86,6 +95,7 @@ func postAPI(ctx context.Context, hc *http.Client, cfg Config, url string, body 
 	if err != nil {
 		return nil, err
 	}
+	dlogf("http POST %s reqbytes=%d", url, len(raw))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(raw)))
 	if err != nil {
 		return nil, err
