@@ -824,21 +824,22 @@ func TestTUIStatusShowsPhase(t *testing.T) {
 }
 
 func TestAppendThinkingDeltaBoundaries(t *testing.T) {
-	// Fragments within one part concatenate exactly (no shredding).
+	// Every new addition starts on its own line so updates never pile
+	// onto the same line.
 	s, cur := appendThinkingDelta("", "Hel", 0, 0)
 	s, cur = appendThinkingDelta(s, "lo", 0, cur)
-	if s != "Hello" || cur != 0 {
-		t.Fatalf("fragments glued wrong: %q/%d", s, cur)
+	if s != "Hel\nlo" || cur != 0 {
+		t.Fatalf("addition missing newline: %q/%d", s, cur)
 	}
-	// A new part starts on its own line.
+	// A new part also starts on its own line.
 	s, cur = appendThinkingDelta(s, "Reading config", 1, cur)
-	if s != "Hello\nReading config" || cur != 1 {
+	if s != "Hel\nlo\nReading config" || cur != 1 {
 		t.Fatalf("part boundary missing newline: %q/%d", s, cur)
 	}
-	// Same part continues on the new line without another break.
+	// Same part continues on its own line too.
 	s, cur = appendThinkingDelta(s, " more", 1, cur)
-	if s != "Hello\nReading config more" {
-		t.Fatalf("continuation broke: %q", s)
+	if s != "Hel\nlo\nReading config\n more" {
+		t.Fatalf("continuation glued: %q", s)
 	}
 	// No doubled newlines when either side already breaks.
 	s, cur = appendThinkingDelta("a\n", "b", 1, 0)
@@ -856,16 +857,22 @@ func TestAppendThinkingDeltaBoundaries(t *testing.T) {
 	}
 }
 
-// TestTUIThinkingPartsSeparateLiveLines: reasoning updates on different
-// summary parts land on their own lines in the live view, matching the
-// committed join of final parts (muse streams status-like updates with no
-// trailing newline, which used to glue into one wrapped line).
+// TestTUIThinkingPartsSeparateLiveLines: every reasoning update lands on
+// its own line in the live view (muse streams status-like updates with
+// no trailing newline, which used to glue into one wrapped line).
 func TestTUIThinkingPartsSeparateLiveLines(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	_, _ = m.Update(toolEventMsg{kind: "thinking_delta", text: "Checking the repo layout", idx: 0})
 	_, _ = m.Update(toolEventMsg{kind: "thinking_delta", text: "Reading the config file", idx: 1})
 	if m.pendingThinking != "Checking the repo layout\nReading the config file" {
 		t.Fatalf("live thinking glued: %q", m.pendingThinking)
+	}
+	// Same-part updates separate too, not just part boundaries.
+	m2 := newTestModel(t, testConfig("https://unused"))
+	_, _ = m2.Update(toolEventMsg{kind: "thinking_delta", text: "Checking the repo layout", idx: 0})
+	_, _ = m2.Update(toolEventMsg{kind: "thinking_delta", text: "Reading the config file", idx: 0})
+	if m2.pendingThinking != "Checking the repo layout\nReading the config file" {
+		t.Fatalf("live thinking glued on same part: %q", m2.pendingThinking)
 	}
 }
 

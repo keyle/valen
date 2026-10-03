@@ -427,9 +427,9 @@ type Event struct {
 	// DurMs carries wall execution time on tool_result.
 	DurMs int64
 	// Index carries the reasoning part index on thinking_delta (Responses
-	// summary_index, messages content-block index). A new part starts on
-	// its own line in the live view, mirroring the committed join of
-	// final parts; fragments within a part concatenate exactly.
+	// summary_index, messages content-block index). The live view starts
+	// every thinking addition on its own line; the index is retained so
+	// callers can still tell summary parts apart.
 	Index int
 }
 

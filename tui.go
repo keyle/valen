@@ -2633,14 +2633,15 @@ func appendStreamText(s, delta string) string {
 }
 
 // appendThinkingDelta accumulates one reasoning update into the live view.
-// Fragments within a summary part concatenate exactly; the first delta of
-// a new part starts on its own line, mirroring the committed join of final
-// summary parts. cur tracks the part index of the tail.
+// Every new addition starts on its own line so status-like updates never
+// pile onto the same line; only an already-present line break suppresses
+// the separator. cur tracks the part index of the tail (kept so callers
+// can still distinguish summary parts).
 func appendThinkingDelta(s, delta string, idx, cur int) (string, int) {
 	if delta == "" {
 		return s, cur
 	}
-	if s != "" && idx != cur && !strings.HasSuffix(s, "\n") && !strings.HasPrefix(delta, "\n") {
+	if s != "" && !strings.HasSuffix(s, "\n") && !strings.HasPrefix(delta, "\n") {
 		s += "\n"
 	}
 	return appendStreamText(s, delta), idx
