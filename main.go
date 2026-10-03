@@ -60,12 +60,17 @@ type Config struct {
 	// MaxStagnantRounds aborts a turn whose tool loop runs this many rounds
 	// with calls but no write/edit/task (exploring without acting). Zero
 	// means the default (25); raise for long research turns.
-	MaxStagnantRounds int              `toml:"max_stagnant_rounds"`
-	Temperature       *float32         `toml:"temperature"`
-	Tools             []string         `toml:"tools"`
-	MCPServers        []MCPServer      `toml:"mcp"`
-	Compaction        CompactionConfig `toml:"compaction"`
-	Input             InputConfig      `toml:"input"`
+	MaxStagnantRounds int `toml:"max_stagnant_rounds"`
+	// Plan starts the session in plan mode: read-only investigation
+	// (write/edit/mutating shell blocked, task explore-only) with the plan
+	// overlay appended to the system prompt. The TUI /plan command toggles
+	// the same flag at runtime without persisting it.
+	Plan        bool             `toml:"plan"`
+	Temperature *float32         `toml:"temperature"`
+	Tools       []string         `toml:"tools"`
+	MCPServers  []MCPServer      `toml:"mcp"`
+	Compaction  CompactionConfig `toml:"compaction"`
+	Input       InputConfig      `toml:"input"`
 }
 
 // CompactionConfig mirrors the [compaction] table: summary-mode only,
@@ -209,6 +214,7 @@ func start() error {
 	cfgPath := flag.String("config", defaultConfigPath, "path to config")
 	dirFlag := flag.String("dir", "", "working directory: sandbox root for file tools and shell")
 	printMode := flag.Bool("p", false, "one-shot: answer the prompt and exit")
+	planFlag := flag.Bool("plan", false, "plan mode: read-only investigation, present the plan as the reply")
 	dvFlag := flag.Bool("dv", false, "debug verbose: timestamped round/tool/size trace to stderr")
 	dvLogFlag := flag.String("dvlog", "", "debug verbose log file (implies -dv; use in TUI mode)")
 	flag.Parse()
@@ -256,6 +262,9 @@ func start() error {
 	cfg, err := loadConfig(cfgAbs)
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
+	}
+	if *planFlag {
+		cfg.Plan = true
 	}
 
 	apiKey := os.Getenv(cfg.APIKeyEnv)
@@ -392,6 +401,11 @@ type Event struct {
 // non-chat transports convert per round and fold replies back. A 400 that
 // lists valid thinking levels is learned to disk for next time.
 func runTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
+	// Plan mode gates at the tool Fns via ctx, so mark it once here and
+	// every nested call (tools, task subagent) inherits read-only.
+	if cfg.Plan {
+		ctx = withPlanMode(ctx)
+	}
 	msg, usage, err := dispatchTurn(ctx, cfg, client, apiKey, hc, registry, history, onEvent)
 	if err != nil {
 		maybeLearnThinkingLevels(cfg.Model, err.Error())

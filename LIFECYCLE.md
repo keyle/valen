@@ -258,6 +258,12 @@ missing feature.
 - Act nudge — at 15 stagnant rounds one ephemeral reminder invites the model
   to make the change now or ask what blocks it; still stripped at turn end.
   Question rounds pause both counters.
+- Plan mode — `plan` / `/plan` / `-plan` flips the turn read-only instead of
+  guarding it: the plan overlay joins the system prompt, `write`/`edit`/
+  `shell` refuse as tool output, `task` only accepts `explore`. The model
+  investigates (small batches, todowrite-tracked) and the reply IS the plan;
+  leaving plan mode prints the build-switch notice and restores the build
+  prompt. The summarizer always runs with plan off.
 - Retry — 429/502/503/504 + network errors, 3 attempts, 300ms→800ms
   backoff, bodies drained for connection reuse, `Retry-After` not yet
   honored (TODO D1). 400s never retry (stream-fallback owns that path).

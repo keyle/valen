@@ -17,10 +17,15 @@ base_url = "https://opencode.ai/zen/go/v1"
 api_key_env = "OPENCODE_GO_API_KEY"
 # session_id = "ses-stable-id"   # optional, generated per run when omitted
 
-# system prompt: omit to use the harness prompt files (prompt_meta.txt for
-# muse-family models, prompt_default.txt otherwise — opencode-adapted,
-# valen-tuned). Set `system = "..."` only to override them entirely.
+# system prompt: omit to use the harness prompt files (per model family —
+# meta/anthropic/beast/codex/copilot/gemini/gpt/gpt_astra/kimi/trinity/
+# default — opencode-adapted, valen-tuned). Set `system = "..."` only to
+# override them entirely.
 # system = "..."                    # full override when set; empty uses prompt files.
+# plan = false                      # plan mode: read-only investigation, the
+                                    # reply is the plan (write/edit/shell
+                                    # blocked, task explore-only). TUI /plan
+                                    # toggles at runtime; -plan for headless.
 # max_rounds = 100 
 # max_stagnant_rounds = 25       # abort a turn whose tool loop runs this many
                                 # rounds with calls but no write/edit/task

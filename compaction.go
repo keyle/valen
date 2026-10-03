@@ -409,6 +409,7 @@ func summarizeHead(ctx context.Context, cfg Config, client *openai.Client, apiKe
 	sumCfg.Thinking = compactionThinking(cfg)
 	sumCfg.MaxRounds = 2
 	sumCfg.Temperature = nil
+	sumCfg.Plan = false // the summarizer answers, never plans: no overlay, no gates.
 	f := false
 	sumCfg.Compaction.Auto = &f
 	sumCfg.Tools = nil

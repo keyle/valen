@@ -212,6 +212,9 @@ func WriteTool() Tool {
 		Description: "Create or overwrite a file in the workdir, creating parent directories as needed.",
 		Schema:      json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"file path, relative to the workdir or absolute"},"content":{"type":"string","description":"full file content"}},"required":["path","content"]}`),
 		Fn: func(ctx context.Context, args string) (string, error) {
+			if isPlanMode(ctx) {
+				return "", fmt.Errorf("%s", planRefusal("write"))
+			}
 			var a struct {
 				Path    string `json:"path"`
 				Content string `json:"content"`
@@ -247,6 +250,9 @@ func EditTool() Tool {
 		Description: "Replace exact text in a file. oldString must appear verbatim; set replaceAll to rewrite every occurrence.",
 		Schema:      json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"file path, relative to the workdir or absolute"},"oldString":{"type":"string","description":"exact text to replace"},"newString":{"type":"string","description":"replacement text (may be empty)"},"replaceAll":{"type":"boolean","description":"replace every occurrence (default false)"}},"required":["path","oldString","newString"]}`),
 		Fn: func(ctx context.Context, args string) (string, error) {
+			if isPlanMode(ctx) {
+				return "", fmt.Errorf("%s", planRefusal("edit"))
+			}
 			var a struct {
 				Path       string `json:"path"`
 				OldString  string `json:"oldString"`

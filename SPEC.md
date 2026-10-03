@@ -23,7 +23,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | File | Responsibility |
 | --- | --- |
 | `main.go` | CLI flags, config loading/defaults, HTTP identity headers, agent loop |
-| `prompt.go` | Agent guidelines: `prompt_meta.txt` / `prompt_default.txt` (opencode-adapted, embedded) + `<env>` header, selected per model family |
+| `prompt.go` | Agent guidelines: per-family `prompt_*.txt` (opencode-adapted, embedded) + `<env>` header + plan overlay; plan-mode ctx gating |
 | `tui.go` | Bubble Tea chat UI: padded conversation, instant echo, recall views, Monokai theme |
 | `models.go` | OpenCode Go catalog: live list, transport map, thinking levels, config persist |
 | `messages.go` | Anthropic `/messages` transport: wire format, thinking, tool loop |
@@ -52,7 +52,8 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `base_url` | string | `https://opencode.ai/zen/go/v1` | API base; the transport path (`/chat/completions`, `/messages`, `/responses`) is appended per model |
 | `api_key_env` | string | `OPENCODE_GO_API_KEY` | Name of the env var holding the key, not the key itself |
 | `session_id` | string | `ses-<unixnano>` | Stable per conversation; sent as `x-opencode-session` |
-| `system` | string | prompt files (`prompt_meta.txt` / `prompt_default.txt`) | Agent guidelines; empty uses the harness prompt files (opencode-adapted, valen-tuned: muse-family models get meta, others get default) plus a small `<env>` header (model, workdir, platform, date). Set to override entirely |
+| `system` | string | prompt files (per model family) | Agent guidelines; empty uses the harness prompt files (opencode-adapted, valen-tuned: muse→meta, claude→anthropic, old reasoning→beast, gpt-6→astra, gpt/grok→gpt, codex/copilot/gemini/kimi/trinity→their file, else default) plus a small `<env>` header (model, workdir, platform, date). Set to override entirely |
+| `plan` | bool | `false` | Plan mode: read-only investigation — the plan overlay joins the system prompt, `write`/`edit`/`shell` refuse with guidance, `task` is explore-only. TUI `/plan` toggles at runtime; `-plan` sets it headless |
 | `max_rounds` | int | `100` | Hard stop on tool-loop iterations |
 | `max_stagnant_rounds` | int | `25` | Stall guard: abort a turn whose tool loop runs this many rounds with calls but no `write`/`edit`/`task` (exploring without acting); raise for long research turns |
 | `max_context_tokens` | int | `300000` | Fail-fast budget per round (est. runes/4): over-budget history aborts the turn with guidance instead of a doomed send |
@@ -189,7 +190,11 @@ error: "stopped after N rounds without a final answer"
    it appends a final no-tools instruction and runs one last round — text
    finishes the turn with any attached calls declined unexecuted, while an
    empty answer still aborts. All three notices strip at turn end, so later
-   turns stay clean; question rounds pause all counters. `maybeAutoCompact`
+   turns stay clean; question rounds pause all counters. Plan mode (`plan`,
+   `/plan`, `-plan`) flips the turn read-only instead: the plan overlay joins
+   the system prompt, `write`/`edit`/`shell` refuse as tool output with
+   guidance, and `task` only accepts `explore` — the model investigates and
+   the reply IS the plan. `maybeAutoCompact`
    keeps every send lean: prune runs unconditionally
   (cheap, local — file reads are disposable since tools re-read them, so all
   but the newest 2 collapse to path/range descriptors while user decisions
@@ -339,6 +344,7 @@ go run . ~/Code/something             # TUI rooted at another folder
 go run . -dir ~/Code/something        # same, explicit (also works headless)
 go run . -p "..."                     # one-shot answer on stdout
 go run . -config other.toml < prompt.txt   # headless via pipe
+go run . -p "..." -plan               # one-shot plan: read-only, reply is the plan
 go run . -p "..." -dv 2> trace.log     # timestamped round/tool/size trace
 go run . -dvlog trace.log              # same, to a file (use in TUI mode)
 ```
@@ -353,7 +359,9 @@ default; zero hot-loop cost when off.
 TUI model controls: `/model [filter]` (ctrl+p) lists the OpenCode Go catalog and
 switches; `/effort [level]` (`/thinking` alias) sets the thinking level for
 the current model. Both persist to `config.toml`, so the last selection
-sticks across runs; headless mode reads the same keys. The TUI footer also
+sticks across runs; headless mode reads the same keys. `/plan` toggles plan
+mode at runtime (read-only investigation, reply is the plan; header shows
+`· plan`); it does not persist. The TUI footer also
 shows Go plan usage (`5h` / `7d` / `30d`), yellow past 80% and pink at the cap.
 
 ## Extension points

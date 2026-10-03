@@ -51,7 +51,7 @@ var (
 	toolErrStyle  = lipgloss.NewStyle().Foreground(mkPink).PaddingLeft(2).Bold(true)
 	toolDimStyle  = lipgloss.NewStyle().Foreground(mkComment).PaddingLeft(2)
 	asstHeadStyle = lipgloss.NewStyle().Bold(true).Foreground(mkGreen)
-	asstBodyStyle = lipgloss.NewStyle().Foreground(mkFg).PaddingLeft(1)
+	asstBodyStyle = lipgloss.NewStyle().Foreground(mkFg).PaddingLeft(2)
 	errorTitleSty = lipgloss.NewStyle().Bold(true).Foreground(mkPink).
 			BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderForeground(mkPink).
 			PaddingLeft(1)
@@ -894,6 +894,28 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	}
 }
 
+// applyPlanMode toggles plan mode at runtime: flips the flag, reseeds the
+// system message so the next turn carries the plan overlay (or drops it),
+// and notices which way we went. History after index 0 is untouched.
+func (m *tuiModel) applyPlanMode(on bool) {
+	m.cfg.Plan = on
+	if len(m.history) > 0 && m.history[0].Role == openai.ChatMessageRoleSystem {
+		m.history[0].Content = effectiveSystem(m.cfg)
+	} else {
+		m.history = seedHistory(m.cfg)
+	}
+	if on {
+		m.notice = "Plan mode on — read-only investigation; reply will be the plan."
+	} else {
+		m.notice = strings.TrimSpace(promptBuildSwitch)
+		if m.notice == "" {
+			m.notice = "Plan mode off — build mode."
+		}
+	}
+	m.noticeErr = false
+	m.refreshViewport()
+}
+
 func (m *tuiModel) handleCommand(text string) tea.Cmd {
 	fields := strings.Fields(text)
 	cmd := strings.ToLower(fields[0])
@@ -961,6 +983,9 @@ func (m *tuiModel) handleCommand(text string) tea.Cmd {
 		return nil
 	case "/compact", "/summarize":
 		return m.compactCmd()
+	case "/plan":
+		m.applyPlanMode(!m.cfg.Plan)
+		return nil
 	case "/quit", "/exit", "/q":
 		return tea.Quit
 	default:
@@ -1732,6 +1757,9 @@ func (m *tuiModel) headerView() string {
 		model += " · " + m.cfg.Thinking
 	}
 	meta := headerDimStyle.Render(fmt.Sprintf("  ·  %s  ·  %s  ·  %d tools", model, shortSession(m.session), len(m.registry.Names())))
+	if m.cfg.Plan {
+		meta += headerDimStyle.Render("  ·  plan")
+	}
 	mode := ""
 	switch m.mode {
 	case viewHistory:
@@ -2462,8 +2490,9 @@ Keys
   in lists: ↑↓ move · enter open · esc back
 
 Commands
-  /help /history /sessions (/resume) /tools /errors /think /save /clear /new /quit
-  /compact (/summarize) — prune + summarize older history with the cheap model; disk log untouched
+   /help /history /sessions (/resume) /tools /errors /think /save /clear /new /plan /quit
+   /compact (/summarize) — prune + summarize older history with the cheap model; disk log untouched
+   /plan — toggle plan mode: read-only investigation, the reply is the plan (write/edit/shell blocked, task explore-only)
   /model [filter] — list OpenCode Go models and switch (ctrl+p does the same)
   /effort [level] — thinking level for the current model (/thinking is an alias)
 
