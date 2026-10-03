@@ -19,8 +19,13 @@ import (
 // main.go; every path is resolved against it and escapes ask first.
 
 const (
-	defaultReadLimit = 200
+	defaultReadLimit = 2000
 	maxReadLimit     = 5000
+	// maxReadBytes caps one read below the 16k registry output cap so the
+	// offset-continue hint always reaches the model intact (a 50k cap would
+	// be eaten by the registry truncate). Ditched the old 200-line default
+	// that forced 10 full-history rounds to see a 2000-line file.
+	maxReadBytes     = 12 * 1024
 	maxGrepMatches   = 100
 	maxGrepPerFile   = 20
 	maxGrepFileBytes = 1 << 20
@@ -130,7 +135,7 @@ func ReadTool() Tool {
 	return Tool{
 		Name:        "read",
 		Description: "Read a file from the workdir. Lines are prefixed with their number (e.g. `12: code`); when editing, use the exact file text without numbers.",
-		Schema:      json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"file path, relative to the workdir or absolute"},"offset":{"type":"integer","description":"first line to show, 1-indexed (default 1)"},"limit":{"type":"integer","description":"max lines to show (default 200, max 5000)"}},"required":["path"]}`),
+		Schema:      json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"file path, relative to the workdir or absolute"},"offset":{"type":"integer","description":"first line to show, 1-indexed (default 1)"},"limit":{"type":"integer","description":"max lines to show (default 2000, max 5000)"}},"required":["path"]}`),
 		Fn: func(ctx context.Context, args string) (string, error) {
 			var a struct {
 				Path   string `json:"path"`
@@ -176,14 +181,24 @@ func ReadTool() Tool {
 			end := min(start+limit-1, total)
 			var b strings.Builder
 			fmt.Fprintf(&b, "File %s (%d lines, showing %d-%d):\n", relToRoot(abs), total, start, end)
+			shown := end
+			bytes := 0
 			for i := start; i <= end; i++ {
 				line := lines[i-1]
 				if len(line) > maxReadLineChars {
-					line = line[:maxReadLineChars] + "\u2026[long line truncated]"
+					line = line[:maxReadLineChars] + "…[long line truncated]"
 				}
-				fmt.Fprintf(&b, "%d: %s\n", i, line)
+				row := fmt.Sprintf("%d: %s\n", i, line)
+				if bytes+len(row) > maxReadBytes {
+					shown = i - 1
+					break
+				}
+				bytes += len(row)
+				b.WriteString(row)
 			}
-			if end < total {
+			if shown < end {
+				fmt.Fprintf(&b, "...[output capped at ~12KB, showing %d-%d: re-read with offset %d to continue]", start, shown, shown+1)
+			} else if end < total {
 				fmt.Fprintf(&b, "...[%d more lines, read with offset %d]", total-end, end+1)
 			}
 			return truncate(strings.TrimRight(b.String(), "\n"), maxToolOutput), nil
@@ -349,7 +364,7 @@ func GlobTool() Tool {
 			}
 			var dirs []string
 			for _, e := range entries {
-				if e.IsDir() && e.Name() == ".git" {
+				if e.IsDir() && skippedDir(e.Name()) {
 					continue
 				}
 				p := filepath.Join(baseAbs, e.Name())
@@ -374,7 +389,7 @@ func GlobTool() Tool {
 								return nil
 							}
 							if d.IsDir() {
-								if d.Name() == ".git" {
+								if skippedDir(d.Name()) {
 									return filepath.SkipDir
 								}
 								return nil
@@ -450,7 +465,7 @@ func GrepTool() Tool {
 					if err != nil {
 						return nil
 					}
-					if d.IsDir() && d.Name() == ".git" {
+					if d.IsDir() && skippedDir(d.Name()) {
 						return filepath.SkipDir
 					}
 					if d.IsDir() {
@@ -587,6 +602,30 @@ func grepFilesParallel(ctx context.Context, re *regexp.Regexp, files []string) (
 		out = append(out, fmt.Sprintf("%s:%d: %s", gm.file, gm.line, gm.text))
 	}
 	return out, capped
+}
+
+// skippedDir reports dependency/build output directories that grep and glob
+// never descend into — searching node_modules or target/ wastes the tool
+// round-trip and floods history with third-party code. Only the exact
+// .git-style hard skip existed before; ripgrep users get this via
+// .gitignore, so the builtin needs the same baseline.
+func skippedDir(name string) bool {
+	switch name {
+	case ".git",
+		"node_modules",
+		"target",
+		"dist",
+		"build",
+		"bin",
+		"vendor",
+		".venv", "venv",
+		"__pycache__",
+		".next",
+		"out",
+		"coverage":
+		return true
+	}
+	return false
 }
 
 // matchGlob matches rel (slash-separated) against a pattern with *, ?, [...]

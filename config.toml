@@ -17,7 +17,7 @@ base_url = "https://opencode.ai/zen/go/v1"
 api_key_env = "OPENCODE_GO_API_KEY"
 # session_id = "ses-stable-id"   # optional, generated per run when omitted
 
-system = "You are a professional programming service. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, todowrite, todoread, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it. Work fast and multithreaded: batch all independent tool calls in the same block (parallel read/glob/grep/shell); prefer grep/glob to locate before reading. Prefer ripgrep over grep and fd over find. Agressively prune irrelevant context to the task at hand to keep the tokens reasonable; not for cost but for speed and lean approach. For any task needing 3+ steps, you MUST call todowrite FIRST before any file reads or edits, keep exactly one in_progress, and update it after each step (mark completed only after verification)."
+system = "You are a professional programming service. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, todowrite, todoread, task, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it. Work fast and multithreaded: batch all independent tool calls in the same block (parallel read/glob/grep/shell); prefer grep/glob to locate before reading. Prefer ripgrep over grep and fd over find. For research and bounded multi-step work, delegate to the task subagent (explore for locating code, general for one step) instead of sprawling the main loop. Agressively prune irrelevant context to the task at hand to keep the tokens reasonable; not for cost but for speed and lean approach. For any task needing 3+ steps, you MUST call todowrite FIRST before any file reads or edits, keep exactly one in_progress, and update it after each step (mark completed only after verification)."
                                 # default system prompt (same as the built-in); set to override.
 # max_rounds = 100 
 
@@ -27,9 +27,12 @@ system = "You are a professional programming service. You are an MCP-capable thi
                                # large-context models; auto-compaction usually
                                # keeps work going instead of restarting.
 # temperature = 0.2               # omit entirely for provider defaults
+# max_tokens = 16384             # per-answer output cap on the messages transport (default 16384, floor 8192):
+                                # long answers finish in one round instead of two full-history rounds.
 
 [compaction]                    # summary-mode, send-side only (disk JSONL stays lossless).
 model = "muse-spark-1.3-contributor"
+thinking = "medium"             # summarizer effort, independent of top-level thinking (xhigh stays for solving).
 # auto = true                     # prune every send; summarize past the threshold; retry once after a too-long 400.
 # keep_tokens = 15000             # recent tail kept verbatim beside the summary; also sets the early threshold (keep×3).
 # buffer = 30000                  # headroom below max_context_tokens; default 10% of the budget.
@@ -46,6 +49,7 @@ blink = false
 # AskUserQuestion is always registered, so models can ask clarifying questions
 # in TUI and headless runs. todowrite/todoread are always registered too, so
 # chunky work breaks into small session-plan steps even when tools omits them.
+# task is always registered as well (explore/general subagent delegation).
 # File tools (read, write, edit, glob, grep) and shell are scoped to the
 # workdir: the startup directory, `-dir <path>`, or a positional directory in
 # TUI mode (e.g. `./valen ~/Code/something`). Paths outside ask for approval

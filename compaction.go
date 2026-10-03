@@ -49,7 +49,8 @@ const compactionSummaryTemplate = `Summarize the conversation below for continua
 `
 
 // normalizeCompactionConfig fills [compaction] defaults: auto on, keep 15k,
-// buffer 10% of budget, empty model (session model summarizes).
+// buffer 10% of budget, empty model (session model summarizes), thinking
+// "medium" (explicit effort so summaries don't inherit the main xhigh).
 func normalizeCompactionConfig(c CompactionConfig, budget int) CompactionConfig {
 	if c.Auto == nil {
 		t := true
@@ -62,7 +63,46 @@ func normalizeCompactionConfig(c CompactionConfig, budget int) CompactionConfig 
 		c.Buffer = budget / 10
 	}
 	c.Model = strings.TrimSpace(c.Model)
+	c.Thinking = strings.ToLower(strings.TrimSpace(c.Thinking))
+	if c.Thinking == "" {
+		c.Thinking = defaultCompactionThinking
+	}
 	return c
+}
+
+// defaultCompactionThinking is the summarizer effort when [compaction]
+// thinking is unset: medium quality at a fraction of a main-turn xhigh.
+const defaultCompactionThinking = "medium"
+
+// validateExplicitCompactionThinking rejects an explicitly set [compaction]
+// thinking level the summarizer model doesn't accept, mirroring the
+// top-level thinking check. Empty means "default" and always passes — the
+// medium default falls back per-model at use time in compactionThinking, so
+// models without a medium level (e.g. glm flash) never fail config load.
+func validateExplicitCompactionThinking(model, thinking string) error {
+	if strings.TrimSpace(thinking) == "" {
+		return nil
+	}
+	if !validThinkingLevel(model, thinking) {
+		return fmt.Errorf("compaction thinking %q is not available for model %q (try: %s)", thinking, model, strings.Join(AvailableThinkingLevels(model), ", "))
+	}
+	return nil
+}
+
+// compactionThinking resolves the summarizer effort: the explicit
+// [compaction] thinking when the model accepts it, else "medium" when
+// accepted, else the cheapest level the model takes. The medium-first order
+// is deliberate: summaries must stay faithful, minimal thinking drops
+// decisions.
+func compactionThinking(cfg Config) string {
+	model := compactionModel(cfg)
+	if validThinkingLevel(model, cfg.Compaction.Thinking) && cfg.Compaction.Thinking != "" {
+		return cfg.Compaction.Thinking
+	}
+	if validThinkingLevel(model, defaultCompactionThinking) {
+		return defaultCompactionThinking
+	}
+	return cheapestThinking(model)
 }
 
 func compactionAuto(cfg Config) bool {
@@ -106,6 +146,27 @@ func cheapestThinking(model string) string {
 		}
 	}
 	return ""
+}
+
+// sendToolOutputChars caps tool-result bytes placed on the wire per round,
+// mirroring opencode's TOOL_OUTPUT_MAX_CHARS. Stored history keeps the full
+// 16k registry output (session log stays lossless); only the request copy
+// shrinks, so rounds stop re-uploading rounds × full results. User decisions
+// (AskUserQuestion answers) are exempt — the model must see them verbatim.
+const sendToolOutputChars = 2000
+
+// fitSendBudget cuts a tool result to the per-round send budget with a
+// marker telling the model how to see more (re-run narrower). Short results
+// and decision outputs pass through untouched.
+func fitSendBudget(content string) string {
+	if isDecisionOutput(content) {
+		return content
+	}
+	r := []rune(content)
+	if len(r) <= sendToolOutputChars {
+		return content
+	}
+	return string(r[:sendToolOutputChars]) + fmt.Sprintf("\n[send-truncated %d chars: full result kept in session log — re-run the tool narrower to see more]", len(r)-sendToolOutputChars)
 }
 
 // truncateHead cuts s to max runes with a marker, keeping the head.
@@ -340,12 +401,12 @@ func overflowStatusMessage(status int, msg string) bool {
 
 // summarizeHead runs one cheap-model turn over headText with no tools and
 // returns the summary text. Auto-compaction is off inside so it cannot
-// recurse; thinking drops to the cheapest level the model accepts.
+// recurse; thinking is the explicit [compaction] effort (medium default).
 func summarizeHead(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, headText, previous string) (string, error) {
 	model := compactionModel(cfg)
 	sumCfg := cfg
 	sumCfg.Model = model
-	sumCfg.Thinking = cheapestThinking(model)
+	sumCfg.Thinking = compactionThinking(cfg)
 	sumCfg.MaxRounds = 2
 	sumCfg.Temperature = nil
 	f := false

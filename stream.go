@@ -22,17 +22,17 @@ import (
 //
 // Transient 429/502/503/504 responses and network errors retry with backoff
 // (up to 3 attempts) so overloads back off instead of failing the turn.
-const (
-	retryMaxAttempts = 3
-	retryDelayFirst  = 300 * time.Millisecond
-	retryDelaySecond = 800 * time.Millisecond
-)
+const retryMaxAttempts = 3
+
+// retryBackoff is a var (not const) so offline tests can shrink the waits;
+// production uses 300ms then 800ms.
+var retryBackoff = []time.Duration{300 * time.Millisecond, 800 * time.Millisecond}
 
 func retryDelay(attempt int) time.Duration {
-	if attempt == 0 {
-		return retryDelayFirst
+	if attempt < len(retryBackoff) {
+		return retryBackoff[attempt]
 	}
-	return retryDelaySecond
+	return retryBackoff[len(retryBackoff)-1]
 }
 
 func isRetryableStatus(status int) bool {

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,6 +85,48 @@ func TestReadWriteEditRoundTrip(t *testing.T) {
 	}
 }
 
+// TestReadDefaultsWideWithByteCap: the default window covers 2000 lines (no
+// more 200-line paging for normal files) while huge outputs cap at ~50KB
+// with an offset hint to continue.
+func TestReadDefaultsWideWithByteCap(t *testing.T) {
+	useTempRoot(t)
+	ctx := context.Background()
+
+	var many strings.Builder
+	for i := 1; i <= 300; i++ {
+		fmt.Fprintf(&many, "line %d\n", i)
+	}
+	if _, err := WriteTool().Fn(ctx, `{"path":"many.txt","content":`+quoteJSON(many.String())+`}`); err != nil {
+		t.Fatal(err)
+	}
+	out, err := ReadTool().Fn(ctx, `{"path":"many.txt"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "300: line 300") || strings.Contains(out, "more lines") || strings.Contains(out, "capped") {
+		t.Fatalf("300-line file must read whole by default:\n%s", out[:500])
+	}
+
+	big := strings.Repeat("x", 900) + "\n"
+	var huge strings.Builder
+	for i := 0; i < 200; i++ {
+		huge.WriteString(big)
+	}
+	if _, err := WriteTool().Fn(ctx, `{"path":"huge.txt","content":`+quoteJSON(huge.String())+`}`); err != nil {
+		t.Fatal(err)
+	}
+	out, err = ReadTool().Fn(ctx, `{"path":"huge.txt"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "capped at ~12KB") || !strings.Contains(out, "re-read with offset") {
+		t.Fatalf("huge file must cap with continue hint:\n%s", out[len(out)-300:])
+	}
+	if strings.Contains(out, "[truncated") {
+		t.Fatalf("in-tool cap must fit under the registry truncate:\n%s", out[len(out)-300:])
+	}
+}
+
 func TestReadDeniesOutsideWithoutPrompter(t *testing.T) {
 	useTempRoot(t)
 	if _, err := ReadTool().Fn(context.Background(), `{"path":"../outside.txt"}`); err == nil || !strings.Contains(err.Error(), "outside") {
@@ -154,6 +197,40 @@ func TestGrepFindsPattern(t *testing.T) {
 	}
 	if _, err := GrepTool().Fn(ctx, `{"pattern":"("}`); err == nil {
 		t.Fatal("expected bad pattern error")
+	}
+}
+
+func TestGrepGlobSkipDependencyDirs(t *testing.T) {
+	useTempRoot(t)
+	ctx := context.Background()
+	for _, f := range []string{
+		"src/app.go",
+		"node_modules/dep/index.js",
+		"target/debug/build.rs",
+		"vendor/lib/x.go",
+	} {
+		if _, err := WriteTool().Fn(ctx, `{"path":`+quoteJSON(f)+`,"content":"needle here\n"}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := GrepTool().Fn(ctx, `{"pattern":"needle"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "src/app.go") {
+		t.Fatalf("src must match: %q", out)
+	}
+	for _, dep := range []string{"node_modules", "target", "vendor"} {
+		if strings.Contains(out, dep) {
+			t.Fatalf("dependency dir must be skipped: %q", out)
+		}
+	}
+	gout, err := GlobTool().Fn(ctx, `{"pattern":"**/*.go"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gout, "src/app.go") || strings.Contains(gout, "vendor") {
+		t.Fatalf("glob must skip dependency dirs: %q", gout)
 	}
 }
 

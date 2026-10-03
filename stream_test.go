@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -307,9 +308,19 @@ func TestTUIPendingTextDeltasRenderOnOwnLines(t *testing.T) {
 	}
 }
 
+// fastRetry shrinks the production 300/800ms backoff to milliseconds so
+// retry-path tests prove the attempts without sleeping through them.
+func fastRetry(t *testing.T) {
+	t.Helper()
+	old := retryBackoff
+	retryBackoff = []time.Duration{time.Millisecond, 2 * time.Millisecond}
+	t.Cleanup(func() { retryBackoff = old })
+}
+
 // TestPostAPIRetriesTransientThenSucceeds: a 429 followed by 200 returns the
 // 200 without surfacing the transient failure, proving backoff retry.
 func TestPostAPIRetriesTransientThenSucceeds(t *testing.T) {
+	fastRetry(t)
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++

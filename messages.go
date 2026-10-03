@@ -15,10 +15,23 @@ import (
 )
 
 const (
-	messagesMaxTokens      = 8192
+	// messagesMaxTokensFloor keeps hand-built Config values (tests, old
+	// callers) from requesting a uselessly small answer; configured
+	// max_tokens wins above it.
+	messagesMaxTokensFloor = 8192
 	messagesThinkingBudget = 4096
 	anthropicVersion       = "2023-06-01"
 )
+
+// messagesMaxTokens resolves the per-answer output cap: explicit max_tokens
+// wins, otherwise the 16k default. Ditched the old hardcoded 8192 — long
+// answers needed an extra full-history round to finish.
+func messagesMaxTokens(cfg Config) int {
+	if cfg.MaxTokens > messagesMaxTokensFloor {
+		return cfg.MaxTokens
+	}
+	return defaultMaxTokens
+}
 
 // transportError carries an HTTP failure from a non-chat transport so
 // friendlyError can map status codes the same way it maps OpenAI errors.
@@ -40,9 +53,10 @@ func messagesEndpoint(baseURL string) string {
 }
 
 type messagesTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description,omitempty"`
+	InputSchema  json.RawMessage `json:"input_schema"`
+	CacheControl map[string]any  `json:"cache_control,omitempty"`
 }
 
 type messagesMessage struct {
@@ -53,7 +67,7 @@ type messagesMessage struct {
 type messagesRequest struct {
 	Model       string            `json:"model"`
 	MaxTokens   int               `json:"max_tokens"`
-	System      string            `json:"system,omitempty"`
+	System      any               `json:"system,omitempty"`
 	Messages    []messagesMessage `json:"messages"`
 	Tools       []messagesTool    `json:"tools,omitempty"`
 	ToolChoice  map[string]any    `json:"tool_choice,omitempty"`
@@ -82,7 +96,9 @@ type messagesResponse struct {
 	} `json:"usage"`
 }
 
-// MessagesTools exposes the registry in Anthropic tool format.
+// MessagesTools exposes the registry in Anthropic tool format. The last
+// tool carries the single tools cache breakpoint (one breakpoint: caching
+// every tool would bill a cache write per tool per round).
 func (r *Registry) MessagesTools() []messagesTool {
 	out := make([]messagesTool, 0, len(r.names))
 	for _, n := range r.names {
@@ -93,7 +109,28 @@ func (r *Registry) MessagesTools() []messagesTool {
 		}
 		out = append(out, messagesTool{Name: t.Name, Description: t.Description, InputSchema: schema})
 	}
+	if len(out) > 0 {
+		out[len(out)-1].CacheControl = ephemeralCache()
+	}
 	return out
+}
+
+// ephemeralCache marks one Anthropic block as a prompt-cache breakpoint.
+// Prefixes above the last breakpoint hit cache; the tail re-fills. Three
+// breakpoints per request (system, last tool, last message block) mirror the
+// documented pattern — stable prefixes (system+tools) are where the win is,
+// since history tails move every round.
+func ephemeralCache() map[string]any {
+	return map[string]any{"type": "ephemeral"}
+}
+
+// messagesSystemParam renders the system prompt as a single cached text
+// block; empty omits the field (provider default).
+func messagesSystemParam(system string) any {
+	if strings.TrimSpace(system) == "" {
+		return nil
+	}
+	return []any{map[string]any{"type": "text", "text": system, "cache_control": ephemeralCache()}}
 }
 
 // messagesThinking maps our levels onto Anthropic thinking. Empty omits the
@@ -156,11 +193,37 @@ func splitChatHistory(history []openai.ChatCompletionMessage) (string, []message
 			msgs = append(msgs, messagesMessage{Role: "assistant", Content: blocks})
 		case "tool":
 			msgs = append(msgs, messagesMessage{Role: "user", Content: []any{
-				map[string]any{"type": "tool_result", "tool_use_id": m.ToolCallID, "content": m.Content},
+				map[string]any{"type": "tool_result", "tool_use_id": m.ToolCallID, "content": fitSendBudget(m.Content)},
 			}})
 		}
 	}
+	stampLastBlockCache(msgs)
 	return strings.Join(system, "\n\n"), msgs
+}
+
+// stampLastBlockCache puts the trailing prompt-cache breakpoint on the last
+// message's final content block, so everything above it (system, tools,
+// settled history) is prefix-cacheable. String content becomes one cached
+// text block; block slices gain cache_control on their last map.
+func stampLastBlockCache(msgs []messagesMessage) {
+	if len(msgs) == 0 {
+		return
+	}
+	last := &msgs[len(msgs)-1]
+	switch c := last.Content.(type) {
+	case string:
+		if strings.TrimSpace(c) == "" {
+			return
+		}
+		last.Content = []any{map[string]any{"type": "text", "text": c, "cache_control": ephemeralCache()}}
+	case []any:
+		if len(c) == 0 {
+			return
+		}
+		if blk, ok := c[len(c)-1].(map[string]any); ok {
+			blk["cache_control"] = ephemeralCache()
+		}
+	}
 }
 
 func parseMessagesError(status int, body []byte) *transportError {
@@ -294,14 +357,14 @@ func runMessagesTurn(ctx context.Context, cfg Config, client *openai.Client, api
 	tools := registry.MessagesTools()
 	thinking := messagesThinking(cfg.Thinking)
 	for round := 0; round < cfg.MaxRounds; round++ {
-		if err := checkContextBudget(cfg, *history); err != nil {
+		if err := checkContextBudget(cfg, *history, requestToolsTokens(registry)); err != nil {
 			return openai.ChatCompletionMessage{}, usage, err
 		}
 		system, msgs := splitChatHistory(*history)
 		req := messagesRequest{
 			Model:     cfg.Model,
-			MaxTokens: messagesMaxTokens,
-			System:    system,
+			MaxTokens: messagesMaxTokens(cfg),
+			System:    messagesSystemParam(system),
 			Messages:  msgs,
 			Thinking:  thinking,
 		}

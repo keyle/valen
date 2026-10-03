@@ -170,6 +170,55 @@ func TestSplitChatHistory(t *testing.T) {
 	}
 }
 
+// TestSplitChatHistorySendBudget: long tool results shrink to the send
+// budget on the wire while stored history keeps the full text.
+func TestSplitChatHistorySendBudget(t *testing.T) {
+	long := strings.Repeat("z", sendToolOutputChars+1000)
+	history := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "call-1", Content: long},
+	}
+	_, msgs := splitChatHistory(history)
+	resBlocks, _ := msgs[0].Content.([]any)
+	res, _ := resBlocks[0].(map[string]any)
+	content, _ := res["content"].(string)
+	if len([]rune(content)) > sendToolOutputChars+200 || !strings.Contains(content, "send-truncated") {
+		t.Fatalf("wire copy must shrink: %d runes", len([]rune(content)))
+	}
+	if history[0].Content != long {
+		t.Fatal("stored history must keep the full result")
+	}
+}
+
+// TestMessagesCacheBreakpoints: system, last tool, and last message block
+// carry ephemeral cache breakpoints; empty system omits the field.
+func TestMessagesCacheBreakpoints(t *testing.T) {
+	if messagesSystemParam("") != nil {
+		t.Fatal("empty system must omit")
+	}
+	blocks, _ := messagesSystemParam("sys").([]any)
+	if len(blocks) != 1 {
+		t.Fatalf("system=%v", messagesSystemParam("sys"))
+	}
+	history := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "hi"},
+	}
+	_, msgs := splitChatHistory(history)
+	last, _ := msgs[len(msgs)-1].Content.([]any)
+	blk, _ := last[0].(map[string]any)
+	if cc, _ := blk["cache_control"].(map[string]any); cc["type"] != "ephemeral" {
+		t.Fatalf("last block must be cached: %v", msgs)
+	}
+	r := NewRegistry()
+	r.LoadBuiltins([]string{"shell", "read"})
+	tools := r.MessagesTools()
+	for i, tool := range tools {
+		_, has := tool.CacheControl["type"]
+		if (i == len(tools)-1) != has {
+			t.Fatalf("only the last tool takes the breakpoint: %+v", tools)
+		}
+	}
+}
+
 func TestMessagesReplyMapsThinking(t *testing.T) {
 	resp := messagesResponse{StopReason: "end_turn"}
 	resp.Content = []messagesBlock{{Type: "thinking", Thinking: "plan"}, {Type: "text", Text: "done"}}
@@ -247,11 +296,22 @@ func TestMessagesRequestShape(t *testing.T) {
 	if gotAuth != "Bearer key" || gotKey != "key" || gotSession != "ses-test" || gotUA != userAgent || gotVer != anthropicVersion {
 		t.Fatalf("headers auth=%q key=%q session=%q ua=%q ver=%q", gotAuth, gotKey, gotSession, gotUA, gotVer)
 	}
-	if gotBody["model"] != "minimax-m3" || gotBody["system"] != "be brief" {
-		t.Fatalf("body model/system: %v", gotBody)
+	sysBlocks, _ := gotBody["system"].([]any)
+	if len(sysBlocks) != 1 {
+		t.Fatalf("system must be one cached block: %v", gotBody["system"])
+	}
+	sysBlock, _ := sysBlocks[0].(map[string]any)
+	if sysBlock["text"] != "be brief" {
+		t.Fatalf("system block: %v", sysBlock)
+	}
+	if cc, _ := sysBlock["cache_control"].(map[string]any); cc["type"] != "ephemeral" {
+		t.Fatalf("system block must carry the cache breakpoint: %v", sysBlock)
 	}
 	if _, ok := gotBody["max_tokens"]; !ok {
 		t.Fatal("max_tokens is required")
+	}
+	if gotBody["max_tokens"] != float64(defaultMaxTokens) {
+		t.Fatalf("max_tokens must default %d, got %v", defaultMaxTokens, gotBody["max_tokens"])
 	}
 	tools, _ := gotBody["tools"].([]any)
 	if len(tools) != 1 {
@@ -260,6 +320,9 @@ func TestMessagesRequestShape(t *testing.T) {
 	tool, _ := tools[0].(map[string]any)
 	if _, ok := tool["input_schema"]; !ok {
 		t.Fatalf("tool needs input_schema: %v", tool)
+	}
+	if cc, _ := tool["cache_control"].(map[string]any); cc["type"] != "ephemeral" {
+		t.Fatalf("last tool must carry the cache breakpoint: %v", tool)
 	}
 	thinking, _ := gotBody["thinking"].(map[string]any)
 	if thinking["type"] != "enabled" {

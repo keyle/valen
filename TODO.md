@@ -1,5 +1,64 @@
 # TODO — fullscreen loop UI (SPEC-tui.md)
 
+## Perf findings (A–C vs opencode, same model/settings)
+
+Verdict: no single bug — six compounding gaps, all pushing toward
+`rounds × history` quadratic sends. Old caps are ditched where noted.
+
+- [x] A1 no prompt caching. Zero `cache_control` sent; `responses` replays
+  stateless (`store:false`, no `previous_response_id`); per-round prune
+  churned bytes and defeated server-side prefix cache.
+  DONE: 3 ephemeral breakpoints on messages (system, last tool, last
+  block); chat/responses rely on server prefix cache over now-stable bytes.
+- [x] A2 full 16k tool outputs re-sent every round. DONE: 2k send budget in
+  all 3 converters (`sendToolOutputChars`, decisions exempt); storage/log
+  keeps full 16k.
+- [x] A3 `estimateTokens` ignored envelope + schemas → late compaction.
+  DONE: +40 tokens/message envelope + full tool-schema block in the budget
+  guard (`requestToolsTokens`).
+- [x] A4 responses reasoning continuity. ASSESSED, not done: replay needs
+  provider-encrypted reasoning objects; the SSE stream only yields
+  `summary_text` deltas, so native replay is infeasible without new provider
+  data. See D.
+- [x] A5 `max_tokens` hardcoded 8192 → long answers cost an extra
+  full-history round. DONE: `max_tokens` config, default 16384 (floor 8192).
+- [x] B1 tools start only after full SSE round. ASSESSED, not done: chat and
+  responses SSE carry no per-call completion signal, so mid-stream execution
+  is structurally infeasible there; only messages (`content_block_stop`)
+  could overlap, and that transport isn't the daily driver. See D.
+- [x] B2 global MCP mutex stalled all servers on one slow call. DONE:
+  per-server mutexes.
+- [x] B3 hand-rolled grep/glob walks ignored ignore files (only `.git`
+  skipped). DONE: skip list (`node_modules`, `target`, `dist`, `build`,
+  `bin`, `vendor`, `.venv`/`venv`, `__pycache__`, `.next`, `out`,
+  `coverage`). Full `.gitignore` parsing deferred to D.
+- [x] B4 no subagent isolation — every explore landed in main history. DONE:
+  foreground-only `task` tool (explore/general, isolated history, summary
+  folds back, depth ≤2). Wired into system prompts.
+- [x] C1/C2 settings: main `thinking=xhigh` kept for solving (explicit),
+  compaction effort explicit via `[compaction] thinking` (default `medium`,
+  cheapest fallback per model). C3 retry still ignores `Retry-After` — see D.
+
+## Later (D — speedups not taken this round)
+
+- [ ] D1 `Retry-After` aware backoff: honor the header on 429 instead of
+  fixed 300/800ms; provider-aware retry policy like opencode's
+  `SessionRetry.policy`.
+- [ ] D2 full `.gitignore` parsing in grep/glob (current fixed skip list is
+  the 80% baseline) + `rg` fast path when on PATH.
+- [ ] D3 background shell: `run_in_background` + poll/kill tools so dev
+  servers and long builds don't park the loop.
+- [ ] D4 A4 follow-up: native reasoning replay if the provider ever exposes
+  reasoning objects/IDs on responses SSE; until then summaries fold as
+  `<think>` (status quo).
+- [ ] D5 B1 follow-up: messages-only mid-stream execution at
+  `content_block_stop` (registry callback into the SSE scan + merge
+  pre-executed results in `runMessagesTurn` instead of re-running).
+- [ ] D6 TUI subagent streaming: forward subagent `tool_start`/`text_delta`
+  events into the pending block instead of today's silent single `task` row.
+- [ ] D7 thinking-block signature capture on messages (replay native
+  thinking blocks for cache affinity) instead of `<think>` text folding.
+
 ## Minor, UX
 
 - [ ] remove the white thick bar on the left of the chatbox
@@ -11,6 +70,7 @@
 - [ ] related: the wheelmouse should scroll the scrollback, it does not. add this. Scrolling up should go through the history.
 - [ ] show live errors such as backend overloaded, rate limiting, etc. in the thinking but in red?
 - [ ] when 'working' we want the user to press ESC twice to stop, 1 can be hit by mistake. Add a debounce and check for 2 ESC key sequential within 2 seconds, otherwise go back to working state. Do not interrupt the process until 2 ESC confirmed.
+- [ ] sandboxing permission, when working in a git worktree can lead to asking tons of permission, we should remember access given to a folder and not ask again, per session.
 
 ## Medium
 

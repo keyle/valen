@@ -151,6 +151,24 @@ func TestSplitResponsesInput(t *testing.T) {
 	}
 }
 
+// TestSplitResponsesInputSendBudget: long outputs shrink on the wire while
+// stored history keeps the full text.
+func TestSplitResponsesInputSendBudget(t *testing.T) {
+	long := strings.Repeat("z", sendToolOutputChars+1000)
+	history := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "call-1", Content: long},
+	}
+	_, input := splitResponsesInput(history)
+	item, _ := input[0].(map[string]any)
+	content, _ := item["output"].(string)
+	if len([]rune(content)) > sendToolOutputChars+200 || !strings.Contains(content, "send-truncated") {
+		t.Fatalf("wire copy must shrink: %d runes", len([]rune(content)))
+	}
+	if history[0].Content != long {
+		t.Fatal("stored history must keep the full result")
+	}
+}
+
 func TestResponsesReplyMapsSummary(t *testing.T) {
 	resp := responsesResponse{}
 	resp.Output = []responsesOutputItem{
@@ -250,6 +268,7 @@ func TestResponsesRequestShape(t *testing.T) {
 }
 
 func TestResponsesSurfacesAPIError(t *testing.T) {
+	fastRetry(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		w.Write([]byte(`{"error":{"message":"slow down","type":"rate_limit"}}`))

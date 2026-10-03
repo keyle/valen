@@ -41,6 +41,23 @@ func readOutput(path string, total, start, end int) string {
 	return b.String()
 }
 
+// TestFitSendBudget: short results and decisions pass through; long results
+// shrink to the 2k send budget with a re-run marker.
+func TestFitSendBudget(t *testing.T) {
+	if got := fitSendBudget("short"); got != "short" {
+		t.Fatalf("short must pass: %q", got)
+	}
+	decision := "User has answered your questions: color=blue"
+	if got := fitSendBudget(decision + strings.Repeat("x", 5000)); got != decision+strings.Repeat("x", 5000) {
+		t.Fatal("decisions must stay verbatim")
+	}
+	long := strings.Repeat("y", sendToolOutputChars+500)
+	got := fitSendBudget(long)
+	if len([]rune(got)) > sendToolOutputChars+200 || !strings.Contains(got, "send-truncated") {
+		t.Fatalf("long must shrink with marker: %d runes", len([]rune(got)))
+	}
+}
+
 func TestReadDescriptorKeepsIdentity(t *testing.T) {
 	out := readOutput("a.go", 100, 1, 50)
 	d, ok := readDescriptor(out)
@@ -173,6 +190,33 @@ func TestCompactionConfigDefaults(t *testing.T) {
 	}
 	if cfg.Compaction.Model != "" {
 		t.Fatalf("model should default empty (session model): %q", cfg.Compaction.Model)
+	}
+	if cfg.Compaction.Thinking != defaultCompactionThinking {
+		t.Fatalf("thinking should default %q, got %q", defaultCompactionThinking, cfg.Compaction.Thinking)
+	}
+}
+
+func TestCompactionThinkingExplicitAndFallback(t *testing.T) {
+	// Explicit medium on a model that accepts it resolves verbatim.
+	cfg, err := loadConfig(writeConfig(t, "model = \"muse-spark-1.3-contributor\"\n[compaction]\nthinking = \"medium\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := compactionThinking(cfg); got != "medium" {
+		t.Fatalf("thinking=%q", got)
+	}
+	// Explicit bogus level fails config load like top-level thinking.
+	if _, err := loadConfig(writeConfig(t, "model = \"muse-spark-1.3-contributor\"\n[compaction]\nthinking = \"ultra\"\n")); err == nil {
+		t.Fatal("bad compaction thinking must fail")
+	}
+	// Default medium on a model without medium (glm flash) falls back to the
+	// cheapest accepted level instead of failing.
+	cfg2, err := loadConfig(writeConfig(t, "model = \"muse-spark-1.3-contributor\"\n[compaction]\nmodel = \"glm-5.3-flash\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := compactionThinking(cfg2); got != "low" {
+		t.Fatalf("flash fallback thinking=%q, want low", got)
 	}
 }
 

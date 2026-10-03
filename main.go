@@ -25,6 +25,7 @@ const (
 	defaultBaseURL    = "https://opencode.ai/zen/go/v1"
 	defaultAPIKeyEnv  = "OPENCODE_GO_API_KEY"
 	defaultMaxRounds  = 100
+	defaultMaxTokens  = 16384
 	// defaultMaxContextTokens fail-fasts absurd sends: stateless transports
 	// resend all of history every round, so burn compounds as rounds ×
 	// history. Assumption (reversible via max_context_tokens): well under
@@ -38,7 +39,7 @@ const (
 	// the agent MCP-capable with a fast tool loopback and points blank
 	// sessions at AGENTS.md first. Batching guidance is explicit so the model
 	// emits parallel calls in one block instead of one tool per round.
-	defaultSystem = "You are a helpful assistant. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, todowrite, todoread, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it. Work fast: batch all independent tool calls in the same block (parallel read/glob/grep/shell); prefer grep/glob to locate before reading. For any task needing 3+ steps, you MUST call todowrite FIRST before any file reads or edits, keep exactly one in_progress, and update it after each step (mark completed only after verification). Keep each round lean: re-read files instead of resending them."
+	defaultSystem = "You are a helpful assistant. You are an MCP-capable thinking agent with a fast tool loopback (read, write, edit, glob, grep, shell, web_search, web_fetch, todowrite, todoread, task, plus MCP tools). On a blank session, first check for AGENTS.md in the workdir and follow it. Work fast: batch all independent tool calls in the same block (parallel read/glob/grep/shell); prefer grep/glob to locate before reading. For research and bounded multi-step work, delegate to the task subagent (explore for locating code, general for one step) instead of sprawling the main loop. For any task needing 3+ steps, you MUST call todowrite FIRST before any file reads or edits, keep exactly one in_progress, and update it after each step (mark completed only after verification). Keep each round lean: re-read files instead of resending them."
 )
 
 // effectiveSystem returns the configured system prompt, or the built-in
@@ -60,6 +61,7 @@ type Config struct {
 	System           string           `toml:"system"`
 	MaxRounds        int              `toml:"max_rounds"`
 	MaxContextTokens int              `toml:"max_context_tokens"`
+	MaxTokens        int              `toml:"max_tokens"`
 	Temperature      *float32         `toml:"temperature"`
 	Tools            []string         `toml:"tools"`
 	MCPServers       []MCPServer      `toml:"mcp"`
@@ -70,12 +72,15 @@ type Config struct {
 // CompactionConfig mirrors the [compaction] table: summary-mode only,
 // send-side (disk JSONL stays lossless). Model selects the summarizer:
 // empty means the session model; set a cheap flash model to keep large
-// sessions cheap for the big model.
+// sessions cheap for the big model. Thinking selects the summarizer effort
+// explicitly (default "medium" when the model accepts it, else the cheapest
+// level); the main-turn effort stays in top-level `thinking`.
 type CompactionConfig struct {
 	Auto       *bool  `toml:"auto"`
 	KeepTokens int    `toml:"keep_tokens"`
 	Buffer     int    `toml:"buffer"`
 	Model      string `toml:"model"`
+	Thinking   string `toml:"thinking"`
 }
 
 // InputConfig mirrors the [input] table: chatbox chrome (TUI only).
@@ -139,6 +144,14 @@ func loadConfig(path string) (Config, error) {
 	}
 	if cfg.MaxContextTokens == 0 {
 		cfg.MaxContextTokens = defaultMaxContextTokens
+	}
+	if cfg.MaxTokens == 0 {
+		cfg.MaxTokens = defaultMaxTokens
+	}
+	cfg.Compaction.Model = strings.TrimSpace(cfg.Compaction.Model)
+	cfg.Compaction.Thinking = strings.ToLower(strings.TrimSpace(cfg.Compaction.Thinking))
+	if err := validateExplicitCompactionThinking(compactionModel(cfg), cfg.Compaction.Thinking); err != nil {
+		return cfg, err
 	}
 	cfg.Compaction = normalizeCompactionConfig(cfg.Compaction, cfg.MaxContextTokens)
 	cfg.Input.Height = inputHeight(cfg)
@@ -265,6 +278,16 @@ func start() error {
 	defer closeAll(closers)
 
 	client := newClient(cfg, apiKey)
+	// task delegates to a same-model subagent so exploration stays out of
+	// main history; always present like the plan tools. The runner closes
+	// over client/config here where they live.
+	if !registry.Has("task") {
+		if err := registry.Add(TaskTool(func(ctx context.Context, prompt, kind string) (string, error) {
+			return runTask(ctx, cfg, client, apiKey, newHTTPClient(cfg), prompt, kind)
+		})); err != nil {
+			return fmt.Errorf("register task: %w", err)
+		}
+	}
 	if !*printMode && isTTY(os.Stdin) && isTTY(os.Stdout) {
 		return runTUI(ctx, cfg, cfgAbs, client, registry, apiKey)
 	}
@@ -397,15 +420,55 @@ func dispatchTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey
 	return msg, usage, err
 }
 
+// chatSendMessages builds the per-round request copy: identical to history
+// except tool results shrink to the send budget (A2). Stored history keeps
+// full outputs; the wire copy stays small so stateless replays don't
+// re-upload rounds × 16k results.
+func chatSendMessages(history []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	out := make([]openai.ChatCompletionMessage, len(history))
+	for i, m := range history {
+		out[i] = m
+		if m.Role == openai.ChatMessageRoleTool {
+			out[i].Content = fitSendBudget(m.Content)
+		}
+	}
+	return out
+}
+
 // maxParallelTools bounds concurrent tool execution in one round. Outputs
 // stay capped by truncate, so memory stays flat; the semaphore only caps how
 // many run at once.
 const maxParallelTools = 8
 
-// mcpMu serializes MCP tool calls: stdio JSON-RPC servers share one stdin
-// pipe, so concurrent writes could interleave requests. Builtins run fully
-// parallel; MCP calls share this mutex.
-var mcpMu sync.Mutex
+// mcpMu serializes MCP tool calls per server: one stdio JSON-RPC server
+// shares one stdin pipe, so concurrent writes to the SAME server could
+// interleave requests. Different servers are independent and run fully
+// parallel; builtins run fully parallel. Ditched the old global mutex that
+// let one slow MCP server stall every other server's batch.
+var mcpMu = newMCPMutex()
+
+// mcpMutex holds one mutex per MCP server prefix (<server>__<tool>).
+type mcpMutex struct {
+	mu      sync.Mutex
+	servers map[string]*sync.Mutex
+}
+
+func newMCPMutex() *mcpMutex {
+	return &mcpMutex{servers: map[string]*sync.Mutex{}}
+}
+
+// lock returns the mutex for the server prefix of a namespaced tool name.
+func (m *mcpMutex) lock(name string) *sync.Mutex {
+	server, _, _ := strings.Cut(name, "__")
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l, ok := m.servers[server]
+	if !ok {
+		l = &sync.Mutex{}
+		m.servers[server] = l
+	}
+	return l
+}
 
 // isMCPTool reports namespaced MCP tools (<server>__<tool>).
 func isMCPTool(name string) bool { return strings.Contains(name, "__") }
@@ -446,8 +509,15 @@ func doomLoopError(name string) error {
 	return fmt.Errorf("stopped: tool %q called 3 times with identical input — ask for a different approach or /clear", name)
 }
 
+// messageOverheadTokens covers the per-message JSON envelope the runes/4
+// content estimate misses (role, tool_call ids, structure): ~150 chars.
+// Without it the estimator under-counts real prefill and compaction fires
+// late, after the oversized send already burned.
+const messageOverheadTokens = 40
+
 // estimateTokens approximates prompt tokens as runes/4 over content plus
-// tool args. No tokenizer dep; good enough for a fail-fast guard.
+// tool args, plus envelope overhead per message. No tokenizer dep; good
+// enough for a fail-fast guard now that schemas ride separately (A3).
 func estimateTokens(msgs []openai.ChatCompletionMessage) int {
 	var runes int
 	for _, m := range msgs {
@@ -456,7 +526,22 @@ func estimateTokens(msgs []openai.ChatCompletionMessage) int {
 			runes += len([]rune(tc.Function.Arguments))
 		}
 	}
-	return runes / 4
+	return runes/4 + len(msgs)*messageOverheadTokens
+}
+
+// requestToolsTokens estimates the tool-schema block re-sent on every round
+// (every builtin + MCP schema). Stateless transports pay this × rounds, so
+// the budget guard must see it: a 30k schema block with a 45k history is a
+// 75k send, not 45k.
+func requestToolsTokens(registry *Registry) int {
+	if registry == nil {
+		return 0
+	}
+	raw, err := json.Marshal(registry.OpenAITools())
+	if err != nil {
+		return 0
+	}
+	return len([]rune(string(raw))) / 4
 }
 
 func contextBudget(cfg Config) int {
@@ -468,10 +553,11 @@ func contextBudget(cfg Config) int {
 
 // checkContextBudget fail-fasts a round that would send a ridiculous context
 // (and burn tokens × rounds on stateless transports) instead of letting it
-// crawl into a 429. Compaction is the real fix; this is the guardrail.
-func checkContextBudget(cfg Config, history []openai.ChatCompletionMessage) error {
+// crawl into a 429. toolsTokens is the re-sent schema block (see
+// requestToolsTokens). Compaction is the real fix; this is the guardrail.
+func checkContextBudget(cfg Config, history []openai.ChatCompletionMessage, toolsTokens int) error {
 	budget := contextBudget(cfg)
-	if est := estimateTokens(history); est > budget {
+	if est := estimateTokens(history) + toolsTokens; est > budget {
 		return fmt.Errorf("context too large: est. %d tokens exceeds budget %d — /compact to summarize or /clear for a fresh history (or raise max_context_tokens)", est, budget)
 	}
 	return nil
@@ -509,8 +595,9 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			if isMCPTool(tc.Function.Name) {
-				mcpMu.Lock()
-				defer mcpMu.Unlock()
+				mu := mcpMu.lock(tc.Function.Name)
+				mu.Lock()
+				defer mu.Unlock()
 			}
 			outs[i] = registry.Run(ctx, tc.Function.Name, tc.Function.Arguments)
 		}(i, tc)
@@ -548,10 +635,10 @@ func runToolCallsSerial(ctx context.Context, registry *Registry, calls []openai.
 func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
 	var usage openai.Usage
 	for round := 0; round < cfg.MaxRounds; round++ {
-		if err := checkContextBudget(cfg, *history); err != nil {
+		if err := checkContextBudget(cfg, *history, requestToolsTokens(registry)); err != nil {
 			return openai.ChatCompletionMessage{}, usage, err
 		}
-		req := openai.ChatCompletionRequest{Model: cfg.Model, Messages: *history, Tools: registry.OpenAITools()}
+		req := openai.ChatCompletionRequest{Model: cfg.Model, Messages: chatSendMessages(*history), Tools: registry.OpenAITools()}
 		if cfg.Temperature != nil {
 			req.Temperature = *cfg.Temperature
 		}

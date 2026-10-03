@@ -145,7 +145,7 @@ func splitResponsesInput(history []openai.ChatCompletionMessage) (string, []any)
 			input = append(input, map[string]any{
 				"type":    "function_call_output",
 				"call_id": m.ToolCallID,
-				"output":  m.Content,
+				"output":  fitSendBudget(m.Content),
 			})
 		}
 	}
@@ -290,7 +290,7 @@ func runResponsesTurn(ctx context.Context, cfg Config, client *openai.Client, ap
 	tools := registry.ResponsesTools()
 	reasoning := responsesReasoning(cfg.Thinking)
 	for round := 0; round < cfg.MaxRounds; round++ {
-		if err := checkContextBudget(cfg, *history); err != nil {
+		if err := checkContextBudget(cfg, *history, requestToolsTokens(registry)); err != nil {
 			return openai.ChatCompletionMessage{}, usage, err
 		}
 		instructions, input := splitResponsesInput(*history)

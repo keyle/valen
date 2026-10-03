@@ -35,6 +35,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `think.go` | Splits `<think>` blocks out of replies so the UI can collapse them |
 | `tools.go` | Tool contract, ordered registry, builtin loader, output limits, `shell` |
 | `todos.go` | Session plan (`todowrite`/`todoread`, opencode schema, in-memory + session fold) |
+| `task.go` | Foreground-only `task` subagent (explore/general, isolated history, depth ≤2) |
 | `files.go` | File builtins (`read`, `write`, `edit`, `glob`, `grep`): workdir sandbox, outside-access approval, glob matching |
 | `ask.go` | `AskUserQuestion` contract, headless prompting/confirmation, answer formatting |
 | `search.go` | `web_search` (DuckDuckGo HTML) and `web_fetch` (HTML → text) |
@@ -54,9 +55,10 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `max_rounds` | int | `8` | Hard stop on tool-loop iterations |
 | `max_context_tokens` | int | `200000` | Fail-fast budget per round (est. runes/4): over-budget history aborts the turn with guidance instead of a doomed send |
 | `temperature` | float | unset | Pointer semantics: unset omits the field, `0.0` sends zero |
-| `compaction` | table | `auto=true, keep_tokens=15000, buffer=10%` | Summary-mode, send-side only (disk JSONL stays lossless): `auto` compacts before send when over budget and retries once after a too-long 400; `keep_tokens` recent tail kept verbatim beside the summary; `buffer` headroom below `max_context_tokens`; `model` cheap summarizer override (empty = session model with minimal thinking) |
+| `max_tokens` | int | `16384` (floor 8192) | Per-answer output cap on the messages transport; long answers finish in one round instead of two full-history rounds |
+| `compaction` | table | `auto=true, keep_tokens=15000, buffer=10%, thinking=medium` | Summary-mode, send-side only (disk JSONL stays lossless): `auto` compacts before send when over budget and retries once after a too-long 400; `keep_tokens` recent tail kept verbatim beside the summary; `buffer` headroom below `max_context_tokens`; `model` cheap summarizer override (empty = session model); `thinking` summarizer effort, independent of top-level `thinking` (default `medium` when accepted, cheapest fallback per model) |
 | `[input]` | table | `blink=true, height=3` | Chatbox chrome (TUI only): block-cursor blink plus input box height in lines |
-| `tools` | string[] | empty | Subset of `shell`, `web_search`, `web_fetch`, `read`, `write`, `edit`, `glob`, `grep`, `AskUserQuestion`, `todowrite`, `todoread`. `AskUserQuestion` plus `todowrite`/`todoread` are also registered automatically when absent, so model-driven questions and the session plan work in every frontend |
+| `tools` | string[] | empty | Subset of `shell`, `web_search`, `web_fetch`, `read`, `write`, `edit`, `glob`, `grep`, `AskUserQuestion`, `todowrite`, `todoread`. `AskUserQuestion` plus `todowrite`/`todoread` plus `task` are also registered automatically when absent, so model-driven questions, the session plan, and subagent delegation work in every frontend |
 | `mcp` | table[] | empty | Each entry needs `name` + `cmd`; optional `args`, `env` |
 
 Validation errors (missing `model`, MCP entry without `cmd`, unreadable file)
@@ -93,11 +95,13 @@ round and fold the reply back, so the TUI, session log and tool registry are
 transport-agnostic.
 
 - `messages` (`messages.go`): Anthropic wire format. `POST {base}/messages`
-  with `model`, required `max_tokens` (8192), `system`, `messages`,
-  `tools` (`input_schema`), `tool_choice: {type: auto}` when tools exist.
-  Assistant `tool_calls` become `tool_use` blocks, tool messages become user
-  `tool_result` blocks. Thinking blocks fold back as `<think>` so the UI
-  collapse keeps working; `redacted_thinking` is dropped.
+  with `model`, required `max_tokens` (`max_tokens` config, default 16384),
+  `system` (single cached text block), `messages`, `tools` (`input_schema`),
+  `tool_choice: {type: auto}` when tools exist. Assistant `tool_calls` become
+  `tool_use` blocks, tool messages become user `tool_result` blocks. Three
+  prompt-cache breakpoints ride every request (system block, last tool, last
+  message block) so settled prefixes hit cache. Thinking blocks fold back as
+  `<think>` so the UI collapse keeps working; `redacted_thinking` is dropped.
 - `responses` (`responses.go`): OpenAI Responses, stateless (`store: false`,
   history replayed client-side, no `previous_response_id`). `POST
   {base}/responses` with `model`, `input` array, `instructions` (system),
@@ -137,8 +141,14 @@ error: "stopped after N rounds without a final answer"
   the sum. `tool_start` events emit in order, then `tool_result` in order.
   Batches containing `AskUserQuestion` run sequentially instead: the single
   interactive overlay/stdin cannot serve concurrent prompts. File-access
-  approval prompts serialize on the same mutex. MCP tool calls serialize on
-  a shared mutex (one stdin pipe per server); builtins run fully parallel.
+  approval prompts serialize on the same mutex. MCP tool calls serialize per
+  server (one stdin pipe each); cross-server batches and builtins run fully
+  parallel.
+- Wire copies stay small while stored history stays full: every transport
+  converter shrinks tool results to a 2k send budget (`sendToolOutputChars`;
+  decisions exempt) so stateless replays stop re-uploading rounds × 16k
+  outputs. The `task` subagent (explore/general, foreground-only, depth ≤2)
+  keeps research out of main history: only its summary folds back.
 
 - Assistant text goes to stdout; `[tool name]` traces and the token tally go to
   stderr, so `valen "..." > out.md` stays clean.
@@ -158,8 +168,9 @@ error: "stopped after N rounds without a final answer"
   Transports encode that result with their existing converters (`role: tool`,
   `tool_result`, or `function_call_output`).
 - Good-citizen guards run every round on all three transports:
-  `checkContextBudget` fail-fasts when history exceeds `max_context_tokens`
-  (estimated as runes/4, no tokenizer dep) instead of sending a doomed
+  `checkContextBudget` fail-fasts when history plus the re-sent tool-schema
+  block exceeds `max_context_tokens` (estimated as runes/4 plus 40 tokens of
+  JSON envelope per message, no tokenizer dep) instead of sending a doomed
   request into a 429; `doomLoopTool` aborts the turn when the same single
   tool call repeats a third consecutive time (multi-call batches break the
   chain). `maybeAutoCompact` keeps every send lean: prune runs unconditionally
@@ -168,9 +179,10 @@ error: "stopped after N rounds without a final answer"
   never shrink and other outputs keep the newest 40k tokens), then the head
   is summarized past the threshold (`max_context_tokens` minus `buffer`, or
   `keep_tokens`×3 on huge budgets so sessions compact early and often) beside
-  the verbatim `keep_tokens` tail — via the cheap `[compaction] model` when
-  set (shipped `config.toml` sets `glm-5.3-flash`), else the session model at
-  minimal thinking, no tools. Between tool rounds all three transports run a
+  the verbatim `keep_tokens` tail — via `[compaction] model` (shipped
+  `config.toml` pins the session model) at the explicit `[compaction]
+  thinking` effort (default `medium`, cheapest fallback per model), no tools.
+  Between tool rounds all three transports run a
   prune-only lean (`leanHistoryForNextRound`): older reads/outputs collapse
   every round with no network call, so the hot loop never blocks on an extra
   LLM summary; summaries fire between turns and on overflow retry. A too-long 400/413
@@ -198,7 +210,9 @@ Rules the registry enforces:
 - Errors never escape the loop: `Run` converts them to `error: <msg>` tool
   output, which the model can react to.
 - Output is truncated at 16000 bytes on a UTF-8 boundary with a
-  `...[truncated N bytes]` suffix.
+  `...[truncated N bytes]` suffix. On the wire each transport additionally
+  shrinks tool results to 2000 chars (`send-truncated` marker); stored history
+  and the session log keep the full text.
 
 ### Builtins
 
@@ -207,11 +221,12 @@ Rules the registry enforces:
 | `shell` | `command` | `sh -c` in the workdir, 60s timeout, combined stdout+stderr; non-zero exit is returned as content with `[exit N]`, not as an error |
 | `web_search` | `query` | DuckDuckGo HTML endpoint, up to 8 results as `N. title / url / snippet`; unwraps `/l/?uddg=` tracker links; 1 MiB body cap |
 | `web_fetch` | `url` | GET with 512 KiB cap, HTML tokenized to text (script/style/noscript dropped), truncated to 8000 chars |
-| `read` | `path`, `offset`, `limit` | Line-windowed read (default 200 lines, max 5000); lines prefixed with their number for `edit` context; long lines trimmed at 1000 chars |
+| `read` | `path`, `offset`, `limit` | Line-windowed read (default 2000 lines, max 5000, ~12KB per call with an offset hint to continue); lines prefixed with their number for `edit` context; long lines trimmed at 1000 chars |
 | `write` | `path`, `content` | Create/overwrite a file, creating parents; preserves the existing mode |
 | `edit` | `path`, `oldString`, `newString`, `replaceAll` | Exact-string replace; refuses ambiguous multi-matches unless `replaceAll` |
-| `glob` | `pattern`, `path` | Recursive file list supporting `*`/`?`/`[...]`/`**`; top-level subtrees walk in parallel, results sorted; skips `.git` |
-| `grep` | `pattern`, `path`, `include` | Go regexp content search as `file:line: text`, sorted by file then line; directory walk collects candidates while file reads/matches run on a bounded worker pool (8); skips `.git`/binaries/>1 MiB files, capped at 100 matches (max 20 per file, so one noisy file can't starve others) |
+| `glob` | `pattern`, `path` | Recursive file list supporting `*`/`?`/`[...]`/`**`; top-level subtrees walk in parallel, results sorted; skips `.git` plus dependency/build dirs (`node_modules`, `target`, `dist`, `build`, `bin`, `vendor`, `.venv`/`venv`, `__pycache__`, `.next`, `out`, `coverage`) |
+| `grep` | `pattern`, `path`, `include` | Go regexp content search as `file:line: text`, sorted by file then line; directory walk collects candidates while file reads/matches run on a bounded worker pool (8); skips dependency/build dirs (same list as `glob`)/binaries/>1 MiB files, capped at 100 matches (max 20 per file, so one noisy file can't starve others) |
+| `task` | `prompt`, `subagent_type` (`explore`/`general`), `description` | Foreground-only same-model subagent with isolated history (explore: read-only subset; general: file+shell subset, no ask/plan/task); only the summary folds into main history. Depth ≤2. Always registered like `AskUserQuestion` |
 | `AskUserQuestion` | `questions[]` | Presents each question with options plus type-your-own, confirms all answers, and returns `User has answered your questions: ...` |
 | `todowrite` | `todos[]` (`content`, `status`: `pending`/`in_progress`/`completed`/`cancelled`, `priority`: `high`/`medium`/`low`) | Replaces the in-memory session plan (opencode schema); the call records fold into the session JSONL, `/clear`/`/new` reset it, resume restores the last plan. The model must call it FIRST before any file reads/edits on 3+ step tasks and update it after each step: one `in_progress` at a time, mark `completed` only after verification |
 | `todoread` | — | Returns the current session plan as JSON (`[]` when empty) |
@@ -289,6 +304,14 @@ deterministic. Tools are registered as
   formatting (glyphs, args shape, cap tail, non-todo fallback);
   `lean_test.go` — per-round prune without network, never summarizes mid-turn,
   auto-off no-op.
+- `task_test.go` — `task` arg/kind validation, depth guard, explore read-only
+  subset, offline delegation loop, error propagation.
+- Send-budget/estimate/cache tests: `TestFitSendBudget`,
+  `TestChatSendMessagesBudget`, `TestSplitChatHistorySendBudget`,
+  `TestSplitResponsesInputSendBudget`, `TestEstimateCountsEnvelopeAndSchemas`,
+  `TestMessagesCacheBreakpoints`, `TestRunToolCallsMCPPerServerLock`,
+  `TestReadDefaultsWideWithByteCap`, `TestGrepGlobSkipDependencyDirs`,
+  `TestCompactionThinkingExplicitAndFallback`.
 
 ## Usage
 

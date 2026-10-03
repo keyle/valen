@@ -1,8 +1,8 @@
 default:
 	@rm -rf bin/
 	@mkdir -p bin/
-	@go build -o bin/valen .
-	@cp config.toml bin/
+	go build -o bin/valen .
+	cp config.toml bin/
 	@bin/valen
 
 prod:
