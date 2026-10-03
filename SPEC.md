@@ -24,7 +24,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | --- | --- |
 | `main.go` | CLI flags, config loading/defaults, HTTP identity headers, agent loop |
 | `internal/prompts` | Agent guidelines: per-family `prompt_*.txt` (opencode-adapted, embedded) + `<env>` header + plan overlay; plan-mode ctx gating |
-| `internal/guard` | Tool-loop guards: stall limit, batching/act nudges, stall recovery, ephemeral-notice stripping |
+| `internal/guard` | Repeat-limit default and stripping of legacy ephemeral notices; execution policy lives in `runModelTurn` |
 | `internal/dvlog` | Debug-verbose trace (`-dv`/`-dvlog`): timestamped round/tool/size log, off by default |
 | `tui.go` | Bubble Tea chat UI: padded conversation, instant echo, recall views, Monokai theme |
 | `models.go` | OpenCode Go catalog: live list, transport map, thinking levels, config persist |
@@ -57,11 +57,12 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `system` | string | prompt files (per model family) | Agent guidelines; empty uses the harness prompt files (opencode-adapted, valen-tuned: muse→meta, claude→anthropic, old reasoning→beast, gpt-6→astra, gpt/grok→gpt, codex/copilot/gemini/kimi/trinity→their file, else default) plus a small `<env>` header (model, workdir, platform, date). Set to override entirely |
 | `plan` | bool | `false` | Plan mode: read-only investigation — the plan overlay joins the system prompt, `write`/`edit`/`shell` refuse with guidance, `task` is explore-only. TUI `/plan` toggles at runtime; `-plan` sets it headless |
 | `max_rounds` | int | `100` | Hard stop on tool-loop iterations |
-| `max_stagnant_rounds` | int | `25` | Stall guard: abort a turn whose tool loop runs this many rounds with calls but no `write`/`edit`/`task` (exploring without acting); raise for long research turns |
+| `max_stagnant_rounds` | int | `25` | Maximum consecutive identical ordered tool batches allowed; changed tool names/normalized arguments/order reset the count. Not a limit on read-only research; the single-call third-repeat guard may stop earlier |
 | `max_context_tokens` | int | `300000` | Fail-fast budget per round (est. runes/4): over-budget history aborts the turn with guidance instead of a doomed send |
+| `request_timeout_seconds` | int | `300` | Optional deadline for each HTTP attempt, including response-body reads (SSE or unary), not the whole turn; retries each get a fresh deadline |
 | `temperature` | float | unset | Pointer semantics: unset omits the field, `0.0` sends zero |
-| `max_tokens` | int | `16384` (floor 8192) | Per-answer output cap on the messages transport; long answers finish in one round instead of two full-history rounds |
-| `compaction` | table | `auto=true, keep_tokens=15000, buffer=10%, thinking=medium` | Summary-mode, send-side only (disk JSONL stays lossless): `auto` compacts before send when over budget and retries once after a too-long 400; `keep_tokens` recent tail kept verbatim beside the summary; `buffer` headroom below `max_context_tokens`; `model` cheap summarizer override (empty = session model); `thinking` summarizer effort, independent of top-level `thinking` (default `medium` when accepted, cheapest fallback per model) |
+| `max_tokens` | int | `16384` | Explicit output cap on all three transports (`max_tokens` on Chat/Messages, `max_output_tokens` on Responses); positive configured values are honored without a floor |
+| `compaction` | table | `auto=true, keep_tokens=15000, buffer=10%, thinking=medium` | Summary-mode, send-side only (prior disk records remain intact): `auto` prunes and summarizes before send and retries once after provider context overflow; `keep_tokens` is a soft whole-turn tail target, always protecting the entire current turn; `buffer` headroom below `max_context_tokens`; `model` summarizer override (empty = session model); `thinking` independent of top-level effort (default `medium` when accepted, cheapest fallback per model) |
 | `[input]` | table | `blink=true, height=3` | Chatbox chrome (TUI only): block-cursor blink plus input box height in lines |
 | `tools` | string[] | empty | Subset of `shell`, `web_search`, `web_fetch`, `read`, `write`, `edit`, `glob`, `grep`, `AskUserQuestion`, `todowrite`, `todoread`. `AskUserQuestion` plus `todowrite`/`todoread` plus `task` are also registered automatically when absent, so model-driven questions, the session plan, and subagent delegation work in every frontend |
 | `mcp` | table[] | empty | Each entry needs `name` + `cmd`; optional `args`, `env` |
@@ -107,16 +108,25 @@ transport-agnostic.
   `tool_choice: {type: auto}` when tools exist. Assistant `tool_calls` become
   `tool_use` blocks, tool messages become user `tool_result` blocks. Three
   prompt-cache breakpoints ride every request (system block, last tool, last
-  message block) so settled prefixes hit cache. Thinking blocks fold back as
-  `<think>` so the UI collapse keeps working; `redacted_thinking` is dropped.
+  message block) for prefix caching. During the active tool loop, native
+  content blocks replay in order, including thinking signatures and opaque
+  redacted blocks. Display thinking folds back as `<think>`; redacted data
+  is not displayed or stored in ordinary history.
 - `responses` (`responses.go`): OpenAI Responses, stateless (`store: false`,
   history replayed client-side, no `previous_response_id`). `POST
   {base}/responses` with `model`, `input` array, `instructions` (system),
   `tools` (`type: function` + `parameters`), `tool_choice: auto`.
   Assistant text before a call is tagged `phase: commentary` (Meta requires
-  it); reasoning summaries fold back as `<think>`. Reasoning items are
-  otherwise omitted in v1, so chain-of-thought continuity across turns is a
-  follow-up.
+  it); active-turn native output preserves provider phases and reasoning
+  items, requesting `reasoning.encrypted_content` for stateless replay.
+  Reasoning summaries fold back as `<think>` for display.
+
+Native Messages/Responses metadata is retained only inside the active
+transport loop, not across later turns, overflow redispatch, or session
+resume. Ordinary history/checkpoints preserve text and tool transactions,
+not those native blocks/items. Chat's native `ReasoningContent` remains in
+history and is checkpointed. Display `<think>` text is not a substitute for
+signed or encrypted replay.
 
 Sampling params are omitted unless configured: some models reject a
 `temperature` that differs from their fixed value. The same rule covers
@@ -137,30 +147,33 @@ use the learned list.
 messages = [system?] + [user prompt]
 repeat up to max_rounds:
   resp = backend(messages, tools)   # chat | messages | responses per model
+  require completed response, visible answer or valid tool_calls
+  reject repeated calls/batches before executing them
   messages += resp.message
   if no tool_calls: print content, print token tally, exit 0
-  run tool_calls with bounded parallelism (max 8), append results in order
+  run read-only builtin batches in parallel (max 8), otherwise serially
+  append tool results in request order
 error: "stopped after N rounds without a final answer"
 ```
 
-- Tool calls in one round run concurrently (semaphore 8) and their results
-  append to history in request order, so wall-clock is ~max(latencies), not
-  the sum. Keep batches small and purposeful (2–4 related calls answering
-  one question); wide sweeps split across rounds, since one slow tool holds
-  its whole batch's results. `tool_start` events emit in order, then
-  `tool_result` in order.
-  Batches containing `AskUserQuestion` run sequentially instead: the single
-  interactive overlay/stdin cannot serve concurrent prompts. File-access
-  approval prompts serialize on the same mutex. MCP tool calls serialize per
-  server (one stdin pipe each); cross-server batches and builtins run fully
-  parallel.
-- Wire copies stay small while stored history stays full: every transport
-  converter shrinks tool results to a 2k send budget (`sendToolOutputChars`;
-  decisions and file reads exempt — reads are the working set, already
-  tool-capped and pruned past the newest 2) so stateless replays stop
-  re-uploading rounds × 16k outputs. The `task` subagent (explore/general,
-  foreground-only, depth ≤2) keeps research out of main history: only its
-  summary folds back.
+- `runModelTurn` owns execution policy for all transports; transport closures
+  own request conversion, streaming fallback, and active-turn native replay.
+  No synthetic batching/act/claim nudges or final no-tools recovery rounds
+  are inserted. Legacy notices are stripped when entering the loop.
+- Only batches consisting entirely of known read-only builtins (`read`,
+  `glob`, `grep`, `web_search`, `web_fetch`) overlap, with at most 8 running.
+  Any mutating, interactive, stateful, MCP, `task`, or unknown tool makes the
+  whole batch execute serially in request order. File-access approvals also
+  serialize. Parallel `tool_start` events emit in request order;
+  `tool_result` events emit as calls complete, matched by call ID. History
+  results always append in request order, after the entire batch finishes.
+- Fresh registry-capped tool results are sent in full; there is no secondary
+  2k live-send truncation. Pruning protects the latest two genuine user turns
+  plus a 40k-token shield of older tool outputs. Beyond that shield, reads
+  become path/range descriptors and other outputs shorten to 2000 chars;
+  user decisions do not prune. The 2000-char summarizer serialization cap is
+  separate. `task` keeps research in isolated history and returns only its
+  visible final answer, not private thinking or intermediate tool output.
 
 - Assistant text goes to stdout; `[tool name]` traces and the token tally go to
   stderr, so `valen "..." > out.md` stays clean.
@@ -168,58 +181,53 @@ error: "stopped after N rounds without a final answer"
 - API errors are returned wrapped (`api: ...`) with the provider's message.
   Transient 429/502/503/504 and network errors retry with backoff (3 attempts)
   before surfacing, so overloads back off instead of failing the turn.
+  Each HTTP attempt has a `request_timeout_seconds` deadline including body
+  reads; connection setup also has 10s dial/TLS and 60s response-header limits.
+  Retryable bodies close without a blocking drain. This is not an idle timeout
+  or a whole-turn deadline; tools retain their separate limits.
 - Ctrl-C cancels the request context and unwinds MCP closers.
 - Every round requests `stream: true` SSE. Text/thinking deltas stream to the
   frontend via `onEvent` (`text_delta`, `thinking_delta`) while tool calls
   accumulate per round. A provider answering with a complete unary JSON body
   folds through the same validation with no deltas; a 400 blaming streaming
   retries the round once without `stream: true`.
+- SSE requires a transport terminal marker (Chat `[DONE]` or finish reason,
+  Messages `message_stop`, Responses `response.completed`). Provider errors,
+  failed/incomplete responses, unfinished blocks and invalid tool calls are
+  errors, never executable partial tool work. Tool calls need unique IDs,
+  names, function type and JSON-object arguments. A thinking-only response
+  with no tools is an error, not a successful final answer.
 - `AskUserQuestion` is part of the same loop: the model may ask multiple
   questions, the active frontend collects answers (options, type-your-own, and
   confirmation), and the formatted answers return as an ordinary tool result.
   Transports encode that result with their existing converters (`role: tool`,
   `tool_result`, or `function_call_output`).
-- Good-citizen guards run every round on all three transports:
-  `checkContextBudget` fail-fasts when history plus the re-sent tool-schema
-  block exceeds `max_context_tokens` (estimated as runes/4 plus 40 tokens of
-  JSON envelope per message, no tokenizer dep) instead of sending a doomed
-  request into a 429; `doomLoopTool` aborts the turn when the same single
-  tool call repeats a third consecutive time (multi-call batches break the
-     chain). A stall guard (`loopGuards`) watches rounds with tool calls but no
-   `write`/`edit`/`task` (shell probing doesn't count — it looks busy while
-   changing nothing). Before the limit, it appends ephemeral reminders: a
-   batching nudge after 3 consecutive single-call rounds, and an act-now
-   nudge at 15 stagnant rounds inviting the model to advance (skipped when
-   the limit is 15 or less). At `max_stagnant_rounds` the turn doesn't die:
-   it appends a final no-tools instruction and runs one last round — text
-   finishes the turn with any attached calls declined unexecuted, while an
-   empty answer still aborts. A finishing reply that claims a code change
-   (implemented/fixed/edited/…) with no write/edit/task behind it earns a
-   claim challenge instead (max 2 per turn): make the edit or restate
-   honestly. All four notices strip at turn end, so later
-   turns stay clean; question rounds pause all counters. Plan mode (`plan`,
-   `/plan`, `-plan`) flips the turn read-only instead: the plan overlay joins
-   the system prompt, `write`/`edit`/`shell` refuse as tool output with
-   guidance, and `task` only accepts `explore` — the model investigates and
-   the reply IS the plan. `maybeAutoCompact`
-   keeps every send lean: prune runs unconditionally
-  (cheap, local — file reads are disposable since tools re-read them, so all
-  but the newest 2 collapse to path/range descriptors while user decisions
-  never shrink and other outputs keep the newest 40k tokens), then the head
-  is summarized past the threshold (`max_context_tokens` minus `buffer`, or
-  `keep_tokens`×3 on huge budgets so sessions compact early and often) beside
-  the verbatim `keep_tokens` tail — via `[compaction] model` (shipped
-  `config.toml` pins the session model) at the explicit `[compaction]
-  thinking` effort (default `medium`, cheapest fallback per model), no tools.
-  Between tool rounds all three transports run a
-  prune-only lean (`leanHistoryForNextRound`): older reads/outputs collapse
-  every round with no network call, so the hot loop never blocks on an extra
-  LLM summary; summaries fire between turns and on overflow retry. A too-long 400/413
-  compacts once and retries the turn; the second failure is terminal. The summary
-  updates in place on repeats, and `/compact` (`/summarize`) forces the same path
-  manually from the TUI. Compaction is send-side only: the JSONL log keeps
-  every turn. Both keep history and surface as friendly errors, so the user can
-  redirect or `/clear`.
+- Guards run every round: `checkContextBudget` includes history (including
+  Chat native reasoning), roughly 40 tokens of envelope per message and the
+  full tool-schema block. `doomLoopTool` stops a third identical consecutive
+  single call; `max_stagnant_rounds` bounds consecutive identical ordered
+  batches, with normalized JSON arguments. Read-only progress is not
+  stagnation. Limits return explicit errors and retain completed work.
+- Plan mode (`plan`, `/plan`, `-plan`) adds the read-only overlay and gates
+  tools centrally: `write`/`edit`/`shell` refuse with guidance and `task`
+  accepts only `explore`; the reply is the plan.
+- With auto-compaction enabled, `maybeAutoCompact` prunes before each turn
+  and summarizes older whole turns past min(budget minus buffer,
+  `keep_tokens` times 3), using the independent compaction effort and no
+  tools. The entire current turn and every kept call/result transaction
+  remain verbatim; `keep_tokens` is soft, not a hard bound. A lone oversized
+  turn has no compactable head and can fail the context-budget guard or
+  provider limit. Between tool rounds only local pruning runs, never a
+  synchronous summary. Provider overflow permits one compaction/redispatch
+  if the head can shrink; a second failure is terminal. `/compact`
+  (`/summarize`) uses the same path. Repeated summaries update in place.
+- TUI success, failure and cancellation commit tool records captured from
+  `Event`s plus a `Turn.History` continuation checkpoint. Disk retains all
+  turn records and checkpoints; memory keeps only the latest checkpoint.
+  Resume uses that checkpoint (including compaction), then reconstructs
+  subsequent legacy turns with their tool calls/results. Prior JSONL records
+  are never rewritten by compaction. This is not crash-time checkpointing or
+  persistent native Messages/Responses replay.
 
 ## Tool contract
 
@@ -239,9 +247,10 @@ Rules the registry enforces:
 - Errors never escape the loop: `Run` converts them to `error: <msg>` tool
   output, which the model can react to.
 - Output is truncated at 16000 bytes on a UTF-8 boundary with a
-  `...[truncated N bytes]` suffix. On the wire each transport additionally
-  shrinks tool results to 2000 chars (`send-truncated` marker); stored history
-  and the session log keep the full text.
+  `...[truncated N bytes]` suffix. Fresh results use this same cap on the wire;
+  only older unprotected history and summarizer payloads shorten further.
+  Session tool records preserve the registry-capped output independently of
+  send-side compaction.
 
 ### Builtins
 
@@ -255,7 +264,7 @@ Rules the registry enforces:
 | `edit` | `path`, `oldString`, `newString`, `replaceAll` | Exact-string replace; refuses ambiguous multi-matches unless `replaceAll` |
 | `glob` | `pattern`, `path` | Recursive file list supporting `*`/`?`/`[...]`/`**`; top-level subtrees walk in parallel, results sorted; skips `.git` plus dependency/build dirs (`node_modules`, `target`, `dist`, `build`, `bin`, `vendor`, `.venv`/`venv`, `__pycache__`, `.next`, `out`, `coverage`) |
 | `grep` | `pattern`, `path`, `include` | Go regexp content search as `file:line: text`, sorted by file then line; directory walk collects candidates while file reads/matches run on a bounded worker pool (8); skips dependency/build dirs (same list as `glob`)/binaries/>1 MiB files, capped at 100 matches (max 20 per file, so one noisy file can't starve others) |
-| `task` | `prompt`, `subagent_type` (`explore`/`general`), `description` | Foreground-only same-model subagent with isolated history (explore: read-only subset; general: file+shell subset, no ask/plan/task); only the summary folds into main history. Depth ≤2. Always registered like `AskUserQuestion` |
+| `task` | `prompt`, `subagent_type` (`explore`/`general`), `description` | Foreground-only subagent inheriting current turn config and `effectiveSystem` plus kind-specific instructions, with isolated history (explore: read-only subset; general: file+shell subset, no ask/todo/task). At most 25 rounds, depth ≤2; only the visible final answer folds into main history. Always registered like `AskUserQuestion` |
 | `AskUserQuestion` | `questions[]` | Presents each question with options plus type-your-own, confirms all answers, and returns `User has answered your questions: ...` |
 | `todowrite` | `todos[]` (`content`, `status`: `pending`/`in_progress`/`completed`/`cancelled`, `priority`: `high`/`medium`/`low`) | Replaces the in-memory session plan (opencode schema); the call records fold into the session JSONL, `/clear`/`/new` reset it, resume restores the last plan. The model must call it FIRST before any file reads/edits on 3+ step tasks and update it after each step: one `in_progress` at a time, mark `completed` only after verification |
 | `todoread` | — | Returns the current session plan as JSON (`[]` when empty) |
@@ -335,12 +344,15 @@ deterministic. Tools are registered as
   auto-off no-op.
 - `task_test.go` — `task` arg/kind validation, depth guard, explore read-only
   subset, offline delegation loop, error propagation.
-- Send-budget/estimate/cache tests: `TestFitSendBudget`,
-  `TestChatSendMessagesBudget`, `TestSplitChatHistorySendBudget`,
-  `TestSplitResponsesInputSendBudget`, `TestEstimateCountsEnvelopeAndSchemas`,
-  `TestMessagesCacheBreakpoints`, `TestRunToolCallsMCPPerServerLock`,
+- Output-preservation/estimate/cache tests: `TestFitSendBudget`,
+  `TestEstimateCountsEnvelopeAndSchemas`, `TestMessagesCacheBreakpoints`,
+  `TestRunToolCallsParallel`, `TestRunToolCallsMCPSerial`,
   `TestReadDefaultsWideWithByteCap`, `TestGrepGlobSkipDependencyDirs`,
   `TestCompactionThinkingExplicitAndFallback`.
+- `model_loop_test.go`, `guards_test.go`, `messages_native_test.go`,
+  `responses_transport_test.go`, `session_regression_test.go` cover shared
+  policy, repeat detection, completion/error validation, active native replay
+  and checkpoint/tool-record resume. All use offline fixtures.
 
 ## Usage
 

@@ -31,7 +31,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.BaseURL != defaultBaseURL || cfg.APIKeyEnv != defaultAPIKeyEnv || cfg.MaxRounds != defaultMaxRounds || cfg.MaxContextTokens != defaultMaxContextTokens || cfg.MaxTokens != defaultMaxTokens || cfg.MaxStagnantRounds != guard.DefaultMaxStagnantRounds {
+	if cfg.BaseURL != defaultBaseURL || cfg.APIKeyEnv != defaultAPIKeyEnv || cfg.MaxRounds != defaultMaxRounds || cfg.MaxContextTokens != defaultMaxContextTokens || cfg.MaxTokens != defaultMaxTokens || cfg.MaxStagnantRounds != guard.DefaultMaxStagnantRounds || cfg.RequestTimeoutSeconds != 300 {
 		t.Fatalf("bad defaults: %+v", cfg)
 	}
 	if !strings.HasPrefix(cfg.SessionID, "ses-") {
@@ -46,6 +46,7 @@ api_key_env = "MY_KEY"
 session_id = "ses-fixed"
 max_rounds = 3
 max_stagnant_rounds = 7
+request_timeout_seconds = 12
 temperature = 0.0
 tools = ["shell"]
 
@@ -57,7 +58,7 @@ args = ["-y", "server"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.BaseURL != "https://example.test/v1" || cfg.SessionID != "ses-fixed" || cfg.MaxRounds != 3 || cfg.MaxStagnantRounds != 7 {
+	if cfg.BaseURL != "https://example.test/v1" || cfg.SessionID != "ses-fixed" || cfg.MaxRounds != 3 || cfg.MaxStagnantRounds != 7 || requestTimeout(cfg) != 12*time.Second {
 		t.Fatalf("bad overrides: %+v", cfg)
 	}
 	if cfg.Temperature == nil || *cfg.Temperature != 0 {
@@ -455,27 +456,25 @@ func TestEstimateCountsEnvelopeAndSchemas(t *testing.T) {
 	}
 }
 
-// TestChatSendMessagesBudget: the chat wire copy shrinks tool results to the
-// send budget while stored history keeps full outputs.
+// Fresh registry-capped tool outputs are preserved on the wire.
 func TestChatSendMessagesBudget(t *testing.T) {
-	long := strings.Repeat("z", sendToolOutputChars+1000)
+	long := strings.Repeat("z", maxToolOutput)
 	history := []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleUser, Content: "hi"},
 		{Role: openai.ChatMessageRoleTool, ToolCallID: "call-1", Content: long},
 	}
 	sent := chatSendMessages(history)
-	if len([]rune(sent[1].Content)) > sendToolOutputChars+200 || !strings.Contains(sent[1].Content, "send-truncated") {
-		t.Fatalf("wire copy must shrink: %d runes", len([]rune(sent[1].Content)))
+	if sent[1].Content != long {
+		t.Fatalf("wire copy must preserve fresh output: %d runes", len([]rune(sent[1].Content)))
 	}
 	if history[1].Content != long || sent[0].Content != "hi" {
 		t.Fatal("stored history and non-tool messages must pass through")
 	}
 }
 
-// TestChatSendMessagesKeepsReads: file reads ride the wire verbatim even
-// past the budget — the model needs the whole file to act on it.
+// File reads ride the wire verbatim up to the registry output cap.
 func TestChatSendMessagesKeepsReads(t *testing.T) {
-	read := "File TODO.md (140 lines, showing 1-140):\n" + strings.Repeat("x", sendToolOutputChars+500)
+	read := "File TODO.md (140 lines, showing 1-140):\n" + strings.Repeat("x", maxToolOutput-100)
 	history := []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleUser, Content: "hi"},
 		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "call-1", Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "read", Arguments: `{"path":"TODO.md"}`}}}},
@@ -489,7 +488,7 @@ func TestChatSendMessagesKeepsReads(t *testing.T) {
 
 // TestRunToolCallsParallel verifies one round's independent calls overlap:
 // 3×~100ms must finish well under the 350ms sequential sum, with history and
-// events in request order even when the first call is slowest.
+// completion events live even when the first call is slowest.
 func TestRunToolCallsParallel(t *testing.T) {
 	r := NewRegistry()
 	for _, tc := range []struct {
@@ -497,18 +496,18 @@ func TestRunToolCallsParallel(t *testing.T) {
 		d    time.Duration
 		out  string
 	}{
-		{"tool_a", 150 * time.Millisecond, "A"},
-		{"tool_b", 100 * time.Millisecond, "B"},
-		{"tool_c", 100 * time.Millisecond, "C"},
+		{"read", 150 * time.Millisecond, "A"},
+		{"glob", 100 * time.Millisecond, "B"},
+		{"grep", 100 * time.Millisecond, "C"},
 	} {
 		if err := r.Add(sleepTool(tc.name, tc.d, tc.out)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	calls := []openai.ToolCall{
-		openaiToolCall("id-a", "tool_a"),
-		openaiToolCall("id-b", "tool_b"),
-		openaiToolCall("id-c", "tool_c"),
+		openaiToolCall("id-a", "read"),
+		openaiToolCall("id-b", "glob"),
+		openaiToolCall("id-c", "grep"),
 	}
 	var events []Event
 	start := time.Now()
@@ -531,7 +530,7 @@ func TestRunToolCallsParallel(t *testing.T) {
 			t.Fatalf("msgs[%d].Role=%q", i, msgs[i].Role)
 		}
 	}
-	// Events stay in request order: all starts, then all results.
+	// Starts stay ordered; results arrive as completed, not held for slow read.
 	var kinds []string
 	var names []string
 	for _, ev := range events {
@@ -539,19 +538,16 @@ func TestRunToolCallsParallel(t *testing.T) {
 		names = append(names, ev.Text)
 	}
 	wantKinds := []string{"tool_start", "tool_start", "tool_start", "tool_result", "tool_result", "tool_result"}
-	wantNames := []string{"tool_a", "tool_b", "tool_c", "tool_a", "tool_b", "tool_c"}
 	if strings.Join(kinds, ",") != strings.Join(wantKinds, ",") {
 		t.Fatalf("event kinds=%v", kinds)
 	}
-	if strings.Join(names, ",") != strings.Join(wantNames, ",") {
+	if strings.Join(names[:3], ",") != "read,glob,grep" || names[3] == "read" || names[4] == "read" || names[5] != "read" || names[3] == names[4] {
 		t.Fatalf("event names=%v", names)
 	}
 }
 
-// TestRunToolCallsMCPPerServerLock: same-server MCP calls serialize on one
-// stdin pipe while different servers overlap — a slow server must not stall
-// another server's batch.
-func TestRunToolCallsMCPPerServerLock(t *testing.T) {
+// Unknown MCP calls conservatively serialize, including across servers.
+func TestRunToolCallsMCPSerial(t *testing.T) {
 	r := NewRegistry()
 	for _, tc := range []struct {
 		name string
@@ -585,8 +581,8 @@ func TestRunToolCallsMCPPerServerLock(t *testing.T) {
 	}
 	start = time.Now()
 	msgs = runToolCalls(context.Background(), r, mixed, nil)
-	if elapsed := time.Since(start); elapsed >= 400*time.Millisecond {
-		t.Fatalf("cross-server calls must overlap, took %v", elapsed)
+	if elapsed := time.Since(start); elapsed < 400*time.Millisecond {
+		t.Fatalf("unknown cross-server calls must serialize, took %v", elapsed)
 	}
 	if len(msgs) != 2 || msgs[0].Content != "X" || msgs[1].Content != "Z" {
 		t.Fatalf("msgs=%+v", msgs)

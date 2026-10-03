@@ -16,7 +16,7 @@ import (
 // Chunky work bloats main history because every explore lands there at up to
 // 16k per result. A subagent runs the same tool loop in an isolated history
 // and only its final summary folds into the main turn, so research costs one
-// 2k-budgeted tool result instead of rounds × full outputs. Foreground-only:
+// registry-capped tool result instead of rounds × full outputs. Foreground-only:
 // no background execution (deferred); max nesting depth 2.
 
 const (
@@ -115,15 +115,16 @@ func runTask(ctx context.Context, cfg Config, client *openai.Client, apiKey stri
 	}
 
 	history := []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleSystem, Content: taskSystem(kind)},
+		{Role: openai.ChatMessageRoleSystem, Content: effectiveSystem(subCfg) + "\n\n" + taskSystem(kind)},
 		{Role: openai.ChatMessageRoleUser, Content: prompt},
 	}
 	msg, _, err := runTurn(withTaskDepth(ctx, taskDepth(ctx)+1), subCfg, client, apiKey, hc, sub, &history, nil)
 	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(msg.Content) == "" {
+	_, answer := splitThinking(msg.Content)
+	if strings.TrimSpace(answer) == "" {
 		return "", fmt.Errorf("task: subagent returned no summary")
 	}
-	return msg.Content, nil
+	return answer, nil
 }

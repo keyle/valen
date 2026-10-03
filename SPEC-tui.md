@@ -25,8 +25,6 @@ in force. Everything below is additive to it.
 
 ## Non-goals
 
-- Streaming deltas (the JSON client is non-streaming today; hook points are
-  reserved, see "Streaming" below).
 - Server/client process split, multi-agent orchestration.
 - Full editing of history (recall is read-only; `/clear` resets).
 - Changes to the provider/tool/MCP contracts in `SPEC.md`.
@@ -132,7 +130,8 @@ Rules:
 
 - At most one in-flight run; Enter while working shows
   "Working… press esc to cancel."
-- `max_rounds` applies per user turn, same as `SPEC.md`.
+- `max_rounds` and consecutive-identical-batch guards apply per turn through
+  the shared `runModelTurn`, same as `SPEC.md`; no synthetic recovery rounds.
 - Token totals accumulate per session.
 - Esc / Ctrl+C during working cancels the run's context → the turn ends with
   a friendly "Cancelled" error; the app does not quit.
@@ -143,10 +142,12 @@ Rules:
   to the model as a tool error; it does not cancel the run.
 - Ctrl+C / Ctrl+D at idle quits. Ctrl+Q quits. MCP closers run on exit.
 - Text/thinking deltas render into the pending transcript throttled
-  (~60ms, tail-capped) with the viewport pinned to the bottom; the committed
-  turn replaces the live block with the markdown reply. Tool start/result
-  events share the same throttle (a parallel batch emits 2N events at once);
-  the committed `turnDoneMsg` always renders final state. Rendered committed
+  (~60ms, rolling 32768-byte UTF-8-safe text/thinking tails) with the viewport
+  pinned to the bottom; the committed turn replaces the live block with the
+  markdown reply. Tool start/result events share the same throttle.
+  Read-only builtin result events arrive in
+  completion order and match rows by call ID; history remains request-ordered.
+  The committed `turnDoneMsg` always renders final state. Rendered committed
   turns are cached append-only (keyed on turn count, width, thinking display,
   model), so per-delta cost is the live pending block, not history depth.
 - Go plan quota refreshes share one in-flight fetch: the minute tick and the
@@ -178,7 +179,9 @@ type turnDoneMsg struct{ prompt, thinking, answer string; tools []ToolRecord; us
 pending block, and returns a `tea.Cmd` that runs the existing `runTurn`
 off the UI thread. `onEvent` forwards progress via `prog.Send(toolEventMsg)`.
 Completion returns `turnDoneMsg`; `Update` commits the `Turn` to the session
-JSONL, swaps in the grown history, and goes idle. `AskUserQuestion` blocks the
+JSONL with a continuation checkpoint on success, failure or cancel, swaps in
+the current history, and goes idle. Tool records are captured directly from
+Events, so compaction cannot erase them. `AskUserQuestion` blocks the
 background turn on `askPrompter`; the UI thread serves `questionMsg` in the
 question overlay and replies with confirmed answers, leaving history and the
 transport converters unchanged. Slash commands
@@ -198,11 +201,22 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
 - History view: one row per turn (time, prompt snippet, tokens) plus older
   saved session files read-only. Sessions view (Ctrl+L): every saved session
   with its title (first prompt, 60 runes), model/effort, turn count — Enter
-  resumes it (transcript + history rebuilt, same file continues). Titles and
-  the model/effort in use live in `<id>.jsonl.meta.json` next to the
+  resumes it (latest `Turn.History` checkpoint plus later legacy turns, same
+  file continues). Legacy records reconstruct tool calls and results as well
+  as prompt/reply text. Titles and the model/effort in use live in
+  `<id>.jsonl.meta.json` next to the
   append-only JSONL plus per-turn `model`/`effort`. Tools view (Ctrl+U):
   every tool record with status.
   Errors view: turns with `Error`. Enter opens full detail; Esc returns.
+- Disk retains every turn/checkpoint; memory keeps only the latest checkpoint.
+  Compaction changes continuation history, not earlier JSONL records or full
+  registry-capped tool records. Native Chat reasoning is checkpointed;
+  Messages signatures and Responses encrypted/native items remain scoped to
+  the active transport loop, not later turns or resume. End-of-turn saving
+  does not guarantee crash-time recovery; save failures remain visible.
+- Historical headers use the originating turn's model/effort, not the current
+  picker selection. A switch during a request applies to future requests;
+  the in-flight turn keeps its original attribution.
 - `/clear` resets in-memory history and turns; the disk log is never deleted.
   `/clear` and `/new` also reset the session todo list; resuming a session
   restores its last `todowrite` plan.
@@ -295,9 +309,11 @@ Every transport round requests SSE (`stream: true`). The background turn
 forwards `text_delta` / `thinking_delta` via `prog.Send(toolEventMsg)` plus
 `tool_start` (with args) / `tool_result` (with output); `Update` accumulates a
 `pendingTools` timeline plus `pendingText` / `pendingThinking` and re-renders
-the pending block throttled with the viewport pinned to the bottom. Streamed
-text renders plain with each `text_delta` on its own line until commit, when
-the full reply renders as markdown.
+the pending block throttled with the viewport pinned to the bottom. Text and
+thinking fragments concatenate exactly, without inserted newlines. Rolling
+32768-byte buffers keep the newest UTF-8-safe tail instead of freezing at the
+cap; only a short tail is displayed live. On commit the full reply renders as
+markdown. Display buffers are not provider-native reasoning replay state.
 Providers answering unary JSON fold with no deltas; a 400 blaming streaming
 retries the round unary.
 

@@ -24,11 +24,11 @@ import (
 )
 
 const (
-	defaultConfigPath = "config.toml"
-	defaultBaseURL    = "https://opencode.ai/zen/go/v1"
-	defaultAPIKeyEnv  = "OPENCODE_GO_API_KEY"
-	defaultMaxRounds  = 100
-	defaultMaxTokens  = 16384
+	defaultConfigPath            = "config.toml"
+	defaultBaseURL               = "https://opencode.ai/zen/go/v1"
+	defaultAPIKeyEnv             = "OPENCODE_GO_API_KEY"
+	defaultMaxRounds             = 100
+	defaultMaxTokens             = 16384
 	defaultRequestTimeoutSeconds = 300
 	// defaultMaxContextTokens fail-fasts absurd sends: stateless transports
 	// resend all of history every round, so burn compounds as rounds ×
@@ -72,16 +72,16 @@ func seedHistory(cfg Config) []openai.ChatCompletionMessage {
 
 // Config mirrors config.toml. See SPEC.md for the full schema.
 type Config struct {
-	Model            string `toml:"model"`
-	Thinking         string `toml:"thinking"`
-	BaseURL          string `toml:"base_url"`
-	APIKeyEnv        string `toml:"api_key_env"`
-	SessionID        string `toml:"session_id"`
-	System           string `toml:"system"`
-	MaxRounds        int    `toml:"max_rounds"`
-	MaxContextTokens int    `toml:"max_context_tokens"`
-	MaxTokens        int    `toml:"max_tokens"`
-	RequestTimeoutSeconds int `toml:"request_timeout_seconds"`
+	Model                 string `toml:"model"`
+	Thinking              string `toml:"thinking"`
+	BaseURL               string `toml:"base_url"`
+	APIKeyEnv             string `toml:"api_key_env"`
+	SessionID             string `toml:"session_id"`
+	System                string `toml:"system"`
+	MaxRounds             int    `toml:"max_rounds"`
+	MaxContextTokens      int    `toml:"max_context_tokens"`
+	MaxTokens             int    `toml:"max_tokens"`
+	RequestTimeoutSeconds int    `toml:"request_timeout_seconds"`
 	// MaxStagnantRounds bounds consecutive identical tool batches, not research.
 	MaxStagnantRounds int `toml:"max_stagnant_rounds"`
 	// Plan starts the session in plan mode: read-only investigation
@@ -379,13 +379,14 @@ func isTTY(f *os.File) bool {
 // web fetch/search. Keep-alive reuse avoids a fresh TCP+TLS handshake per
 // round; caps stay on the tool-output side, not here.
 var sharedTransport = &http.Transport{
-	Proxy: http.ProxyFromEnvironment,
-	DialContext: (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-	TLSHandshakeTimeout: 10 * time.Second,
+	Proxy:                 http.ProxyFromEnvironment,
+	DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+	ForceAttemptHTTP2:     true,
+	TLSHandshakeTimeout:   10 * time.Second,
 	ResponseHeaderTimeout: 60 * time.Second,
-	MaxIdleConns:        100,
-	MaxIdleConnsPerHost: 20,
-	IdleConnTimeout:     90 * time.Second,
+	MaxIdleConns:          100,
+	MaxIdleConnsPerHost:   20,
+	IdleConnTimeout:       90 * time.Second,
 }
 
 func newHTTPClient(cfg Config) *http.Client {
@@ -585,6 +586,7 @@ func estimateTokens(msgs []openai.ChatCompletionMessage) int {
 	var runes int
 	for _, m := range msgs {
 		runes += len([]rune(m.Content))
+		runes += len([]rune(m.ReasoningContent))
 		for _, tc := range m.ToolCalls {
 			runes += len([]rune(tc.Function.Arguments))
 		}
@@ -650,7 +652,7 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 	}
 	batch0 := time.Now()
 	type result struct {
-		index int
+		index  int
 		output string
 	}
 	results := make(chan result, len(calls))
@@ -709,14 +711,13 @@ func runToolCallsSerial(ctx context.Context, registry *Registry, calls []openai.
 		}
 		out = append(out, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: tc.ID, Content: res})
 	}
-	dvlog.Logf("batch %d tools total=%s serial", len(calls), dvlog.Dur(time.Since(batch0)))
+	dvlog.Logf("batch %d tools serial total=%s", len(calls), dvlog.Dur(time.Since(batch0)))
 	return out
 }
 
 // runModelTurn owns execution policy; round owns only transport and replay.
 func runModelTurn(ctx context.Context, cfg Config, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event), round func(context.Context, []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error)) (openai.ChatCompletionMessage, openai.Usage, error) {
 	var usage openai.Usage
-	defer guard.StripNudges(history)
 	guard.StripNudges(history)
 	toolsTok := requestToolsTokens(registry)
 	maxStagnant := cfg.MaxStagnantRounds
@@ -869,7 +870,19 @@ func chatRoundOnce(ctx context.Context, cfg Config, apiKey string, hc *http.Clie
 		return openai.ChatCompletionMessage{}, usage, errors.New("api: empty choices in response")
 	}
 	msg := out.Choices[0].Message
-	return msg, out.Usage, nil
+	if err := chatFinishError(string(out.Choices[0].FinishReason)); err != nil {
+		return openai.ChatCompletionMessage{}, out.Usage, err
+	}
+	return msg, out.Usage, validateModelReply(msg)
+}
+
+func chatFinishError(reason string) error {
+	switch reason {
+	case "", "stop", "tool_calls", "function_call":
+		return nil
+	default:
+		return fmt.Errorf("api: chat: incomplete response (%s)", reason)
+	}
 }
 
 type chatToolAcc struct {
@@ -915,24 +928,49 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 		if len(out.Choices) == 0 {
 			return openai.ChatCompletionMessage{}, usage, errors.New("api: empty choices in response")
 		}
-		return out.Choices[0].Message, out.Usage, nil
+		if err := chatFinishError(string(out.Choices[0].FinishReason)); err != nil {
+			return openai.ChatCompletionMessage{}, out.Usage, err
+		}
+		msg := out.Choices[0].Message
+		return msg, out.Usage, validateModelReply(msg)
 	}
 
 	var content, thinking strings.Builder
 	accs := map[int]*chatToolAcc{}
 	var order []int
+	var eventErr error
+	var terminal bool
 	scanErr := scanSSE(ctx, br, func(ev sseEvent) bool {
 		if strings.TrimSpace(ev.data) == "[DONE]" {
+			terminal = true
 			return false
 		}
-		var chunk openai.ChatCompletionStreamResponse
+		var chunk struct {
+			openai.ChatCompletionStreamResponse
+			Error json.RawMessage `json:"error"`
+		}
 		if err := json.Unmarshal([]byte(ev.data), &chunk); err != nil {
-			return true
+			eventErr = fmt.Errorf("api: chat: decode stream event: %w", err)
+			return false
+		}
+		if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
+			eventErr = parseTransportError("chat", 0, []byte(ev.data))
+			return false
 		}
 		if chunk.Usage != nil {
 			usage = *chunk.Usage
 		}
 		for _, choice := range chunk.Choices {
+			if choice.Index != 0 {
+				continue
+			}
+			if err := chatFinishError(string(choice.FinishReason)); err != nil {
+				eventErr = err
+				return false
+			}
+			if choice.FinishReason != "" {
+				terminal = true
+			}
 			d := choice.Delta
 			if d.Content != "" {
 				content.WriteString(d.Content)
@@ -946,6 +984,10 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 				idx := 0
 				if tc.Index != nil {
 					idx = *tc.Index
+				}
+				if idx < 0 || (tc.Type != "" && tc.Type != openai.ToolTypeFunction) {
+					eventErr = errors.New("api: chat: invalid streamed tool call")
+					return false
 				}
 				a := accs[idx]
 				if a == nil {
@@ -964,8 +1006,14 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 		}
 		return true
 	})
+	if eventErr != nil {
+		return openai.ChatCompletionMessage{}, usage, eventErr
+	}
 	if scanErr != nil {
 		return openai.ChatCompletionMessage{}, usage, scanErr
+	}
+	if !terminal {
+		return openai.ChatCompletionMessage{}, usage, errors.New("api: chat: incomplete stream (missing [DONE] or finish_reason)")
 	}
 	var calls []openai.ToolCall
 	for _, idx := range order {
@@ -979,18 +1027,13 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 			},
 		})
 	}
-	text := content.String()
-	if t := strings.TrimSpace(thinking.String()); t != "" {
-		text = "<think>" + t + "</think>" + text
+	msg := openai.ChatCompletionMessage{
+		Role:             openai.ChatMessageRoleAssistant,
+		Content:          content.String(),
+		ReasoningContent: thinking.String(),
+		ToolCalls:        calls,
 	}
-	if strings.TrimSpace(text) == "" && len(calls) == 0 {
-		return openai.ChatCompletionMessage{}, usage, errors.New("api: empty choices in response")
-	}
-	return openai.ChatCompletionMessage{
-		Role:      openai.ChatMessageRoleAssistant,
-		Content:   text,
-		ToolCalls: calls,
-	}, usage, nil
+	return msg, usage, validateModelReply(msg)
 }
 
 // chat is the headless one-shot path: one prompt, one answer, stdout.

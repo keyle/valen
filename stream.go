@@ -45,10 +45,23 @@ func isRetryableStatus(status int) bool {
 }
 
 // clientDoWithRetry executes req, retrying transient statuses and network
-// errors with backoff. Retryable responses are drained and closed before the
-// next attempt so connections reuse. Non-retryable responses return as-is
-// for the caller to parse (including SSE streams).
+// errors with backoff. Each attempt's deadline lasts through body consumption,
+// not just receipt of headers. Closing the body releases its context.
 func clientDoWithRetry(ctx context.Context, client *http.Client, req *http.Request) (*http.Response, error) {
+	return clientDoWithRetryTimeout(ctx, client, req, requestTimeout(currentTurnConfig(ctx, Config{})))
+}
+
+type deadlineBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *deadlineBody) Close() error {
+	b.cancel()
+	return b.ReadCloser.Close()
+}
+
+func clientDoWithRetryTimeout(ctx context.Context, client *http.Client, req *http.Request, timeout time.Duration) (*http.Response, error) {
 	path := ""
 	if req.URL != nil {
 		path = req.URL.Path
@@ -62,8 +75,10 @@ func clientDoWithRetry(ctx context.Context, client *http.Client, req *http.Reque
 			req.Body = body
 		}
 		t0 := time.Now()
-		resp, err := client.Do(req)
+		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+		resp, err := client.Do(req.Clone(attemptCtx))
 		if err != nil {
+			cancel()
 			if ctx.Err() != nil || attempt+1 >= retryMaxAttempts {
 				dvlog.Logf("http POST %s attempt=%d err=%v dur=%s terminal", path, attempt+1, err, dvlog.Dur(time.Since(t0)))
 				return nil, err
@@ -78,10 +93,13 @@ func clientDoWithRetry(ctx context.Context, client *http.Client, req *http.Reque
 		}
 		if !isRetryableStatus(resp.StatusCode) || attempt+1 >= retryMaxAttempts {
 			dvlog.Logf("http POST %s attempt=%d status=%d dur=%s", path, attempt+1, resp.StatusCode, dvlog.Dur(time.Since(t0)))
+			resp.Body = &deadlineBody{ReadCloser: resp.Body, cancel: cancel}
 			return resp, nil
 		}
 		dvlog.Logf("http POST %s attempt=%d status=%d dur=%s sleep=%s", path, attempt+1, resp.StatusCode, dvlog.Dur(time.Since(t0)), retryDelay(attempt))
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+		// An error body may never finish. Sacrifice connection reuse rather than
+		// letting a retry stall while draining even a byte-bounded body.
+		cancel()
 		resp.Body.Close()
 		select {
 		case <-ctx.Done():
@@ -114,7 +132,7 @@ func postAPI(ctx context.Context, hc *http.Client, cfg Config, url string, body 
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return clientDoWithRetry(ctx, client, req)
+	return clientDoWithRetryTimeout(ctx, client, req, requestTimeout(cfg))
 }
 
 // parseTransportError maps a non-200 body the same way across transports,
@@ -162,6 +180,9 @@ func splitBodyMode(br *bufio.Reader) (sse bool, raw []byte, err error) {
 	for {
 		c, err := br.ReadByte()
 		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				return false, nil, err
+			}
 			return false, nil, errors.New("api: empty response body")
 		}
 		if c == ' ' || c == '\t' || c == '\n' || c == '\r' {

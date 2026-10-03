@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -66,5 +70,30 @@ func TestTaskPropagatesErrors(t *testing.T) {
 	}
 	if !strings.Contains(taskSystem("explore"), "read-only") || !strings.Contains(taskSystem("general"), "summary") {
 		t.Fatal("subagent systems must state their contract")
+	}
+}
+
+func TestTaskInheritsInstructionsAndReturnsVisibleSummary(t *testing.T) {
+	var system string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &req); err != nil || len(req.Messages) == 0 {
+			t.Errorf("bad request: %s", raw)
+			return
+		}
+		system = req.Messages[0].Content
+		_, _ = w.Write(completion(nil, "<think>private deliberation</think>found a.go:12"))
+	}))
+	defer srv.Close()
+	cfg := newTestConfig(srv.URL)
+	cfg.System = "Project rule: never commit changes."
+	out, err := runTask(context.Background(), cfg, nil, "key", srv.Client(), "find it", "explore")
+	if err != nil || out != "found a.go:12" || !strings.Contains(system, cfg.System) || !strings.Contains(system, "read-only") {
+		t.Fatalf("out=%q err=%v system=%q", out, err, system)
 	}
 }

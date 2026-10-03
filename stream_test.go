@@ -136,8 +136,8 @@ func TestChatFallsBackWhenStreamRejected(t *testing.T) {
 	if reply.Content != "all done" {
 		t.Fatalf("reply=%q", reply.Content)
 	}
-	if calls != 4 {
-		t.Fatalf("calls=%d, want stream attempt + unary tool round + stream attempt + final", calls)
+	if calls != 3 {
+		t.Fatalf("calls=%d, want one stream attempt + unary tool round + final", calls)
 	}
 }
 
@@ -285,16 +285,17 @@ func TestTUIPendingShowsSequentialToolsAndStream(t *testing.T) {
 	}
 }
 
-func TestTUIPendingTextDeltasRenderOnOwnLines(t *testing.T) {
+func TestTUIPendingTextDeltasConcatenateExactly(t *testing.T) {
 	m := newTUIModel(Config{Model: "m"}, nil, nil, nil)
 	m.busy = true
 	m.pendingPrompt = "tell me more"
 	_, _ = m.Update(toolEventMsg{kind: "text_delta", text: "Checking "})
 	_, _ = m.Update(toolEventMsg{kind: "text_delta", text: "release notes"})
+	_, _ = m.Update(toolEventMsg{kind: "text_delta", text: " "})
 	_, _ = m.Update(toolEventMsg{kind: "text_delta", text: "done"})
 
-	if !strings.Contains(m.pendingText, "Checking \nrelease notes\ndone") {
-		t.Fatalf("each text delta should start its own line, got %q", m.pendingText)
+	if m.pendingText != "Checking release notes done" {
+		t.Fatalf("text deltas should concatenate verbatim, got %q", m.pendingText)
 	}
 	out := m.renderPending(80)
 	checkIdx := strings.Index(out, "Checking ")
@@ -303,8 +304,8 @@ func TestTUIPendingTextDeltasRenderOnOwnLines(t *testing.T) {
 	if checkIdx < 0 || notesIdx < 0 || doneIdx < 0 || !(checkIdx < notesIdx && notesIdx < doneIdx) {
 		t.Fatalf("pending deltas not in order:\n%s", out)
 	}
-	if tail := out[checkIdx:doneIdx]; !strings.Contains(tail, "\n") {
-		t.Fatalf("pending deltas should render on separate lines:\n%s", out)
+	if tail := out[checkIdx:doneIdx]; strings.Contains(tail, "\n") {
+		t.Fatalf("token fragments should not insert newlines:\n%s", out)
 	}
 }
 

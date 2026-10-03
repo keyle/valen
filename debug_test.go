@@ -77,17 +77,18 @@ func TestRunToolCallsSerialDv(t *testing.T) {
 
 func TestRunToolCallsParallelDv(t *testing.T) {
 	b := withDvLog(t)
-	reg := dvStubRegistry()
+	reg := NewRegistry()
+	_ = reg.Add(Tool{Name: "read", Fn: func(context.Context, string) (string, error) { return "probe-output", nil }})
 	calls := []openai.ToolCall{
-		{ID: "1", Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "dvprobe", Arguments: `{"x":1}`}},
-		{ID: "2", Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "dvprobe", Arguments: `{"x":2}`}},
+		{ID: "1", Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "read", Arguments: `{"x":1}`}},
+		{ID: "2", Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "read", Arguments: `{"x":2}`}},
 	}
 	out := runToolCalls(context.Background(), reg, calls, nil)
 	if len(out) != 2 {
 		t.Fatalf("parallel results: %+v", out)
 	}
 	log := b.String()
-	if strings.Count(log, "tool dvprobe") != 2 || !strings.Contains(log, "batch 2 tools total=") {
+	if strings.Count(log, "tool read") != 2 || !strings.Contains(log, "batch 2 tools total=") {
 		t.Fatalf("parallel log: %q", log)
 	}
 }

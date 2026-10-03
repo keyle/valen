@@ -882,6 +882,9 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 		reply, usage, err := runTurn(ctx, cfg, client, apiKey, httpClient, registry, &h, onEvent)
 		if err == nil {
 			thinking, answer = splitThinking(reply.Content)
+			if reply.ReasoningContent != "" {
+				thinking = reply.ReasoningContent
+			}
 		}
 		return turnDoneMsg{prompt: trimmed, thinking: thinking, answer: answer, tools: tools, usage: usage, err: err, history: h, model: cfg.Model, effort: cfg.Thinking}
 	}
@@ -1299,6 +1302,8 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case toolEventMsg:
 		switch msg.kind {
+		case "round_start":
+			m.toolStatus = msg.text + " - contacting model"
 		case "tool_start":
 			m.pendingTools = append(m.pendingTools, pendingTool{name: msg.text, args: msg.args, id: msg.id})
 			if n := m.runningToolCount(); n > 1 {

@@ -19,9 +19,7 @@ const (
 	anthropicVersion       = "2023-06-01"
 )
 
-// messagesMaxTokens resolves the per-answer output cap: explicit max_tokens
-// wins, otherwise the 16k default. Ditched the old hardcoded 8192 — long
-// answers needed an extra full-history round to finish.
+// messagesMaxTokens respects explicit output caps, including small ones.
 func messagesMaxTokens(cfg Config) int {
 	return outputTokens(cfg)
 }
@@ -413,7 +411,7 @@ func runMessagesTurn(ctx context.Context, cfg Config, client *openai.Client, api
 			System:    messagesSystemParam(system),
 			Messages:  msgs,
 			Thinking:  thinking,
-			Stream: stream,
+			Stream:    stream,
 		}
 		if len(tools) > 0 {
 			req.Tools = tools

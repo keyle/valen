@@ -231,12 +231,18 @@ func WriteTool() Tool {
 			if err := checkFileAccess(ctx, "write", abs); err != nil {
 				return "", err
 			}
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
 			if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 				return "", err
 			}
 			mode := os.FileMode(0o644)
 			if fi, err := os.Stat(abs); err == nil && !fi.IsDir() {
 				mode = fi.Mode().Perm()
+			}
+			if err := ctx.Err(); err != nil {
+				return "", err
 			}
 			if err := os.WriteFile(abs, []byte(a.Content), mode); err != nil {
 				return "", err
@@ -294,6 +300,9 @@ func EditTool() Tool {
 			mode := os.FileMode(0o644)
 			if fi, err := os.Stat(abs); err == nil {
 				mode = fi.Mode().Perm()
+			}
+			if err := ctx.Err(); err != nil {
+				return "", err
 			}
 			if err := os.WriteFile(abs, updated, mode); err != nil {
 				return "", err

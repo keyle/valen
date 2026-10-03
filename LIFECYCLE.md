@@ -3,17 +3,18 @@
 A step-by-step reading guide to the harness side of models: what a turn is,
 what a round is, where tokens go, why big jobs slow down, and what each
 mechanism (batching, tools, todos, compaction, guards) costs and buys.
-Numbers below are the live defaults in code, not approximations.
+Caps below are code defaults; token estimates and cost examples are
+illustrative, not measured latency or live-provider benchmarks.
 
 Terms first, because the codebase uses them precisely:
 
 | Word | Meaning | Code |
 | --- | --- | --- |
 | **turn** | One user prompt → final assistant answer, including all tool work. The unit billed, logged, and resumed. | `Turn` in `session.go`, `runTurn` in `main.go` |
-| **round** | One model request → response inside a turn. A turn with 5 tool batches = 5+ rounds. | loop in `runChatTurn` / `runMessagesTurn` / `runResponsesTurn` |
+| **round** | One model request → response inside a turn. A turn with 5 tool batches = 5+ rounds. | shared `runModelTurn`; transport closures in `runChatTurn` / `runMessagesTurn` / `runResponsesTurn` |
 | **step** | opencode's word for roughly one round (its processor emits `step-start` / `step-finish` events around each model call plus its tool calls). Valen has no step events; round is the equivalent unit. | opencode `session/processor.ts` |
-| **batch** | The set of tool calls the model emits in one round. Executed together, results appended in request order. | `runToolCalls` in `main.go` |
-| **history** | The full OpenAI-shaped message list (`system` + alternating assistant/tool messages) carried across turns in memory. | `[]openai.ChatCompletionMessage` |
+| **batch** | Tool calls emitted in one round. Read-only builtin batches may overlap; other batches execute serially. Results append in request order. | `runToolCalls` in `main.go` |
+| **history** | OpenAI-shaped continuation state carried across turns; older turns may be pruned/summarized. Separate session records keep the transcript and tool outputs. | `[]openai.ChatCompletionMessage`, `Turn.History` |
 
 ## 1. The lifecycle of one user turn, step by step
 
@@ -25,71 +26,80 @@ and press Enter in the TUI. What happens, in order:
    command. The UI thread never blocks on the network; it only renders
    progress events. (`submit` in `tui.go`, `toolEventMsg` / `turnDoneMsg`.)
 2. **Pre-send compaction check.** Before the first request,
-   `maybeAutoCompact` runs: cheap local prune always (see §5), plus a
-   summarizer LLM call only if history is past threshold. (`dispatchTurn`.)
+   `maybeAutoCompact` runs when auto-compaction is enabled: cheap local prune
+   (see §5), plus a summarizer call if older turns are compactable and history
+   is past threshold. (`dispatchTurn`.)
 3. **Round 1 request.** The active transport converts history to its wire
    format and POSTs with `stream: true`. Every request carries
-   `x-opencode-session` (routing + cache affinity) and the iPad Safari
-   `User-Agent`. System + tool schemas ride on **every** round.
+   `x-opencode-session` (routing + cache affinity) and the honest
+   `valen/<version>` User-Agent. System + tool schemas ride on every round.
+   Each HTTP attempt is bounded by `request_timeout_seconds` (300s including
+   body reads); dial/TLS limits are 10s, response headers 60s.
 4. **Stream parse.** SSE deltas (`text_delta`, `thinking_delta`) forward to
    the UI live (~60ms throttle, viewport pinned). Tool calls accumulate until
-   the terminal event (`[DONE]` / `response.completed` / `message_stop`).
+   a valid terminal event (Chat `[DONE]` or finish reason,
+   Responses `response.completed`, Messages `message_stop`).
    A provider answering unary JSON folds through the same validation with no
-   deltas; a 400 blaming streaming retries the round once without it.
+   deltas; a 400 blaming streaming retries the round once without it. Errors,
+   incomplete streams/blocks, invalid tool arguments and thinking-only
+   tool-less replies fail instead of executing partial work.
 5. **Append assistant message, run the batch.** Tool calls execute —
-   parallel up to 8, results appended in request order — and each result is a
-   new `role: tool` message in history. Per-round prune collapses older
-   reads/outputs (local, no network).
+   parallel up to 8 only for entirely read-only builtin batches, otherwise
+   serially in request order. Result events arrive in completion order;
+   history appends every result in request order. Per-round local prune
+   protects the latest two user turns plus 40k tokens of older outputs.
 6. **Rounds 2..N.** Repeat 3–5. Each round re-sends the *entire* grown
-   history plus schemas: this is the `rounds × history` cost from §3.
-7. **Finish.** A round with zero tool calls ends the turn: reply renders as
-   markdown, token tally prints (`↑ prompt · ↓ completion`), the `Turn`
-   (prompt, thinking, reply, tool records, usage, model/effort) appends to
-   the session JSONL, UI goes idle. Errors (including cancel) also commit a
-   turn so nothing is lost and the prompt is retryable.
+   continuation history plus schemas: this is the `rounds × history` cost
+   from §3. `runModelTurn` does not insert synthetic nudge/recovery rounds.
+7. **Finish.** A completed round with a visible answer and no tools ends the
+   turn: reply renders as markdown, token tally prints (`↑ prompt · ↓ completion`), the `Turn`
+   (prompt, thinking, reply, Event-captured tools, usage, model/effort and
+   continuation checkpoint) appends to JSONL, UI goes idle. Errors/cancel
+   also commit completed work and history; this is end-of-turn saving, not
+   a guarantee against a process crash or disk-save failure.
 
-Headless `-p` runs the identical `runTurn`; only the event sink differs
-(stderr `[tool …]` lines vs TUI timeline). There is deliberately one loop.
+Headless `-p` uses the same `runTurn`/`runModelTurn`; its sink prints stderr
+tool traces rather than a TUI timeline. Session checkpointing is TUI-owned.
 
 ## 2. Rounds vs turns, and why the count matters more than it looks
 
 Cost of a turn ≈ sum over rounds of (prefill(history + schemas) + decode).
-Prefill dominates once history passes ~20k tokens, and history grows every
-round (assistant message + N tool results). So turn cost is roughly
-**quadratic in the number of rounds**: round k re-sends everything rounds
-1..k−1 produced.
+History grows each round (assistant message + N tool results). Without
+compaction, replayed input can grow quadratically with round count: round k
+re-sends everything rounds 1..k-1 produced. Actual latency and billing depend
+on the provider's prefix caching and decode; no fixed crossover is assumed.
 
-Worked example (chat transport, defaults). Prompt needs: 1 plan write +
-4 reads (10k each, stored) + 2 edits + final answer = ~8 rounds.
+Illustrative example (not a benchmark): a plan, four reads, two edits and a
+final answer sent one batch per round require eight model rounds. If each
+read contributes 10KB (about 2.5k estimated tokens), all four remain visible
+throughout that user turn; the third read no longer discards the first.
 
-| Round | History content (stored) | Wire send (reads exempt) |
+| Round | Continuation history | Approximate wire input |
 | --- | --- | --- |
 | 1 | system + prompt + schemas (~8k) | ~8k |
 | 2 | + todowrite result (~1k) | ~9k |
-| 3–6 | + 4 × 10k reads | ~21k, ~31k, ~32k, ~33k (newest 2 reads ride full; older prune to descriptors) |
-| 7–8 | + edits + summary | ~34k, ~35k |
+| 3-6 | + four reads, about 2.5k tokens each | ~11.5k, ~14k, ~16.5k, ~19k |
+| 7-8 | + edits + final answer request | ~19k plus edit results |
 
-Total prefill ≈ 200k tokens. The 2k send budget still caps shell/grep-style
-outputs (that is the A2 win); file reads ride full while fresh so the model
-can act on whole files instead of re-reading fragments it can never hold —
-and prune bounds that cost to the newest 2 reads, older ones collapsing to
-path/range descriptors. Without batching (1 tool/round → 12 rounds instead
-of 8), total prefill ≈ 300k+. Round count is the master lever: batching (§6)
-and the task subagent (§7) both work by cutting rounds, and every mechanism
-below is priced against this math.
+These figures exclude envelopes, native metadata and provider caching.
+Batching independent reads cuts model round trips without discarding the
+working set. There is no secondary 2k send cap: all fresh outputs retain the
+16k-byte registry cap. `task` isolates exploration instead of repeatedly
+uploading it in main history.
 
 Hard stops: `max_rounds` (default 100) ends a turn without an answer;
 `doomLoopTool` aborts when the *same single* tool call repeats a third
-consecutive time (multi-call batches break the chain — they run as one
-parallel unit, not a loop step).
+consecutive time (multi-call batches break that single-call chain).
+`max_stagnant_rounds` (25) independently bounds consecutive identical ordered
+batches, not rounds without writes; changed calls reset it.
 
 ## 3. Token math: what a request is actually made of
 
 One round's prefill, largest-first:
 
-1. **History content** — all assistant text, user prompts, tool results
-   (non-read outputs capped to 2k on the wire; decisions and file reads
-   verbatim).
+1. **History content**: assistant text, user prompts and registry-capped tool
+   results, with older unprotected outputs pruned. Active Messages/Responses
+   replay also carries native blocks/items, not just display text.
 2. **Tool schemas** — every builtin + every MCP server's tools, every round.
    Three builtins ≈ 300 tokens; a couple of MCP servers can be thousands.
    The budget guard counts this (`requestToolsTokens`); the old estimator
@@ -99,7 +109,7 @@ One round's prefill, largest-first:
    (`messageOverheadTokens`).
 5. **Thinking/reasoning config** — small field, but it *authorizes* large
    decode: `xhigh` lets the model spend far more output tokens per round
-   than `medium`.
+   than `medium`, within the explicit output cap.
 
 The estimator is `runes/4 + 40/message + schemas/4` — no tokenizer dep,
 deliberately approximate, used only for guardrails (fail-fast budget,
@@ -116,27 +126,29 @@ cheapest fallback per model) summarizes.
 
 | Knob | Value | Why |
 | --- | --- | --- |
-| `max_rounds` | 100 | Backstop against flapping loops; healthy tasks finish in <15 |
-| `max_context_tokens` | 300000 | Fail-fast per-round budget, below the smallest catalog limit with margin |
-| `max_tokens` (messages) | 16384, floor 8192 | Long answers finish in one round instead of two full-history rounds |
-| Tool output stored | 16000 bytes | Session log stays useful; memory stays flat |
-| Tool output on wire | 2000 chars | Matches opencode; rounds stop re-uploading 16k results; `send-truncated` marker tells the model to re-run narrower |
-| Compaction `keep_tokens` | 15000, tail verbatim | Recent context the summary can't afford to lose |
+| `max_rounds` | 100 | Per-turn backstop, not an expected task duration |
+| `max_stagnant_rounds` | 25 | Consecutive identical ordered batches allowed; not mutation-based stagnation |
+| `max_context_tokens` | 300000 | Approximate fail-fast budget; not a guarantee against every provider's limit |
+| `max_tokens` (all transports) | 16384, no floor for positive overrides | Explicit output bound, Responses uses `max_output_tokens` |
+| Tool output | 16000 bytes in registry, same fresh wire output | UTF-8-safe cap; session tool records keep this output |
+| Compaction `keep_tokens` | 15000 soft whole-turn target | Entire current turn protected even when oversized |
 | Compaction `buffer` | 10% of budget | Headroom so the summary + tail + reply fit under the fail-fast line |
 | Compaction threshold | min(budget−buffer, keep×3) → **45000** default | Compacts early and often instead of near the limit |
-| Prune: newest reads | 2 intact | Fresh reads are acted on immediately; older ones re-read cheaply via `read {path, offset}` |
-| Prune: protect window | newest 40k tool-output tokens | Matches opencode `PRUNE_PROTECT`; shields the working set |
-| Prune: decisions | never shrink | `AskUserQuestion` answers are load-bearing; summary must keep them verbatim |
+| Prune: recent turns | latest 2 genuine user turns intact | Keep the working set, not just the last two reads |
+| Prune: older shield | 40k tool-output tokens beyond protected turns | Reads and other outputs share this shield |
+| Prune: decisions | never prune | `AskUserQuestion` answers are load-bearing; summary serialization keeps up to 4k chars |
+| Old output / summary serialization | 2000 chars per ordinary tool result | Older reads become descriptors; this is not a live-send cap |
 | `read` default/max | 2000 / 5000 lines, ~12KB/call | opencode parity on lines; 12KB fits under the 16k storage cap so the offset-continue hint always reaches the model |
 | `grep` | 100 matches, 20/file, skip >1MiB/binaries | One noisy file can't starve the result; same shape as opencode's limit: 100 |
 | `shell` | 60s timeout, combined output | Non-zero exit returns as content (`[exit N]`), never as loop error |
 | MCP handshake / call | 30s / 2m | Slow servers warn-and-continue at startup, never abort the run |
-| Parallel tools | semaphore 8 | Wall-clock ≈ max(latencies); matches grep's worker pool |
+| Parallel tools | max 8 known read-only builtins | Any other tool makes the whole batch serial |
 | Stream body cap | 8MiB LimitReader/round | A runaway stream can't OOM the harness |
 | Retry | 3 attempts, 300ms→800ms, 429/502/503/504 + network errors | Overloads back off; 400s never retry (stream-fallback depends on it) |
+| HTTP deadlines | 300s per attempt including body; headers 60s, dial/TLS 10s | Optional `request_timeout_seconds`; no blocking retry-body drain, no new dependency |
 | Task subagent | ≤25 rounds, depth ≤2 | A flailing delegate can't eat the session budget |
 | Web | search 8 results/1MiB; fetch 512KiB→8000 chars | Snippets stay plannable, pages stay skimmable |
-| TUI stream tail | last ~1500 runes live; 32k delta cap; 60ms throttle | Live view stays cheap; commit renders the full text |
+| TUI stream tail | last ~1500 runes displayed; rolling 32768 bytes per text/thinking buffer; 60ms throttle | Exact fragments, no inserted newlines; newest UTF-8-safe tail retained, commit renders full reply |
 
 Ditched along the way: 200-line reads (10 rounds to see a file), hardcoded
 8192 answer cap, global MCP mutex, unbilled schema blind spot, mid-turn
@@ -146,47 +158,51 @@ blocking summaries.
 
 Two mechanisms, different jobs:
 
-**Prune (every send, local, free).** `pruneOldToolOutputs` rewrites history
-*in place*: all but the newest 2 `read` results collapse to
-`File <path> (<total> lines, showing <a>-<b>)` + next-offset hint; other
-outputs past the newest 40k tokens shorten to 2000 chars + `[pruned …]`;
-decisions never shrink. Rationale: file content is disposable because the
-model holds the path/range descriptor and can re-read exactly. Prune is why
-the per-round lean costs zero network.
+**Prune (local, no model call).** With auto-compaction on,
+`pruneOldToolOutputs` protects the latest two genuine user turns in full,
+then another 40k estimated tokens of older tool outputs. Beyond the shield,
+reads become path/range + next-offset descriptors and other results shorten
+to 2000 chars with a prune marker. Decisions and call records never prune.
+The third/fourth read in a current turn therefore cannot erase earlier reads.
 
 **Summary (past threshold, one LLM call).** `splitForCompaction` keeps
-leading system messages + the newest `keep_tokens` tail verbatim; the head
-serializes to handoff text (reads as descriptors, decisions fuller, outputs
-capped 2k — same shape opencode sends its summarizer) and the
+leading system messages + a whole-user-turn tail verbatim; `keep_tokens` is
+soft and the entire current turn always stays. Call/result pairs cannot be
+split. The head serializes to handoff text (reads as descriptors, decisions
+up to 4k chars, ordinary outputs up to 2k; private thinking omitted) and the
 `[compaction] model` at `[compaction] thinking` with **no tools** returns
 prose covering objective, decisions, completed/active work, blockers, next
 moves, files. The head is replaced by one `[Session summary …]` assistant
 message. Repeats *update in place* (previous summary feeds the prompt), so
-blocks never stack. Disk JSONL is untouched — compaction is send-side only.
+blocks never stack. Prior disk JSONL records remain untouched. New turn
+checkpoints capture the current compacted continuation state alongside full
+transcript/tool records.
 
 When it fires: (a) `maybeAutoCompact` before each turn's first send;
 (b) once-and-retry after a too-long 400/413 (second failure is terminal);
 (c) manually via `/compact`. Deliberately **not** inside the tool loop:
-a mid-turn summary doubles that round's latency and rewrites bytes the
-prefix cache was holding. The turn after a huge upload starts small because
-the *next* turn's pre-send check compacts.
+a mid-turn summary adds another synchronous model call and rewrites bytes the
+prefix cache was holding. The next turn's pre-send check can compact older
+work when there is a compactable head. A lone oversized turn
+has no compactable head; protecting it means a context-budget/provider error
+can still stop the run. Raising `keep_tokens` does not solve this limitation.
 
 Cache interplay (worth understanding once): server-side prefix caching keys
-on exact leading bytes. Prune-only rounds keep bytes stable, so the settled
-prefix hits cache; summaries and threshold crossings re-fill it. On
+on exact leading bytes. Unchanged protected prefixes may hit cache; pruning
+older output and summary replacements change bytes and can miss it. On
 `/messages` we additionally pin three explicit `cache_control: ephemeral`
 breakpoints (system block, last tool, last message block) — the documented
 Anthropic pattern: stable prefixes cache, the moving tail doesn't.
 
 ## 6. Batching and parallelism
 
-- One round's batch runs concurrent (semaphore 8); results append in
-  request order; `tool_start`s emit in order, then `tool_result`s in order,
-  so the TUI timeline stays readable under concurrency.
-- Batches containing `AskUserQuestion` go fully serial (one interactive
-  overlay/stdin). File-access approval prompts serialize the same way.
-- MCP calls lock **per server** (one stdin pipe each); cross-server batches
-  overlap; builtins never lock.
+- Only entirely read-only builtin batches (`read`, `glob`, `grep`,
+  `web_search`, `web_fetch`) overlap, max 8. Starts emit in request order,
+  results in completion order; call IDs match live rows. History always
+  appends in request order after the batch finishes.
+- Any mutating, interactive, stateful, `task`, MCP or unknown tool makes the
+  whole batch serial in request order. Even cross-server MCP calls do not
+  overlap within a batch. File-access approvals also serialize.
 - The model must be *told* to batch: `prompt_meta.txt` / `prompt_default.txt`
   demand small purposeful batches (2–4 related calls) and
   `grep`/`glob`-before-`read`. One-tool-per-round is
@@ -230,7 +246,9 @@ opencode ships **both**, and so do we — they do different jobs:
   restored from the session log on resume.
 - **`task` = the execution surface.** A same-model subagent (`explore` =
   read-only subset, `general` = file+shell subset) running the full tool
-  loop against an **isolated history**, whose *summary alone* folds back
+  loop against an isolated history, inheriting the current turn config and
+  `effectiveSystem` plus kind-specific instructions. Its visible final
+  answer alone folds back (no private thinking or intermediate tool output)
   into the main turn. It costs one model loop but saves `rounds × full
   outputs` in main history. Foreground-only, ≤25 rounds, depth ≤2, silent
   in the timeline (one `task` row; live subagent streaming is TODO D6).
@@ -249,31 +267,27 @@ missing feature.
 - `checkContextBudget` — fail-fast before a doomed send (history + schemas
   vs `max_context_tokens`), with the exact estimate and a remediation
   (`/compact`, `/clear`, raise the knob).
-- `doomLoopTool` — same single tool+args a third consecutive time →
-  abort with guidance. Multi-call batches don't count (parallel unit).
-- Stall guard — `max_stagnant_rounds` (default 25) rounds with tool calls but
-  no `write`/`edit`/`task` → one final round under a no-tools instruction
-  instead of dying: text finishes the turn (attached calls declined), an
-  empty answer still aborts. Shell doesn't reset it. Raise for long research
-  turns.
-- Batching nudge — 3 consecutive single-call rounds append one ephemeral
-  user reminder to batch independent calls; stripped at turn end.
-- Act nudge — at 15 stagnant rounds one ephemeral reminder invites the model
-  to make the change now or ask what blocks it; still stripped at turn end.
-  Question rounds pause both counters.
-- Claim challenge — a finishing reply that claims a code change
-  (implemented/fixed/edited/…) with no `write`/`edit`/`task` behind it earns
-  a challenge round instead (max 2 per turn): make the edit or restate
-  honestly. Pure research summaries and tool-less answers are exempt.
+- `doomLoopTool`: same single tool + normalized args a third consecutive
+  time stops before executing it. Multi-call batches break that chain.
+- `max_stagnant_rounds` (25): maximum consecutive identical ordered tool
+  batches allowed; changed calls/args/order reset the count. Research is not
+  judged by whether it mutates files. Exceeding a limit returns an error.
+- No synthetic batching/act/claim challenges or final no-tools recovery.
+  The shared `runModelTurn` uses the actual prompt and tool evidence;
+  legacy guard notices are stripped on entry.
+- Completion validation: a valid terminal response and complete tool calls
+  are required; failed/incomplete output never triggers tools. A tool-less
+  thinking-only response is an error, not a final answer.
 - Plan mode — `plan` / `/plan` / `-plan` flips the turn read-only instead of
   guarding it: the plan overlay joins the system prompt, `write`/`edit`/
   `shell` refuse as tool output, `task` only accepts `explore`. The model
   investigates (small batches, todowrite-tracked) and the reply IS the plan;
   leaving plan mode prints the build-switch notice and restores the build
   prompt. The summarizer always runs with plan off.
-- Retry — 429/502/503/504 + network errors, 3 attempts, 300ms→800ms
-  backoff, bodies drained for connection reuse, `Retry-After` not yet
-  honored (TODO D1). 400s never retry (stream-fallback owns that path).
+- Retry: 429/502/503/504 + network errors, 3 attempts, 300ms then 800ms.
+  Each HTTP attempt has its own body-inclusive deadline, retryable bodies
+  close without blocking drain, `Retry-After` remains TODO D1. 400s do not
+  transient-retry (stream fallback owns that path). No idle/whole-turn timer.
 - `friendlyError` — every failure maps to one line (`Rate limited`,
   `Overloaded`, `Cancelled`…) with details one key away; the prompt is
   retained so limits and cancels are retryable.
@@ -291,10 +305,11 @@ log, and registry are transport-agnostic. Model ID selects the transport
 | | chat | messages | responses |
 | --- | --- | --- | --- |
 | Thinking knob | `reasoning_effort` / `enable_thinking` (family-dependent) | `{type: enabled, budget 1024…6144}` / `disabled` for `none` | `{effort}` verbatim; `none`/empty omitted (Muse Spark 400s on `none`) |
-| Tool results | `role: tool` (2k-budgeted copy) | user `tool_result` blocks (2k + cache breakpoint on last) | `function_call_output` (2k) |
-| Reasoning continuity | full (native) | thinking folds to `<think>` (signatures dropped — TODO D7) | summaries fold to `<think>`; items omitted (provider-encrypted replay infeasible — TODO D4) |
+| Tool results | `role: tool`, fresh registry-capped text | user `tool_result`, same text + last cache breakpoint | `function_call_output`, same text |
+| Active-turn reasoning | native `ReasoningContent` | native thinking/signature/redacted blocks replayed in order | native reasoning/encrypted content and output phases replayed, stateless |
+| Beyond active loop / resume | native Chat reasoning checkpointed | display thinking stored, native blocks/signatures not persisted | display summaries stored, native items/encryption/phases not persisted |
 | Caching | server prefix over stable bytes | + 3 explicit breakpoints | server prefix over stable bytes |
-| Answer cap | provider default | `max_tokens` (16384) | provider default |
+| Answer cap | `max_tokens` (16384 default) | `max_tokens` (16384 default) | `max_output_tokens` (16384 default) |
 | Unknown thinking | full vocabulary until a 400 teaches the list, cached to disk | same | same |
 
 ## 11. TUI lifecycle (where the pixels come from)
@@ -303,7 +318,12 @@ log, and registry are transport-agnostic. Model ID selects the transport
 `text_delta` / `thinking_delta` / `tool_result` events accumulate into
 `pendingTools` / `pendingText` / `pendingThinking` (throttled ~60ms,
 viewport pinned) → `turnDoneMsg` commits the `Turn` (JSONL append, history
-swap, totals) and clears pending. Rendered committed turns cache
+swap, totals, continuation checkpoint) and clears pending. Live text/thinking
+buffers retain the newest 32768 bytes on UTF-8 boundaries, concatenate exact
+fragments without invented newlines, and do not cap the committed reply.
+Tool records come from Events, not a possibly compacted history diff.
+Historical headers use each turn's model/effort; live model switches affect
+future requests, not past attribution. Rendered committed turns cache
 append-only (key: count, width, thinking toggle, model), so streaming costs
 the live block only. `todowrite` rows render the checklist live from args
 while running, from the stored result on commit. Overlays (history,
@@ -316,8 +336,15 @@ same state; Esc/Ctrl-C cancels the run context (turn commits as
 Each session is one append-only JSONL (`$XDG_DATA_HOME/valen/sessions/<id>.jsonl`)
 plus a `.meta.json` sidecar (title = first prompt's first 60 runes,
 model/effort). `/sessions` (Ctrl+L) lists every session with title and
-turn count; Enter resumes (transcript + history rebuilt, same file
-continues, last `todowrite` plan restored). `/new` (Ctrl+N) mints a fresh
+turn count; Enter resumes (latest `Turn.History` checkpoint plus any later
+legacy turns, same file continues, last `todowrite` plan restored). Legacy
+records without checkpoints reconstruct assistant tool calls and matching
+results, not just prompt/reply text. `/new` (Ctrl+N) mints a fresh
 id; `/clear` reseeds history in place (log file kept, never deleted).
-Compaction never touches disk — resume always sees the full lossless log
-and re-derives the plan from the last `todowrite` record.
+Disk keeps every appended turn and checkpoint; memory retains only the latest
+checkpoint. Compaction does not rewrite prior records; resume preserves the
+compacted continuation rather than restoring all old output to the wire.
+Failures/cancellations also checkpoint completed work. Native Messages
+signatures and Responses encrypted reasoning remain active-loop-only, not
+durable resume metadata. See `EXECUTION-REVIEW.md` for the pinned OpenCode
+comparison and remaining gaps.

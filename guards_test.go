@@ -3,241 +3,157 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"io"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/sashabaranov/go-openai"
-	"valen/internal/dvlog"
-	"valen/internal/guard"
 )
 
-// TestChatStopsStagnantLoop: endless exploration without write/edit/task
-// gets one final no-tools round; answering it with another (textless) tool
-// call still aborts — no 4th request.
-func TestChatStopsStagnantLoop(t *testing.T) {
-	srv, calls := fakeServer(t,
-		completion(toolCall("shell", `{"command":"echo 1"}`), ""),
-		completion(toolCall("shell", `{"command":"echo 2"}`), ""),
-	)
-	registry := NewRegistry()
-	registry.LoadBuiltins([]string{"shell"})
-	cfg := newTestConfig(srv.URL)
-	cfg.MaxRounds = 10
-	cfg.MaxStagnantRounds = 2
-
-	err := chat(context.Background(), cfg, newClient(cfg, "key"), "key", nil, registry, "hi", io.Discard, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "2 rounds") || !strings.Contains(err.Error(), "write/edit/task") {
-		t.Fatalf("err=%v", err)
-	}
-	if *calls != 3 {
-		t.Fatalf("calls=%d, want 3 (2 exploring + 1 failed recovery round)", *calls)
-	}
-}
-
-// TestChatNudgesSingleCallStreak: three consecutive single-call rounds append
-// the batching reminder (visible to the 4th request), and turn end strips it.
-func countingProbeRegistry(count *int) *Registry {
-	r := NewRegistry()
-	_ = r.Add(Tool{Name: "probe", Description: "probe", Fn: func(ctx context.Context, args string) (string, error) {
-		*count++
-		return "probe:" + args, nil
-	}})
-	return r
-}
-
 func guardTestHistory() []openai.ChatCompletionMessage {
-	return []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleSystem, Content: "sys"},
-		{Role: openai.ChatMessageRoleUser, Content: "hi"},
+	return []openai.ChatCompletionMessage{{Role: "system", Content: "sys"}, {Role: "user", Content: "hi"}}
+}
+
+func TestChatDistinctResearchWithoutNudges(t *testing.T) {
+	var replies [][]byte
+	for n := 0; n < 4; n++ {
+		replies = append(replies, completion(toolCall("probe", fmt.Sprintf(`{"n":%d}`, n)), ""))
+	}
+	// Claims are not grounds for manufacturing another user instruction.
+	replies = append(replies, completion(nil, "I implemented the requested change"))
+	srv, requests := fakeServer(t, replies...)
+	r := NewRegistry()
+	executed := 0
+	if err := r.Add(Tool{Name: "probe", Fn: func(context.Context, string) (string, error) {
+		executed++
+		return "finding", nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := newTestConfig(srv.URL)
+	cfg.MaxRounds, cfg.MaxStagnantRounds = 6, 1
+	history := guardTestHistory()
+	msg, usage, err := runChatTurn(context.Background(), cfg, nil, "", srv.Client(), r, &history, nil)
+	if err != nil || msg.Content != "I implemented the requested change" || executed != 4 || *requests != 5 || usage.TotalTokens != 75 {
+		t.Fatalf("reply=%+v usage=%+v executed=%d requests=%d err=%v", msg, usage, executed, *requests, err)
+	}
+	users := 0
+	for _, msg := range history {
+		if msg.Role == "user" {
+			users++
+			if msg.Content != "hi" {
+				t.Fatalf("synthetic instruction: %q", msg.Content)
+			}
+		}
+	}
+	if users != 1 {
+		t.Fatalf("user messages=%d", users)
 	}
 }
 
-// completionWithText is completion plus assistant text alongside tool calls
-// (completion blanks content whenever tool calls are present).
-func completionWithText(toolCalls []map[string]any, content string) []byte {
-	msg := map[string]any{"role": "assistant", "content": content, "tool_calls": toolCalls}
-	b, _ := json.Marshal(map[string]any{
-		"id": "1", "object": "chat.completion", "created": 1, "model": "m",
-		"choices": []any{map[string]any{"index": 0, "message": msg, "finish_reason": "stop"}},
-		"usage":   map[string]any{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+func TestModelTurnBoundsIdenticalBatches(t *testing.T) {
+	r := NewRegistry()
+	executed := 0
+	_ = r.Add(Tool{Name: "probe", Fn: func(context.Context, string) (string, error) {
+		executed++
+		return "finding", nil
+	}})
+	history := guardTestHistory()
+	requests := 0
+	msg, usage, err := runModelTurn(context.Background(), Config{MaxRounds: 10, MaxStagnantRounds: 2}, r, &history, nil, func(context.Context, []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
+		requests++
+		args := `{"a":1,"b":2}`
+		if requests%2 == 0 {
+			args = ` { "b": 2, "a": 1 } `
+		}
+		calls := []openai.ToolCall{openaiToolCall(fmt.Sprintf("%d-a", requests), "probe"), openaiToolCall(fmt.Sprintf("%d-b", requests), "probe")}
+		calls[0].Function.Arguments = args
+		return openai.ChatCompletionMessage{Role: "assistant", Content: "summary plus calls", ToolCalls: calls}, openai.Usage{TotalTokens: 5}, nil
 	})
-	return b
+	if err == nil || !strings.Contains(err.Error(), "max_stagnant_rounds=2") || msg.Content != "" || requests != 3 || executed != 4 || usage.TotalTokens != 15 {
+		t.Fatalf("msg=%+v usage=%+v requests=%d executed=%d err=%v", msg, usage, requests, executed, err)
+	}
+	if history[len(history)-1].Role != "tool" {
+		t.Fatalf("rejected batch left an unanswered assistant call: %+v", history)
+	}
 }
 
-func historyHas(history []openai.ChatCompletionMessage, text string) bool {
-	for _, m := range history {
-		if strings.Contains(m.Content, text) {
-			return true
+func TestModelTurnFailedActionNotFakedSuccess(t *testing.T) {
+	r := NewRegistry()
+	executed := 0
+	_ = r.Add(Tool{Name: "edit", Fn: func(context.Context, string) (string, error) {
+		executed++
+		return "", errors.New("edit failed")
+	}})
+	history := guardTestHistory()
+	requests := 0
+	msg, _, err := runModelTurn(context.Background(), Config{MaxRounds: 2}, r, &history, nil, func(_ context.Context, history []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
+		requests++
+		if requests == 2 && history[len(history)-1].Content != "error: edit failed" {
+			t.Fatalf("tool error not fed back: %+v", history)
+		}
+		call := openaiToolCall(fmt.Sprint(requests), "edit")
+		call.Function.Arguments = fmt.Sprintf(`{"attempt":%d}`, requests)
+		return openai.ChatCompletionMessage{Role: "assistant", Content: "summary with another action", ToolCalls: []openai.ToolCall{call}}, openai.Usage{}, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "2 rounds") || msg.Content != "" || executed != 2 || requests != 2 {
+		t.Fatalf("reply=%+v executed=%d requests=%d err=%v", msg, executed, requests, err)
+	}
+	if history[len(history)-1].Content != "error: edit failed" {
+		t.Fatalf("failed action missing from history: %+v", history)
+	}
+}
+
+func TestDoomLoopScopedToUserTurn(t *testing.T) {
+	call := openaiToolCall("1", "read")
+	assistant := openai.ChatCompletionMessage{Role: "assistant", ToolCalls: []openai.ToolCall{call}}
+	for _, boundary := range []openai.ChatCompletionMessage{{Role: "user", Content: "next"}, {Role: "assistant", Content: "final"}} {
+		history := []openai.ChatCompletionMessage{assistant, assistant, boundary}
+		if name := doomLoopTool(history, []openai.ToolCall{call}); name != "" {
+			t.Fatalf("repeat crossed %s boundary: %q", boundary.Role, name)
 		}
 	}
-	return false
-}
-
-// TestChatStallRecoveryFinishes: at the limit the turn runs one final round
-// under the no-tools instruction; a text answer finishes the turn cleanly.
-func TestChatStallRecoveryFinishes(t *testing.T) {
-	srv, calls := fakeServer(t,
-		completion(toolCall("probe", `{"n":1}`), ""),
-		completion(toolCall("probe", `{"n":2}`), ""),
-		completion(toolCall("probe", `{"n":3}`), ""),
-		completion(nil, "final findings"),
-	)
-	execCount := 0
-	registry := countingProbeRegistry(&execCount)
-	cfg := newTestConfig(srv.URL)
-	cfg.MaxRounds = 10
-	cfg.MaxStagnantRounds = 3
-
-	history := guardTestHistory()
-	msg, _, err := runChatTurn(context.Background(), cfg, newClient(cfg, "key"), "key", nil, registry, &history, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if msg.Content != "final findings" {
-		t.Fatalf("reply=%q", msg.Content)
-	}
-	if *calls != 4 {
-		t.Fatalf("calls=%d, want 4 (3 exploring + 1 recovery round)", *calls)
-	}
-	if historyHas(history, guard.StallRecoveryText) {
-		t.Fatalf("recovery notice leaked past turn end: %+v", history)
+	other := call
+	call.Function.Arguments = `{"a":1,"b":2}`
+	other.Function.Arguments = ` { "b":2, "a":1 } `
+	if loopFingerprint(call) != loopFingerprint(other) {
+		t.Fatal("fingerprints must canonicalize object keys and whitespace")
 	}
 }
 
-// TestChatStallRecoveryDeclinesTools: a recovery round answering with tools
-// attached finishes on the text — the calls never execute.
-func TestChatStallRecoveryDeclinesTools(t *testing.T) {
-	srv, calls := fakeServer(t,
-		completion(toolCall("probe", `{"n":1}`), ""),
-		completion(toolCall("probe", `{"n":2}`), ""),
-		completion(toolCall("probe", `{"n":3}`), ""),
-		completionWithText(toolCall("probe", `{"n":4}`), "summary plus a call"),
-	)
-	execCount := 0
-	registry := countingProbeRegistry(&execCount)
-	cfg := newTestConfig(srv.URL)
-	cfg.MaxRounds = 10
-	cfg.MaxStagnantRounds = 3
-
-	history := guardTestHistory()
-	msg, _, err := runChatTurn(context.Background(), cfg, newClient(cfg, "key"), "key", nil, registry, &history, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if msg.Content != "summary plus a call" || len(msg.ToolCalls) != 0 {
-		t.Fatalf("reply=%+v", msg)
-	}
-	if *calls != 4 {
-		t.Fatalf("calls=%d, want 4", *calls)
-	}
-	if execCount != 3 {
-		t.Fatalf("execCount=%d, recovery-round call must not execute", execCount)
-	}
-	last := history[len(history)-1]
-	if last.Role != openai.ChatMessageRoleAssistant || len(last.ToolCalls) != 0 {
-		t.Fatalf("last history message must be a clean reply: %+v", last)
-	}
-}
-
-// TestChatChallengesFalseClaim: exploring without acting, then finishing
-// with "implemented" and no edit, earns one challenge round instead of
-// finishing on the unmade change.
-func TestChatChallengesFalseClaim(t *testing.T) {
-	srv, calls := fakeServer(t,
-		completion(toolCall("shell", `{"command":"echo 1"}`), ""),
-		completion(toolCall("shell", `{"command":"echo 2"}`), ""),
-		completion(nil, "I implemented the timestamps in tui.go"),
-		completion(nil, "Here's what remains: edits in renderPending"),
-	)
-	registry := NewRegistry()
-	registry.LoadBuiltins([]string{"shell"})
-	cfg := newTestConfig(srv.URL)
-	cfg.MaxRounds = 10
-
-	history := guardTestHistory()
-	msg, _, err := runChatTurn(context.Background(), cfg, newClient(cfg, "key"), "key", nil, registry, &history, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if msg.Content != "Here's what remains: edits in renderPending" {
-		t.Fatalf("reply=%q", msg.Content)
-	}
-	if *calls != 4 {
-		t.Fatalf("calls=%d, want 4 (2 exploring + claim + challenged answer)", *calls)
-	}
-	if historyHas(history, guard.ClaimChallengeText) {
-		t.Fatalf("challenge leaked past turn end: %+v", history)
-	}
-}
-
-// TestChatLeavesHonestSummary: the same exploration ending in a findings
-// summary finishes with no challenge round.
-func TestChatLeavesHonestSummary(t *testing.T) {
-	srv, calls := fakeServer(t,
-		completion(toolCall("shell", `{"command":"echo 1"}`), ""),
-		completion(toolCall("shell", `{"command":"echo 2"}`), ""),
-		completion(nil, "Here's what I found: three call sites"),
-	)
-	registry := NewRegistry()
-	registry.LoadBuiltins([]string{"shell"})
-	cfg := newTestConfig(srv.URL)
-	cfg.MaxRounds = 10
-
-	history := guardTestHistory()
-	msg, _, err := runChatTurn(context.Background(), cfg, newClient(cfg, "key"), "key", nil, registry, &history, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if msg.Content != "Here's what I found: three call sites" {
-		t.Fatalf("reply=%q", msg.Content)
-	}
-	if *calls != 3 {
-		t.Fatalf("calls=%d, want 3 (no challenge)", *calls)
-	}
-}
-
-func TestChatNudgesSingleCallStreak(t *testing.T) {
-	var log strings.Builder
-	prev := dvlog.SetOutput(&log)
-	was := dvlog.Enabled()
-	dvlog.Enable(true)
-	defer func() {
-		dvlog.Enable(was)
-		dvlog.SetOutput(prev)
-	}()
-
-	srv, calls := fakeServer(t,
-		completion(toolCall("shell", `{"command":"echo 1"}`), ""),
-		completion(toolCall("shell", `{"command":"echo 2"}`), ""),
-		completion(toolCall("shell", `{"command":"echo 3"}`), ""),
-		completion(nil, "done"),
-	)
-	registry := NewRegistry()
-	registry.LoadBuiltins([]string{"shell"})
-	cfg := newTestConfig(srv.URL)
-	cfg.MaxRounds = 10
-
-	history := []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleSystem, Content: "sys"},
-		{Role: openai.ChatMessageRoleUser, Content: "hi"},
-	}
-	msg, _, err := runChatTurn(context.Background(), cfg, newClient(cfg, "key"), "key", nil, registry, &history, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if msg.Content != "done" {
-		t.Fatalf("reply=%q", msg.Content)
-	}
-	if *calls != 4 {
-		t.Fatalf("calls=%d, want 4", *calls)
-	}
-	if !strings.Contains(log.String(), "batch nudge appended") {
-		t.Fatalf("no nudge in dv log:\n%s", log.String())
-	}
-	for _, m := range history {
-		if strings.Contains(m.Content, guard.BatchNudgeText) {
-			t.Fatalf("nudge leaked past turn end: %+v", history)
+func TestModelTurnRejectsThinkingOnlyFinal(t *testing.T) {
+	for _, msg := range []openai.ChatCompletionMessage{
+		{Role: "assistant", ReasoningContent: "private plan"},
+		{Role: "assistant", Content: "<think>plan</think> \n"},
+		{Role: "assistant", Content: " \n"},
+	} {
+		history := guardTestHistory()
+		_, usage, err := runModelTurn(context.Background(), Config{MaxRounds: 2}, NewRegistry(), &history, nil, func(context.Context, []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
+			return msg, openai.Usage{TotalTokens: 7}, nil
+		})
+		if err == nil || usage.TotalTokens != 7 || len(history) != 2 {
+			t.Fatalf("accepted thinking-only reply: %+v usage=%+v history=%+v err=%v", msg, usage, history, err)
 		}
+	}
+}
+
+func TestModelTurnDistinctBatchResetsRepeatCount(t *testing.T) {
+	r := NewRegistry()
+	_ = r.Add(Tool{Name: "probe", Fn: func(context.Context, string) (string, error) { return "ok", nil }})
+	history := guardTestHistory()
+	requests := 0
+	_, _, err := runModelTurn(context.Background(), Config{MaxRounds: 7, MaxStagnantRounds: 2}, r, &history, nil, func(context.Context, []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
+		requests++
+		if requests == 7 {
+			return openai.ChatCompletionMessage{Role: "assistant", Content: "done"}, openai.Usage{}, nil
+		}
+		calls := []openai.ToolCall{openaiToolCall(fmt.Sprintf("%d-a", requests), "probe"), openaiToolCall(fmt.Sprintf("%d-b", requests), "probe")}
+		args, _ := json.Marshal(map[string]int{"group": (requests - 1) / 2})
+		calls[0].Function.Arguments = string(args)
+		return openai.ChatCompletionMessage{Role: "assistant", ToolCalls: calls}, openai.Usage{}, nil
+	})
+	if err != nil || requests != 7 {
+		t.Fatalf("requests=%d err=%v", requests, err)
 	}
 }

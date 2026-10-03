@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -71,6 +70,9 @@ func (r *Registry) OpenAITools() []openai.Tool {
 }
 
 func (r *Registry) Call(ctx context.Context, name, args string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	t, ok := r.tools[name]
 	if !ok {
 		return "", fmt.Errorf("unknown tool %s", name)
@@ -83,6 +85,10 @@ func (r *Registry) Run(ctx context.Context, name, args string) string {
 	out, err := r.Call(ctx, name, args)
 	if err != nil {
 		out = "error: " + err.Error()
+	}
+	if name == "shell" && len(out) > maxToolOutput {
+		// Keep terminal diagnostics and exit/timeout status, not just the head.
+		return truncate(out, maxToolOutput/2) + "\n" + strings.ToValidUTF8(out[len(out)-maxToolOutput/2:], "")
 	}
 	return truncate(out, maxToolOutput)
 }
@@ -126,6 +132,45 @@ func truncate(s string, max int) string {
 	return cut + fmt.Sprintf("\n...[truncated %d bytes]", len(s)-max)
 }
 
+// Shell output can be arbitrarily large. Retain a bounded diagnostic head/tail
+// while the process runs, rather than allocating its entire output first.
+type shellOutput struct {
+	data    []byte
+	omitted int
+}
+
+func (b *shellOutput) Write(p []byte) (int, error) {
+	n := len(p)
+	if len(b.data)+n <= maxToolOutput {
+		b.data = append(b.data, p...)
+		return n, nil
+	}
+	head := maxToolOutput / 2
+	if len(b.data) < head {
+		keep := min(head-len(b.data), len(p))
+		b.data = append(b.data, p[:keep]...)
+		p = p[keep:]
+	}
+	tail := b.data[head:]
+	removed := len(tail) + len(p) - head
+	if len(p) >= head {
+		b.data = append(b.data[:head], p[len(p)-head:]...)
+	} else {
+		b.data = append(b.data[:head], tail[removed:]...)
+		b.data = append(b.data, p...)
+	}
+	b.omitted += removed
+	return n, nil
+}
+
+func (b *shellOutput) String() string {
+	if b.omitted == 0 {
+		return string(b.data)
+	}
+	head := maxToolOutput / 2
+	return strings.ToValidUTF8(string(b.data[:head]), "") + fmt.Sprintf("\n...[truncated %d bytes]\n", b.omitted) + strings.ToValidUTF8(string(b.data[head:]), "")
+}
+
 func ShellTool() Tool {
 	return Tool{
 		Name:        "shell",
@@ -153,7 +198,7 @@ func ShellTool() Tool {
 			// would wait on them past the timeout.
 			isolateProcessGroup(cmd)
 			cmd.Cancel = func() error { return killProcessGroup(cmd) }
-			var buf bytes.Buffer
+			var buf shellOutput
 			cmd.Stdout = &buf
 			cmd.Stderr = &buf
 			err := cmd.Run()

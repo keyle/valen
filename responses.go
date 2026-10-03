@@ -27,17 +27,17 @@ type responsesTool struct {
 }
 
 type responsesRequest struct {
-	Model        string          `json:"model"`
-	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
-	Input        []any           `json:"input"`
-	Instructions string          `json:"instructions,omitempty"`
-	Tools        []responsesTool `json:"tools,omitempty"`
-	ToolChoice   any             `json:"tool_choice,omitempty"`
-	Temperature  *float32        `json:"temperature,omitempty"`
-	Reasoning    map[string]any  `json:"reasoning,omitempty"`
-	Store        bool            `json:"store"`
-	Stream       bool            `json:"stream,omitempty"`
-	Include      []string        `json:"include,omitempty"`
+	Model           string          `json:"model"`
+	MaxOutputTokens int             `json:"max_output_tokens,omitempty"`
+	Input           []any           `json:"input"`
+	Instructions    string          `json:"instructions,omitempty"`
+	Tools           []responsesTool `json:"tools,omitempty"`
+	ToolChoice      any             `json:"tool_choice,omitempty"`
+	Temperature     *float32        `json:"temperature,omitempty"`
+	Reasoning       map[string]any  `json:"reasoning,omitempty"`
+	Store           bool            `json:"store"`
+	Stream          bool            `json:"stream,omitempty"`
+	Include         []string        `json:"include,omitempty"`
 }
 
 type responsesContent struct {
@@ -92,10 +92,8 @@ func (r *Registry) ResponsesTools() []responsesTool {
 	return out
 }
 
-// responsesReasoning maps our levels onto Responses reasoning effort. Empty
-// omits the field (provider default). "none" also omits: Muse Spark rejects
-// effort "none" with 400, and grok/gpt never offer it, so omitting is the
-// safe no-reasoning request. Other levels pass through verbatim.
+// Without model information, omit "none" for providers that reject it.
+// runResponsesTurn explicitly sends it for GPT models only.
 func responsesReasoning(level string) map[string]any {
 	level = strings.ToLower(strings.TrimSpace(level))
 	if level == "" || level == "none" {
@@ -337,13 +335,13 @@ func runResponsesTurn(ctx context.Context, cfg Config, client *openai.Client, ap
 	return runModelTurn(ctx, cfg, registry, history, onEvent, func(ctx context.Context, history []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
 		instructions, input := splitResponsesInputNative(history, native)
 		req := responsesRequest{
-			Model:        cfg.Model,
+			Model:           cfg.Model,
 			MaxOutputTokens: outputTokens(cfg),
-			Input:        input,
-			Instructions: instructions,
-			Reasoning:    reasoning,
-			Store:        false,
-			Stream: stream,
+			Input:           input,
+			Instructions:    instructions,
+			Reasoning:       reasoning,
+			Store:           false,
+			Stream:          stream,
 		}
 		if len(tools) > 0 {
 			req.Tools = tools

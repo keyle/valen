@@ -13,18 +13,42 @@ Single-binary Go agent harness. No server/client split, everything in-process in
 
 - Single binary, stdlib-first. No new runtime deps without explicit approval.
   Current direct deps: `toml`, `go-openai`, `mcp-go`, `x/net/html` + charm TUI stack.
-- Memory is a feature: currently ~2% of opencode. Keep streaming caps:
+- Memory is a feature (historical target ~2% of OpenCode, not a fresh benchmark). Keep streaming caps:
   `8MiB LimitReader` per round, `16k` tool-output truncate (storage/log),
-  `2k` tool-output send budget per round (wire; decisions exempt),
+  no secondary live-send truncation; rolling `32768`-byte UTF-8-safe TUI
+  text/thinking tails, exact delta concatenation, ~60ms render throttle,
   `100` grep matches, `1MiB/512KiB` search/fetch caps, `8000` fetch runes,
-  `16k` messages `max_tokens` default (floor 8192). Keep compaction caps:
-  `15k` keep-tokens tail, `10%` buffer, early threshold at `keep×3`,
-  `2000`-char tool output inside the summarizer payload, newest `2` reads
-  intact (older reads collapse to path/range descriptors), `40k` newest
-  tool-output tokens protected from pruning, user decisions never pruned. Estimation: runes/4 + 40 tokens envelope per message + full tool-schema block per round. Exploration stays lean: read defaults to 2000 lines (max 5000, ~12KB per call), grep capped at 100 matches / 20 per file, dependency/build dirs skipped. Prompt cache: 3 ephemeral breakpoints on messages transport (system, last tool, last block); chat/responses rely on server-side prefix cache over stable bytes.
+  `16384` output tokens default on all three transports (positive explicit
+  overrides honored, no floor). Keep compaction caps: `15k` soft whole-turn
+  tail target, entire current turn protected, `10%` buffer, early threshold
+  at `keep*3`, `2000`-char ordinary tool output inside summarizer payload
+  (`4000` for decisions/assistant text), latest `2` genuine user turns intact
+  plus `40k` older tool-output token shield. Beyond that shield, reads become
+  descriptors and ordinary outputs shorten to `2000` chars; decisions never
+  prune. A lone oversized current turn cannot compact and may fail fast.
+  Estimation: runes/4 (including Chat native reasoning) + 40 envelope tokens
+  per message + full tool schemas. Read: 2000 lines default, max 5000,
+  ~12KB/call, 1000 chars/line; grep: 100 matches, 20/file, skip >1MiB/binaries
+  and dependency/build dirs. Messages has 3 ephemeral cache breakpoints;
+  Chat/Responses rely on unchanged server-side prefixes.
+- Execution caps: `100` main rounds; `25` consecutive identical ordered
+  batches allowed, single-call third-repeat guard; max `8` parallel known
+  read-only builtins. Any other tool (including MCP/task) makes a batch
+  ordered serial. Result Events are completion-ordered, history request-ordered.
+  Shell `60s`; MCP handshake `30s`, call `2m`; task max `25` rounds/depth `2`.
+  Each HTTP attempt including body: `request_timeout_seconds=300` default,
+  header `60s`, dial/TLS `10s`; transient retry max `3`, backoff `300/800ms`,
+  no blocking retry-body drain or new dependency. No idle/whole-turn timeout.
+- Native Messages signatures/blocks and Responses encrypted reasoning/phases
+  replay only inside the active transport loop. They are not durable session
+  metadata; Chat native reasoning is checkpointed. Disk keeps all appended
+  `Turn.History` checkpoints, memory only the latest; failures retain work,
+  Event-captured tools and legacy tool reconstruction preserve resume state.
 - Offline tests only: `httptest` fakes, no real network. Never hand-edit `go.sum`.
 - `runTurn` in `main.go` shared by headless (`-p`) and TUI: keep UI-agnostic.
-  UI state lives in `tuiModel` (`tui.go`) only.
+  `runModelTurn` owns policy with no synthetic nudges; transports own replay.
+  UI state lives in `tuiModel` (`tui.go`) only. Task inherits current config
+  and `effectiveSystem` plus kind instructions, returns only visible answer.
 - Sampling/thinking params omitted unless configured (pointer/empty semantics).
 - Loop: targeted `go test -run 'TestName' .` while iterating, final gate
   `gofmt -l .` + `go vet ./...` + `go test ./...` (`-race` for concurrency).

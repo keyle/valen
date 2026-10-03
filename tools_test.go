@@ -116,3 +116,43 @@ func TestTruncateKeepsUTF8Valid(t *testing.T) {
 		t.Fatalf("bad truncation: %q", got[len(got)-30:])
 	}
 }
+
+func TestRegistryCanceledCallDoesNotRun(t *testing.T) {
+	r := NewRegistry()
+	ran := false
+	_ = r.Add(Tool{Name: "write", Fn: func(context.Context, string) (string, error) {
+		ran = true
+		return "written", nil
+	}})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := r.Call(ctx, "write", `{}`); !errors.Is(err, context.Canceled) || ran {
+		t.Fatalf("err=%v ran=%v", err, ran)
+	}
+}
+
+func TestShellOutputBoundedHeadAndTail(t *testing.T) {
+	for _, chunk := range []int{1, 999, 8000, 16000, 100000} {
+		var buf shellOutput
+		input := "HEAD" + strings.Repeat("x", 100000) + "TAIL"
+		for start := 0; start < len(input); start += chunk {
+			part := input[start:min(start+chunk, len(input))]
+			n, err := buf.Write([]byte(part))
+			if err != nil || n != len(part) || len(buf.data) > maxToolOutput {
+				t.Fatalf("chunk=%d n=%d err=%v size=%d", chunk, n, err, len(buf.data))
+			}
+		}
+		if out := buf.String(); !strings.HasPrefix(out, "HEAD") || !strings.HasSuffix(out, "TAIL") || !strings.Contains(out, "truncated") {
+			t.Fatalf("chunk=%d missing head/tail", chunk)
+		}
+	}
+}
+
+func TestShellLargeOutputKeepsExitStatus(t *testing.T) {
+	r := NewRegistry()
+	r.LoadBuiltins([]string{"shell"})
+	out := r.Run(context.Background(), "shell", `{"command":"yes x | dd bs=1000 count=40 2>/dev/null; echo FINAL_DIAGNOSTIC; exit 7"}`)
+	if len(out) > maxToolOutput+100 || !strings.Contains(out, "FINAL_DIAGNOSTIC") || !strings.HasSuffix(out, "[exit 7]") {
+		t.Fatalf("size=%d tail=%q", len(out), out[max(0, len(out)-100):])
+	}
+}
