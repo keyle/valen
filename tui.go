@@ -3627,7 +3627,7 @@ func (m *tuiModel) renderHistoryList() string {
 		}
 		line = truncateRunes(line, cw)
 		if i == m.cursor {
-			b.WriteString(selectedStyle.Width(cw).Render(line) + "\n")
+			b.WriteString(selectedStyle.Width(cw).Render(" "+line) + "\n")
 		} else {
 			b.WriteString("  " + line + "\n")
 		}
@@ -3670,7 +3670,7 @@ func (m *tuiModel) renderToolsList() string {
 		line := fmt.Sprintf("%2d  %s  %s  [%s]", i+1, it.record.Name, truncateRunes(it.record.Args, 48), status)
 		line = truncateRunes(line, cw)
 		if i == m.cursor {
-			b.WriteString(selectedStyle.Width(cw).Render(line) + "\n")
+			b.WriteString(selectedStyle.Width(cw).Render(" "+line) + "\n")
 		} else {
 			b.WriteString("  " + line + "\n")
 		}
@@ -3818,7 +3818,7 @@ func (m *tuiModel) renderSessionsList() string {
 		}
 		line = truncateRunes(line+cur, cw)
 		if i == m.cursor {
-			b.WriteString(selectedStyle.Width(cw).Render(" " + line) + "\n")
+			b.WriteString(selectedStyle.Width(cw).Render(" "+line) + "\n")
 		} else {
 			b.WriteString("  " + line + "\n")
 		}
@@ -3857,7 +3857,7 @@ func (m *tuiModel) renderErrorsList() string {
 		t := m.session.Turns[ti]
 		line := truncateRunes(fmt.Sprintf("%2d  %s  %s", i+1, t.At.Format("15:04:05"), t.Error.Title), cw)
 		if i == m.cursor {
-			b.WriteString(selectedStyle.Width(cw).Render(" " + line) + "\n")
+			b.WriteString(selectedStyle.Width(cw).Render(" "+line) + "\n")
 		} else {
 			b.WriteString("  " + line + "\n")
 		}
