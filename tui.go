@@ -411,7 +411,7 @@ type tuiModel struct {
 
 func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session *Session) *tuiModel {
 	ta := textarea.New()
-	ta.Placeholder = "Type a message…  (shift+enter newline · /help)"
+	ta.Placeholder = "Type a message…  (help)"
 	ta.ShowLineNumbers = false
 	// No white thick bar: the textarea default Prompt is
 	// lipgloss.ThickBorder().Left + " " (a white ▌ on every line).
@@ -432,7 +432,7 @@ func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session 
 	ta.Focus()
 
 	search := textinput.New()
-	search.Placeholder = "Search..."
+	search.Placeholder = "Filter available models..."
 	search.Prompt = ""
 	search.CharLimit = 0
 	search.Width = 52
@@ -2563,9 +2563,14 @@ func (m *tuiModel) View() string {
 	}
 	header := m.headerView()
 	status := m.statusView()
-	input := m.inputView()
-	footer := m.footerView()
-	block := lipgloss.JoinVertical(lipgloss.Left, header, m.viewport.View(), status, input, footer)
+	parts := []string{header, m.viewport.View(), status}
+	// The picker views (sessions and models) are navigation surfaces: the
+	// chatbox and quota footer don't apply there, but the ready/working
+	// status stays so the session state remains visible.
+	if m.mode != viewSessions && m.mode != viewModels {
+		parts = append(parts, m.inputView(), m.footerView())
+	}
+	block := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	// Center the capped column on wide terminals.
 	if pad := (m.width - m.columnWidth()) / 2; pad > 0 {
 		block = lipgloss.NewStyle().PaddingLeft(pad).Render(block)
@@ -3884,7 +3889,7 @@ func (m *tuiModel) renderModelsList() string {
 
 	var b strings.Builder
 	b.WriteString(searchBox + "\n\n")
-	b.WriteString(metaStyle.Render("Models — ↑/↓ select · enter switches · ctrl+f favourites · esc clears search / back") + "\n\n")
+	b.WriteString(metaStyle.Render("Models — ↑/↓ select · enter switches · ctrl+f favourites · esc clears, go back") + "\n\n")
 	if len(m.modelChoices) == 0 {
 		query := strings.TrimSpace(m.modelFilter)
 		if query == "" {

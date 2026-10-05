@@ -1,6 +1,6 @@
 # valen — spec
 
-A single-binary Go agent harness for OpenCode Go models. No server, no runtime
+A single-binary Go agent harness for OpenCode Go and openrouter models. No server, no runtime
 dependencies beyond the binary: it talks to the Go transports
 (`/chat/completions`, `/messages`, `/responses`), runs a tool loop locally,
 and exposes tools plus any number of stdio MCP servers to the model.

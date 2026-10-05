@@ -2,21 +2,6 @@
 
 ## Minor, UX
 
-- [x] thinking text STILL does not add line return between additions to it. This needs to be FIXED.
-- [x] make the scrollback content cyan gray, and the response content blue. (`mkScrollback #9AAFC0` user body, `mkRespBlue #82AAFF` assistant body + glamour document.)
-- [x] make the text selectable (regression) in both chatbox and scrollback content. (No mouse mode: reporting stays on for wheel-scroll; shift+drag / opt+drag in iTerm/Terminal selects + copies natively at all times.)
-- [x] the diff shown at edit, I like this, but we need to show more than 5 lines, maybe 8. (Now 8 del + 8 add, `maxEditDiffLines = 16`.)
-- [ ] the diff shown at edit, would be best if it were not simply red and green, but showing syntax colouring (explore available go packages)
-- [x] thinking messages (white) in scrollback would benefit from a timestamp of when they happen, e.g. message (1m3s) <-- when they occurred, 'persisted' on the view when the next thinking reponse comes in.
-- [ ] the content of the chat scrollback is not all aligned. Some have a space in front, or two.
-- [x] ability to paste a paragraph
-- [x] shift+enter should insert a line return in the chatbox, it does not (yet!) - fix. (Kitty `CSI 13;2u` via `>1u` enhancement + xterm `CSI 13;2~`; alt+enter/ctrl+j still work everywhere.)
-- [x] when working, page up/down temporarly jumps and then gets smashed back down. (Fixed: scrolling up pauses autoscroll until back at the bottom; streaming ticks only pin when following.)
-- [x] related: the wheelmouse should scroll the scrollback, it does not. add this. Scrolling up should go through the history. (Mouse cell-motion on + wheel routed to viewport in every mode.)
-- [ ] show live errors such as backend overloaded, rate limiting, etc. in the thinking but in red?
-- [x] when 'working' we want the user to press ESC twice to stop, 1 can be hit by mistake. Add a debounce and check for 2 ESC key sequential within 2 seconds, otherwise go back to working state. Do not interrupt the process until 2 ESC confirmed. (Done: `escArmedAt` + `escConfirmWindow`.)
-- [x] sandboxing permission, when working in a git worktree can lead to asking tons of permission, we should remember access given to a folder and not ask again, per session.
-
 ## Later (D — speedups not taken this round)
 
 - [ ] D1 `Retry-After` aware backoff: honor the header on 429 instead of
@@ -52,7 +37,6 @@ thinking/signature capture are implemented, not deferred D4/D7 work. See
 
 ## Medium
 
-- [ ] M.2 are different sessions trully independent? I feel running more than 2 can lead to a major slowdown, maybe backend is doing it?
 - [ ] M.3 we need Plan mode! Something we don't have yet.
 
 ## Parity (6 tracks — each has a small openspec in `openspec/changes/<track>/`)
@@ -72,21 +56,6 @@ regresses `project.md` caps.
   input_image; `read` image path with same limits (`TestAttachmentWire*`).
 - [ ] A.3 TUI `@` fuzzy picker + composer chips; headless `-f` repeatable.
   (`TestTUIAttachChip`, `TestHeadlessFileFlag`).
-
-- [ ] S. Sessions (`sessions/`): TUI-only resume/fork without a server.
-  Verifiable: `/sessions` overlay resume/fork on seeded JSONLs.
-  (No headless `--session/--continue/--fork` — dropped.)
-- [ ] S.2 `f` forks in overlay (copy history under a new ID).
-  (`TestTUISessionResumeFork`.)
-
-- [ ] P. Permissions (`permissions/`): ordered `allow/ask/deny` + patterns,
-  defaults preserve today (`default allow`, `external_directory ask`).
-  Verifiable: pure evaluator table test + once/always/reject via stubbed
-  `askPrompter` + triple-repeat fixture.
-- [ ] P.1 Evaluator (last-match-wins, `deny` hard-stops) + TOML table
-  (`shell`, `read:*.env`, `mcp_*` wildcards).
-- [ ] P.2 `ask` via `promptUser` (once/always/reject); `always` appends to
-  git-ignored `.valen/approvals.toml`, never overrides `deny`.
 
 - [ ] F. File tools (`file-tools/`): `read` lists dirs, atomic `patch`,
   `gofmt` hook, grep/glob opts. All under existing caps (16k/100/1MiB).

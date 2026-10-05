@@ -2175,6 +2175,26 @@ func TestViewCentersCappedColumn(t *testing.T) {
 	}
 }
 
+// The sessions/models pickers are navigation surfaces: the chatbox and quota
+// footer are hidden there, while the ready/working status row stays visible.
+func TestPickerViewsHideChatboxAndFooter(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	for _, mode := range []viewMode{viewSessions, viewModels} {
+		m.mode = mode
+		out := ansi.Strip(m.View())
+		if strings.Contains(out, "Type a message") {
+			t.Fatalf("%v should hide the chatbox:\n%s", mode, out)
+		}
+		if strings.Contains(out, "/help for keys and commands") {
+			t.Fatalf("%v should hide the footer:\n%s", mode, out)
+		}
+		if !strings.Contains(out, "ready") && !strings.Contains(out, "working") {
+			t.Fatalf("%v should keep the status row:\n%s", mode, out)
+		}
+	}
+}
+
 func TestStatusFormatK(t *testing.T) {
 	cases := map[int]string{0: "0", 999: "999", 1000: "1k", 275654: "276k", 300000: "300k"}
 	for n, want := range cases {
