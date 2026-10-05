@@ -19,6 +19,7 @@ func sh(t *testing.T, cmd string) string { return shNet(t, cmd, false) }
 
 func shNet(t *testing.T, cmd string, network bool) string {
 	t.Helper()
+	requireShellSandbox(t)
 	args, _ := json.Marshal(map[string]any{"command": cmd, "network": network})
 	out, err := ShellTool().Fn(context.Background(), string(args))
 	if err != nil {
@@ -283,6 +284,7 @@ func TestSandboxArgvKeepsCommandIntact(t *testing.T) {
 }
 
 func TestSandboxHidesDotEnvFiles(t *testing.T) {
+	requireShellSandbox(t)
 	root := useTempRoot(t)
 	write := func(n, body string) {
 		if err := os.WriteFile(filepath.Join(root, n), []byte(body), 0o600); err != nil {

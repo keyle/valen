@@ -57,6 +57,7 @@ func responsesTwoToolResp() []byte {
 // shared parallel dispatcher and both results fold back as ordered
 // function_call_output items in the next round's stateless input.
 func TestResponsesParallelToolBatch(t *testing.T) {
+	requireShellSandbox(t)
 	var bodies []map[string]any
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

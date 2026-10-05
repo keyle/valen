@@ -8,8 +8,33 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
+
+// requireShellSandbox skips tests that run commands through the real shell
+// sandbox when the backend can't start here, e.g. when `go test` itself runs
+// inside another Seatbelt sandbox (nesting fails with "sandbox_apply:
+// Operation not permitted"). Any other probe failure is a real bug, so the
+// test runs and fails on its own instead of being hidden by a skip.
+func requireShellSandbox(t *testing.T) {
+	t.Helper()
+	if reason := shellSandboxUnavailable(); reason != "" {
+		t.Skipf("shell sandbox backend unavailable here: %s", reason)
+	}
+}
+
+var shellSandboxUnavailable = sync.OnceValue(func() string {
+	cmd, err := sandboxCommand(context.Background(), "true", false)
+	if err != nil {
+		return err.Error()
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil && looksSandboxDenied(string(out)) {
+		return strings.TrimSpace(string(out))
+	}
+	return ""
+})
 
 func useTempRoot(t *testing.T) string {
 	t.Helper()
@@ -373,6 +398,7 @@ func TestSiblingWorktreeNeedsNoApproval(t *testing.T) {
 }
 
 func TestShellRunsInFileRoot(t *testing.T) {
+	requireShellSandbox(t)
 	root := useTempRoot(t)
 	out, err := ShellTool().Fn(context.Background(), `{"command":"pwd"}`)
 	if err != nil {

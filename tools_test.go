@@ -73,6 +73,7 @@ func TestRegistryPassesEmptyArgsAsObject(t *testing.T) {
 }
 
 func TestShellTool(t *testing.T) {
+	requireShellSandbox(t)
 	shell := ShellTool()
 	out, err := shell.Fn(context.Background(), `{"command":"echo hi"}`)
 	if err != nil || out != "hi" {
@@ -96,6 +97,7 @@ func TestShellTool(t *testing.T) {
 }
 
 func TestShellTimeoutMarksPartial(t *testing.T) {
+	requireShellSandbox(t)
 	old := shellTimeout
 	shellTimeout = 50 * time.Millisecond
 	defer func() { shellTimeout = old }()
@@ -149,6 +151,7 @@ func TestShellOutputBoundedHeadAndTail(t *testing.T) {
 }
 
 func TestShellLargeOutputKeepsExitStatus(t *testing.T) {
+	requireShellSandbox(t)
 	r := NewRegistry()
 	r.LoadBuiltins([]string{"shell"})
 	out := r.Run(context.Background(), "shell", `{"command":"yes x | dd bs=1000 count=40 2>/dev/null; echo FINAL_DIAGNOSTIC; exit 7"}`)

@@ -61,6 +61,7 @@ func messagesTwoToolResp() []byte {
 // shared parallel dispatcher and both results fold back as ordered
 // tool_result blocks in the next round's request.
 func TestMessagesParallelToolBatch(t *testing.T) {
+	requireShellSandbox(t)
 	var bodies []map[string]any
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
