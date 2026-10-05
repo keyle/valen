@@ -487,3 +487,56 @@ func TestOpenRouterChatWire(t *testing.T) {
 		t.Fatalf("title=%q", gotTitle)
 	}
 }
+
+func TestModelContextWindowFamilies(t *testing.T) {
+	cases := map[string]int{
+		"google/gemini-3.8-flash":                1000000,
+		"openrouter/anthropic/claude-sonnet-5.5": 500000,
+		"gpt-6-luna":                             400000,
+		"grok-4.7":                               256000,
+		"qwen3.8-max":                            256000,
+		"kimi-k3":                                256000,
+		"openrouter/moonshotai/kimi-k3":          256000,
+		"glm-5.3-flash":                          200000,
+		"minimax-m3":                             200000,
+		"deepseek-v4-pro":                        128000,
+		"muse-spark-1.3-contributor":             0,
+		"space-bunny-free":                       0,
+		"custom-thing":                           0,
+	}
+	for id, want := range cases {
+		if got := modelContextWindow(id); got != want {
+			t.Errorf("window(%q)=%d, want %d", id, got, want)
+		}
+	}
+}
+
+func TestContextBudgetExplicitWins(t *testing.T) {
+	auto := Config{Model: "kimi-k3"}
+	if got := contextBudget(auto); got != 256000 {
+		t.Fatalf("auto budget for kimi-k3=%d, want 256000", got)
+	}
+	unknown := Config{Model: "custom-thing"}
+	if got := contextBudget(unknown); got != defaultMaxContextTokens {
+		t.Fatalf("unknown model budget=%d, want default %d", got, defaultMaxContextTokens)
+	}
+	explicit := Config{Model: "kimi-k3", MaxContextTokens: 12345}
+	if got := contextBudget(explicit); got != 12345 {
+		t.Fatalf("explicit budget=%d, want 12345", got)
+	}
+}
+
+func TestIsMaxRoundsStop(t *testing.T) {
+	if isMaxRoundsStop(nil) {
+		t.Fatal("nil is not a rounds stop")
+	}
+	if !isMaxRoundsStop(fmt.Errorf("stopped after 300 rounds without a final answer")) {
+		t.Fatal("round backstop must match")
+	}
+	if !isMaxRoundsStop(fmt.Errorf("stopped after 600 rounds across 2 compacted windows without a final answer")) {
+		t.Fatal("extended stop must match")
+	}
+	if isMaxRoundsStop(fmt.Errorf("context too large: est. 1 tokens exceeds budget 2")) {
+		t.Fatal("budget error must not match")
+	}
+}

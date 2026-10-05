@@ -308,6 +308,9 @@ type tuiModel struct {
 	pendingPrompt string
 	pendingSince  time.Time
 	toolStatus    string
+	// roundCur/roundMax track loop progress for the status row (parsed from
+	// round_start events); reset on submit and turnDone.
+	roundCur, roundMax int
 	// Live transcript state while a turn streams: tool calls in order plus
 	// assistant text/thinking deltas so far. Cleared on turnDoneMsg.
 	pendingTools    []pendingTool
@@ -1010,6 +1013,7 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	m.pendingPrompt = trimmed
 	m.pendingSince = time.Now()
 	m.toolStatus = "Sending…"
+	m.roundCur, m.roundMax = 0, 0
 	m.pendingTools = nil
 	m.pendingText = ""
 	m.pendingThinking = ""
@@ -1588,6 +1592,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.kind {
 		case "round_start":
 			m.toolStatus = "Reasoning…"
+			if cur, max, ok := parseRoundProgress(msg.text); ok {
+				m.roundCur, m.roundMax = cur, max
+			}
 			m.pendingText = roundBreak(m.pendingText)
 			m.pendingThinking = roundBreak(m.pendingThinking)
 			m.roundText, m.roundThinking = m.pendingText, m.pendingThinking
@@ -1753,6 +1760,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		m.pendingPrompt = ""
 		m.toolStatus = ""
+		m.roundCur, m.roundMax = 0, 0
 		m.pendingTools = nil
 		m.pendingText = ""
 		m.pendingThinking = ""
@@ -2492,6 +2500,23 @@ func shortSession(s *Session) string {
 	return id
 }
 
+// fk renders token counts in thousands for the status row: 999 stays raw,
+// 275654 becomes 276k.
+func fk(n int) string {
+	if n < 1000 {
+		return strconv.Itoa(n)
+	}
+	return fmt.Sprintf("%dk", (n+500)/1000)
+}
+
+// parseRoundProgress reads "Round %d/%d" loop-event text for the status row.
+func parseRoundProgress(s string) (cur, max int, ok bool) {
+	if _, err := fmt.Sscanf(strings.TrimSpace(s), "Round %d/%d", &cur, &max); err != nil || cur <= 0 || max <= 0 {
+		return 0, 0, false
+	}
+	return cur, max, true
+}
+
 func (m *tuiModel) statusView() string {
 	var left string
 	if m.busy {
@@ -2500,7 +2525,11 @@ func (m *tuiModel) statusView() string {
 		if tool == "" {
 			tool = "Working…"
 		}
-		left = statusBusyStyle.Render(fmt.Sprintf("%s working  %s  %s", m.spinner.View(), tool, elapsed))
+		prog := ""
+		if m.roundCur > 0 && m.roundMax > 0 {
+			prog = fmt.Sprintf(" · rd %d/%d", m.roundCur, m.roundMax)
+		}
+		left = statusBusyStyle.Render(fmt.Sprintf("%s working  %s%s  %s", m.spinner.View(), tool, prog, elapsed))
 	} else {
 		left = statusIdleStyle.Render("● ready")
 	}
@@ -2512,7 +2541,9 @@ func (m *tuiModel) statusView() string {
 			mid = "  " + noticeStyle.Render(m.notice)
 		}
 	} else if m.session != nil {
-		mid = "  " + metaStyle.Render(fmt.Sprintf("%d turns · ↑%d ↓%d", len(m.session.Turns), m.session.TotalUsage.Prompt, m.session.TotalUsage.Completion))
+		mid = "  " + metaStyle.Render(fmt.Sprintf("%d turns · win %s/%s · ↑%s ↓%s",
+			len(m.session.Turns), fk(estimateTokens(m.history)), fk(contextBudget(m.cfg)),
+			fk(m.session.TotalUsage.Prompt), fk(m.session.TotalUsage.Completion)))
 	}
 	right := ""
 	if m.showMeta {
@@ -2775,9 +2806,6 @@ func (m *tuiModel) renderTurn(t *Turn, w int) string {
 		parts = append(parts, errorTitleSty.Width(min(w-4, 120)).Render(breakLongWords("✗ "+t.Error.Title, min(w-6, 118)))+"\n"+metaStyle.Render("  ctrl+x, enter for details"))
 	}
 
-	if t.Usage.Total > 0 {
-		parts = append(parts, metaStyle.Render(fmt.Sprintf("  ↑ %d · ↓ %d", t.Usage.Prompt, t.Usage.Completion)))
-	}
 	return strings.Join(parts, "\n\n")
 }
 

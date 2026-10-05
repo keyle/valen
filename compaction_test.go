@@ -282,8 +282,8 @@ func TestCompactionConfigDefaults(t *testing.T) {
 	if cfg.Compaction.KeepTokens != defaultCompactionKeepTokens {
 		t.Fatalf("keep=%d", cfg.Compaction.KeepTokens)
 	}
-	if cfg.Compaction.Buffer != cfg.MaxContextTokens/10 {
-		t.Fatalf("buffer=%d budget=%d", cfg.Compaction.Buffer, cfg.MaxContextTokens)
+	if cfg.Compaction.Buffer != contextBudget(cfg)/10 {
+		t.Fatalf("buffer=%d budget=%d", cfg.Compaction.Buffer, contextBudget(cfg))
 	}
 	if cfg.Compaction.Model != "" {
 		t.Fatalf("model should default empty (session model): %q", cfg.Compaction.Model)

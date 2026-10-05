@@ -52,7 +52,8 @@ and press Enter in the TUI. What happens, in order:
    continuation history plus schemas: this is the `rounds × history` cost
    from §3. `runModelTurn` does not insert synthetic nudge/recovery rounds.
 7. **Finish.** A completed round with a visible answer and no tools ends the
-   turn: reply renders as markdown, token tally prints (`↑ prompt · ↓ completion`), the `Turn`
+   turn: reply renders as markdown, session totals refresh once in the
+   status row above the chatbox (`N turns · win W/B · ↑P ↓C`, in thousands), the `Turn`
    (prompt, thinking, reply, Event-captured tools, usage, model/effort and
    continuation checkpoint) appends to JSONL, UI goes idle. Errors/cancel
    also commit completed work and history; this is end-of-turn saving, not
@@ -87,7 +88,10 @@ working set. There is no secondary 2k send cap: all fresh outputs retain the
 16k-byte registry cap. `task` isolates exploration instead of repeatedly
 uploading it in main history.
 
-Hard stops: `max_rounds` (default 100) ends a turn without an answer;
+Hard stops: `max_rounds` (default 300) ends a turn's first window without an
+answer; `runTurn` then compacts send-side and grants exactly one more window,
+so long jobs continue instead of dying at the cap. A second exhaustion is
+terminal ("across 2 compacted windows");
 `doomLoopTool` aborts when the *same single* tool call repeats a third
 consecutive time (multi-call batches break that single-call chain).
 `max_stagnant_rounds` (25) independently bounds consecutive identical ordered
@@ -126,9 +130,9 @@ cheapest fallback per model) summarizes.
 
 | Knob | Value | Why |
 | --- | --- | --- |
-| `max_rounds` | 100 | Per-turn backstop, not an expected task duration |
+| `max_rounds` | 300 | Per-turn backstop per window (one compact-and-continue extension), not an expected task duration |
 | `max_stagnant_rounds` | 25 | Consecutive identical ordered batches allowed; not mutation-based stagnation |
-| `max_context_tokens` | 300000 | Approximate fail-fast budget; not a guarantee against every provider's limit |
+| `max_context_tokens` | 0 = auto (model window or 300000) | Approximate fail-fast budget; auto resolves the model's own input window when known, else the safe default — not a guarantee against every provider's limit |
 | `max_tokens` (all transports) | 16384, no floor for positive overrides | Explicit output bound, Responses uses `max_output_tokens` |
 | Tool output | 16000 bytes in registry, same fresh wire output | UTF-8-safe cap; session tool records keep this output |
 | Compaction `keep_tokens` | 15000 soft whole-turn target | Entire current turn protected even when oversized |

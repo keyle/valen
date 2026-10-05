@@ -68,9 +68,9 @@ and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
 | `session_id` | string | `ses-<unixnano>` | Stable per conversation; sent as `x-opencode-session` |
 | `system` | string | prompt files (per model family) | Agent guidelines; empty uses the harness prompt files (opencode-adapted, valen-tuned: muse→meta, claude→anthropic, old reasoning→beast, gpt-6→astra, gpt/grok→gpt, codex/copilot/gemini/kimi/trinity→their file, else default) plus a small `<env>` header (model, workdir, platform, date). Set to override entirely |
 | `plan` | bool | `false` | Plan mode: read-only investigation — the plan overlay joins the system prompt, `write`/`edit`/`shell` refuse with guidance, `task` is explore-only. TUI `/plan` toggles at runtime; `-plan` sets it headless |
-| `max_rounds` | int | `100` | Hard stop on tool-loop iterations |
+| `max_rounds` | int | `300` | Per-turn round backstop; on exhaustion the turn compacts send-side and gets exactly one more window, then stops ("across 2 compacted windows") |
 | `max_stagnant_rounds` | int | `25` | Maximum consecutive identical ordered tool batches allowed; changed tool names/normalized arguments/order reset the count. Not a limit on read-only research; the single-call third-repeat guard may stop earlier |
-| `max_context_tokens` | int | `300000` | Fail-fast budget per round (est. runes/4): over-budget history aborts the turn with guidance instead of a doomed send |
+| `max_context_tokens` | int | `0` (auto) | Fail-fast budget per round (est. runes/4): `0` resolves the model's own input window when known (gemini 1M, claude 500k, gpt 400k, grok/qwen/kimi 256k, glm/minimax 200k, deepseek 128k, else 300k); explicit values override and survive `/model`. Over-budget history aborts the turn with guidance instead of a doomed send |
 | `request_timeout_seconds` | int | `300` | Optional deadline for each HTTP attempt, including response-body reads (SSE or unary), not the whole turn; retries each get a fresh deadline |
 | `temperature` | float | unset | Pointer semantics: unset omits the field, `0.0` sends zero |
 | `max_tokens` | int | `16384` | Explicit output cap on all three transports (`max_tokens` on Chat/Messages, `max_output_tokens` on Responses); positive configured values are honored without a floor |
@@ -179,6 +179,11 @@ repeat up to max_rounds:
   append tool results in request order
 error: "stopped after N rounds without a final answer"
 ```
+On that stop `runTurn` compacts send-side and grants exactly one more
+`max_rounds` window when compaction shrank history (auto-compaction on and a
+compactable head exists); a second exhaustion is terminal ("across 2
+compacted windows"). A lone oversized turn has no compactable head, so the
+backstop stays terminal there.
 
 - `runModelTurn` owns execution policy for all transports; transport closures
   own request conversion, streaming fallback, and active-turn native replay.

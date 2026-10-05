@@ -169,6 +169,38 @@ func modelTransport(id string) string {
 // chatCompatible reports whether valen can talk to the model.
 func chatCompatible(id string) bool { return modelTransport(id) == "chat" }
 
+// knownContextWindows maps model families to input-token windows
+// (best effort, Oct 2026). Explicit max_context_tokens always wins; families
+// missing here resolve to defaultMaxContextTokens. Overestimates degrade
+// gracefully: a provider 400/413 still triggers one compact-and-retry.
+var knownContextWindows = []struct {
+	prefix string
+	tokens int
+}{
+	{"gemini", 1000000},
+	{"claude", 500000},
+	{"gpt-", 400000},
+	{"grok-", 256000},
+	{"qwen", 256000},
+	{"kimi-", 256000},
+	{"glm-", 200000},
+	{"minimax-", 200000},
+	{"deepseek", 128000},
+}
+
+// modelContextWindow reports the input-token window for a stored model ID,
+// matching on the family key (provider and vendor segments stripped). 0
+// means unknown — contextBudget falls back to defaultMaxContextTokens.
+func modelContextWindow(id string) int {
+	l := modelBaseID(id)
+	for _, w := range knownContextWindows {
+		if strings.HasPrefix(l, w.prefix) {
+			return w.tokens
+		}
+	}
+	return 0
+}
+
 // thinkingFamily groups models by how their thinking level is expressed
 // outbound: "effort" models take reasoning_effort, "toggle" models take
 // enable_thinking in chat template kwargs, "" means no thinking param.

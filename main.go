@@ -27,13 +27,13 @@ const (
 	defaultBaseURL               = "https://opencode.ai/zen/go/v1"
 	goKeyEnv                     = "OPENCODE_GO_API_KEY"
 	openRouterKeyEnv             = "OPENROUTER_API_KEY"
-	defaultMaxRounds             = 100
+	defaultMaxRounds             = 300
 	defaultMaxTokens             = 16384
 	defaultRequestTimeoutSeconds = 300
-	// defaultMaxContextTokens fail-fasts absurd sends: stateless transports
-	// resend all of history every round, so burn compounds as rounds ×
-	// history. Assumption (reversible via max_context_tokens): well under
-	// the smallest catalog model's limit, over any healthy session.
+	// defaultMaxContextTokens is the fail-fast ceiling for models with no
+	// known window (see modelContextWindow): stateless transports resend
+	// all of history every round, so burn compounds as rounds × history.
+	// Explicit max_context_tokens always wins; 0 means per-model auto.
 	defaultMaxContextTokens = 300000
 )
 
@@ -174,9 +174,9 @@ func loadConfig(path string) (Config, error) {
 	if cfg.MaxRounds == 0 {
 		cfg.MaxRounds = defaultMaxRounds
 	}
-	if cfg.MaxContextTokens == 0 {
-		cfg.MaxContextTokens = defaultMaxContextTokens
-	}
+	// MaxContextTokens 0 means auto: contextBudget resolves the model's own
+	// window (modelContextWindow) or the safe default. Explicit values
+	// always win and survive /model switches.
 	if cfg.MaxTokens == 0 {
 		cfg.MaxTokens = defaultMaxTokens
 	}
@@ -191,7 +191,7 @@ func loadConfig(path string) (Config, error) {
 	if err := validateExplicitCompactionThinking(compactionModel(cfg), cfg.Compaction.Thinking); err != nil {
 		return cfg, err
 	}
-	cfg.Compaction = normalizeCompactionConfig(cfg.Compaction, cfg.MaxContextTokens)
+	cfg.Compaction = normalizeCompactionConfig(cfg.Compaction, contextBudget(cfg))
 	cfg.Input.Height = inputHeight(cfg)
 	if cfg.SessionID == "" {
 		cfg.SessionID = newSessionID()
@@ -490,8 +490,8 @@ func runTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey stri
 	if err != nil {
 		maybeLearnThinkingLevels(cfg.Model, err.Error())
 		// One recovery compaction when the provider rejects history as too
-		// long: compact send-side, then retry the turn once. Second failure
-		// is terminal so we never loop on an irreducibly large request.
+		// long: compact send-side, then retry the turn once. A non-round
+		// failure after the retry is terminal.
 		if isContextOverflow(err) && compactionAuto(cfg) {
 			if _, ok, cerr := compactHistory(ctx, cfg, client, apiKey, hc, history); cerr == nil && ok {
 				m2, u2, err2 := dispatchTurn(ctx, cfg, client, apiKey, hc, registry, history, onEvent)
@@ -501,7 +501,32 @@ func runTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey stri
 				if err2 != nil {
 					maybeLearnThinkingLevels(cfg.Model, err2.Error())
 				}
-				return m2, usage, err2
+				if err2 == nil || !isMaxRoundsStop(err2) {
+					return m2, usage, err2
+				}
+				msg, err = m2, err2
+			}
+		}
+		// Long-job continuation: the round backstop fired but the turn may
+		// still be productive, so compact send-side and grant exactly one
+		// more window. A second exhaustion is terminal and says so.
+		if isMaxRoundsStop(err) && compactionAuto(cfg) {
+			if _, ok, cerr := compactHistory(ctx, cfg, client, apiKey, hc, history); cerr == nil && ok {
+				dvlog.Logf("maxrounds extend: compacted, second window of %d rounds", cfg.MaxRounds)
+				m3, u3, err3 := dispatchTurn(ctx, cfg, client, apiKey, hc, registry, history, onEvent)
+				usage.PromptTokens += u3.PromptTokens
+				usage.CompletionTokens += u3.CompletionTokens
+				usage.TotalTokens += u3.TotalTokens
+				if err3 != nil {
+					maybeLearnThinkingLevels(cfg.Model, err3.Error())
+				}
+				if err3 == nil {
+					return m3, usage, nil
+				}
+				if isMaxRoundsStop(err3) {
+					return m3, usage, fmt.Errorf("stopped after %d rounds across 2 compacted windows without a final answer — ask the model to continue with a narrower ask or /clear", cfg.MaxRounds*2)
+				}
+				return m3, usage, err3
 			}
 		}
 	}
@@ -704,7 +729,20 @@ func contextBudget(cfg Config) int {
 	if cfg.MaxContextTokens > 0 {
 		return cfg.MaxContextTokens
 	}
+	// Auto: the model's own window when known, else the safe default.
+	if w := modelContextWindow(cfg.Model); w > 0 {
+		return w
+	}
 	return defaultMaxContextTokens
+}
+
+// isMaxRoundsStop reports the round-backstop error: the loop spent its whole
+// window without a final answer. Budget and overflow errors never match.
+func isMaxRoundsStop(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "stopped after")
 }
 
 // checkContextBudget fail-fasts a round that would send a ridiculous context

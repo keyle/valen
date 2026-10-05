@@ -63,10 +63,8 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   ✦ glm-5.3-flash
    Go 1.27 shipped with … (rendered markdown)
 
-   ↑ 412 · ↓ 89
-
  ─────────────────────────────────────
- ● ready  1 turn · ↑412 ↓89
+ ● ready  1 turn · win 2k/200k · ↑412 ↓89
  ╭───────────────────────────────────╮
  │ Type a message…                   │
  ╰───────────────────────────────────╯
@@ -109,7 +107,10 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   commit — so todo progress reads in the scrollback next to thinking.
 - Replies render as markdown via glamour (Monokai style, wrapped to viewport).
 - Errors render as a pink `✗ <friendly>` block; details in Errors view.
-- Tokens per turn render dim (`↑ N · ↓ M`); session totals in the status bar.
+- Session totals render once, in the status row above the chatbox, in
+  thousands (`N turns · win W/B · ↑P ↓C`, e.g. `3 turns · win 45k/300k ·
+  ↑276k ↓3k`); per-turn scrollback tallies are gone. While busy the spinner
+  row also carries loop progress (`· rd 12/300`).
 - Go plan usage (`5h` rolling / `7d` / `30d` percent) sits dim at the right of
   the footer hint line, refreshed at startup, every minute, and after each
   turn; yellow past 80%, pink at 100% or rate-limited, with a `↻` reset hint

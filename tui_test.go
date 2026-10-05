@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -1132,7 +1133,9 @@ func TestTUIToolSummariesInScrollback(t *testing.T) {
 	m.viewport.Width = 80
 
 	editArgs := `{"path":"foo.go","oldString":"a := 1\nb := 2","newString":"a := 1\nb := 3"}`
-	row := m.renderToolLine(ToolRecord{Name: "edit", Args: editArgs, Output: "edited foo.go"})
+	// Strip styling: chroma/lipgloss split diff text with ANSI runs when
+	// the terminal reports color support, so assert on visible text.
+	row := ansi.Strip(m.renderToolLine(ToolRecord{Name: "edit", Args: editArgs, Output: "edited foo.go"}))
 	for _, want := range []string{"⏺ edit", "foo.go", "- b := 2", "+ b := 3"} {
 		if !strings.Contains(row, want) {
 			t.Fatalf("edit row must show diff %q:\n%s", want, row)
@@ -1142,12 +1145,12 @@ func TestTUIToolSummariesInScrollback(t *testing.T) {
 		t.Fatalf("edit row must not dump raw JSON:\n%s", row)
 	}
 
-	readRow := m.renderToolLine(ToolRecord{Name: "read", Args: `{"path":"foo.go","offset":10,"limit":5}`, Output: "File foo.go (20 lines, showing 10-14):\n10: x"})
+	readRow := ansi.Strip(m.renderToolLine(ToolRecord{Name: "read", Args: `{"path":"foo.go","offset":10,"limit":5}`, Output: "File foo.go (20 lines, showing 10-14):\n10: x"}))
 	if !strings.Contains(readRow, "foo.go") || strings.Contains(readRow, `"path"`) {
 		t.Fatalf("read row must summarize path, not JSON:\n%s", readRow)
 	}
 
-	grepRow := m.renderToolLine(ToolRecord{Name: "grep", Args: `{"pattern":"foo.*","path":"."}`, Output: "foo.go:1: foo bar"})
+	grepRow := ansi.Strip(m.renderToolLine(ToolRecord{Name: "grep", Args: `{"pattern":"foo.*","path":"."}`, Output: "foo.go:1: foo bar"}))
 	if !strings.Contains(grepRow, "foo.*") || strings.Contains(grepRow, `"pattern"`) {
 		t.Fatalf("grep row must show the pattern, not JSON:\n%s", grepRow)
 	}
@@ -1156,7 +1159,7 @@ func TestTUIToolSummariesInScrollback(t *testing.T) {
 	m.busy = true
 	m.pendingPrompt = "fix it"
 	_, _ = m.Update(toolEventMsg{kind: "tool_start", text: "edit", args: editArgs})
-	live := m.renderPending(80)
+	live := ansi.Strip(m.renderPending(80))
 	for _, want := range []string{"edit", "· running", "- b := 2", "+ b := 3"} {
 		if !strings.Contains(live, want) {
 			t.Fatalf("live edit must diff %q:\n%s", want, live)
@@ -1298,7 +1301,7 @@ func TestTUIModelPickerSearchAndEscape(t *testing.T) {
 	if m.mode != viewModels {
 		t.Fatalf("mode=%v", m.mode)
 	}
-	if text := m.renderViewportContent(); !strings.Contains(text, "Search...") {
+	if text := ansi.Strip(m.renderViewportContent()); !strings.Contains(text, "Search...") {
 		t.Fatalf("picker should render its search box:\n%s", text)
 	}
 
@@ -2019,5 +2022,44 @@ func TestViewCentersCappedColumn(t *testing.T) {
 		if s := strip(l); strings.HasPrefix(s, " ╭") || strings.HasPrefix(s, "  ╭") {
 			t.Fatalf("unexpected padding on narrow terminal: %q", l)
 		}
+	}
+}
+
+func TestStatusFormatK(t *testing.T) {
+	cases := map[int]string{0: "0", 999: "999", 1000: "1k", 275654: "276k", 300000: "300k"}
+	for n, want := range cases {
+		if got := fk(n); got != want {
+			t.Errorf("fk(%d)=%q, want %q", n, got, want)
+		}
+	}
+}
+
+func TestStatusParsesRoundProgress(t *testing.T) {
+	cur, max, ok := parseRoundProgress("Round 3/300")
+	if !ok || cur != 3 || max != 300 {
+		t.Fatalf("parse=%d/%d ok=%v, want 3/300 true", cur, max, ok)
+	}
+	if _, _, ok := parseRoundProgress("working"); ok {
+		t.Fatal("non-round text must not parse")
+	}
+}
+
+func TestStatusRowShowsWindowInK(t *testing.T) {
+	m := newTestModel(t, Config{Model: "kimi-k3", BaseURL: "https://unused", SessionID: "ses-tui", MaxRounds: 4})
+	m.session.Turns = []Turn{{At: time.Now(), Prompt: "hi", Reply: "yo"}}
+	m.history = []openai.ChatCompletionMessage{{Role: "user", Content: strings.Repeat("x", 4000)}}
+	m.roundCur, m.roundMax = 3, 300
+	m.busy = true
+	m.pendingSince = time.Now()
+	m.spinner = spinner.Model{}
+	got := m.statusView()
+	if !strings.Contains(got, "rd 3/300") {
+		t.Fatalf("status missing round progress: %q", got)
+	}
+	if !strings.Contains(got, "256k") {
+		t.Fatalf("status missing k-format budget: %q", got)
+	}
+	if !strings.Contains(got, "1 turns") {
+		t.Fatalf("status missing turn count: %q", got)
 	}
 }

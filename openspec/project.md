@@ -31,7 +31,8 @@ Single-binary Go agent harness. No server/client split, everything in-process in
   ~12KB/call, 1000 chars/line; grep: 100 matches, 20/file, skip >1MiB/binaries
   and dependency/build dirs. Messages has 3 ephemeral cache breakpoints;
   Chat/Responses rely on unchanged server-side prefixes.
-- Execution caps: `100` main rounds; `25` consecutive identical ordered
+- Execution caps: `300` main rounds per window with one compact-and-continue
+  extension; `25` consecutive identical ordered
   batches allowed, single-call third-repeat guard; max `8` parallel known
   read-only builtins. Any other tool (including MCP/task) makes a batch
   ordered serial. Result Events are completion-ordered, history request-ordered.

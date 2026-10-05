@@ -31,8 +31,11 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.BaseURL != defaultBaseURL || cfg.OpenCodeGoKey != "" || cfg.OpenRouterKey != "" || cfg.MaxRounds != defaultMaxRounds || cfg.MaxContextTokens != defaultMaxContextTokens || cfg.MaxTokens != defaultMaxTokens || cfg.MaxStagnantRounds != guard.DefaultMaxStagnantRounds || cfg.RequestTimeoutSeconds != 300 {
+	if cfg.BaseURL != defaultBaseURL || cfg.OpenCodeGoKey != "" || cfg.OpenRouterKey != "" || cfg.MaxRounds != defaultMaxRounds || cfg.MaxContextTokens != 0 || cfg.MaxTokens != defaultMaxTokens || cfg.MaxStagnantRounds != guard.DefaultMaxStagnantRounds || cfg.RequestTimeoutSeconds != 300 {
 		t.Fatalf("bad defaults: %+v", cfg)
+	}
+	if contextBudget(cfg) != modelContextWindow("kimi-k3") {
+		t.Fatalf("auto budget must resolve the model's window, got %d", contextBudget(cfg))
 	}
 	if !strings.HasPrefix(cfg.SessionID, "ses-") {
 		t.Fatalf("bad session id %q", cfg.SessionID)
@@ -639,5 +642,71 @@ func TestRunToolCallsAskSerial(t *testing.T) {
 	}
 	if events[2].Kind != "tool_start" || events[2].Text != "tool_a" {
 		t.Fatalf("third event=%+v", events[2])
+	}
+}
+
+// TestRunTurnExtendsAfterMaxRounds: exhausting the round window compacts
+// send-side and grants exactly one more window instead of dying — the
+// scripted 5th response (2 tool rounds, summary, 1 tool round, answer)
+// must all be consumed with no error.
+func TestRunTurnExtendsAfterMaxRounds(t *testing.T) {
+	srv, calls := fakeServer(t,
+		completion(toolCall("read", `{"path":"a"}`), ""),
+		completion(toolCall("read", `{"path":"b"}`), ""),
+		completion(nil, "summary text"),
+		completion(toolCall("read", `{"path":"c"}`), ""),
+		completion(nil, "final answer"),
+	)
+	registry := NewRegistry()
+	registry.LoadBuiltins([]string{"read"})
+	cfg := newTestConfig(srv.URL)
+	cfg.MaxRounds = 2
+	cfg.Compaction = normalizeCompactionConfig(CompactionConfig{KeepTokens: 200}, contextBudget(cfg))
+	history := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: "sys"},
+		{Role: openai.ChatMessageRoleUser, Content: "first job"},
+		{Role: openai.ChatMessageRoleUser, Content: "second job"},
+	}
+	msg, _, err := runTurn(context.Background(), cfg, newClient(cfg, "key"), "key", newHTTPClient(cfg), registry, &history, nil)
+	if err != nil {
+		t.Fatalf("extended turn must finish, err=%v", err)
+	}
+	if _, answer := splitThinking(msg.Content); answer != "final answer" {
+		t.Fatalf("reply=%q", msg.Content)
+	}
+	if *calls != 5 {
+		t.Fatalf("calls=%d, want 5 (2 rounds + summary + 2 rounds)", *calls)
+	}
+	if len(history) < 2 || !strings.HasPrefix(history[1].Content, compactionSummaryPrefix) {
+		t.Fatalf("history must carry the compacted summary second, got %d msgs", len(history))
+	}
+}
+
+// TestRunTurnNoExtendWithoutCompactableHead: a lone oversized turn has no
+// compactable head, so the backstop stays terminal with no extra requests.
+func TestRunTurnNoExtendWithoutCompactableHead(t *testing.T) {
+	srv, calls := fakeServer(t,
+		completion(toolCall("read", `{"path":"a"}`), ""),
+		completion(toolCall("read", `{"path":"b"}`), ""),
+		completion(nil, "unreached"),
+	)
+	registry := NewRegistry()
+	registry.LoadBuiltins([]string{"read"})
+	cfg := newTestConfig(srv.URL)
+	cfg.MaxRounds = 2
+	cfg.Compaction = normalizeCompactionConfig(CompactionConfig{}, contextBudget(cfg))
+	history := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: "sys"},
+		{Role: openai.ChatMessageRoleUser, Content: "only turn"},
+	}
+	_, _, err := runTurn(context.Background(), cfg, newClient(cfg, "key"), "key", newHTTPClient(cfg), registry, &history, nil)
+	if err == nil || !strings.Contains(err.Error(), "stopped after 2 rounds") {
+		t.Fatalf("err=%v", err)
+	}
+	if strings.Contains(err.Error(), "compacted windows") {
+		t.Fatalf("no head means no extension: %v", err)
+	}
+	if *calls != 2 {
+		t.Fatalf("calls=%d, want 2 (no summary, no second window)", *calls)
 	}
 }

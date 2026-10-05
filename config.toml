@@ -38,19 +38,28 @@ openrouter_key = ""
                                     # reply is the plan (write/edit/shell
                                     # blocked, task explore-only). TUI /plan
                                     # toggles at runtime; -plan for headless.
-# max_rounds = 100 
+# max_rounds = 300                  # per-turn round backstop (default 300). On
+                                # exhaustion the turn compacts send-side and gets
+                                # exactly one more window; a second exhaustion
+                                # is terminal ("across 2 compacted windows").
 # max_stagnant_rounds = 25       # maximum consecutive identical ordered tool
                                 # batches; changed calls reset the count.
                                 # Read-only research is not stagnation.
 # request_timeout_seconds = 300 # each HTTP attempt, including SSE/unary body;
                                 # retries get fresh deadlines, not a turn limit.
 
-# max_context_tokens = 200000  # fail-fast per-round budget (est. runes/4):
-                               # over-budget history aborts the turn instead of
-                               # a doomed 1M-token send into a 429. Raise for
-                               # large-context models. Compaction protects the
-                               # entire current turn: a lone oversized turn
-                               # cannot shrink and may still fail fast.
+# max_context_tokens = 0       # 0 = auto: the model's own input window when
+                               # known (gemini 1M, claude 500k, gpt 400k, grok/
+                               # qwen/kimi 256k, glm/minimax 200k, deepseek
+                               # 128k, else 300k); explicit values override and
+                               # survive /model switches. Fail-fast per-round
+                               # budget (est. runes/4): over-budget history
+                               # aborts the turn instead of a doomed oversized
+                               # send. Auto-compaction (keep*3) normally fires
+                               # long before this binds, and a provider 400/
+                               # 413 compacts once and retries. A lone
+                               # oversized turn cannot shrink and may still
+                               # fail fast.
 # temperature = 0.2               # omit entirely for provider defaults
 # max_tokens = 16384             # output cap on all three transports; positive
                                 # explicit values are honored without a floor.
