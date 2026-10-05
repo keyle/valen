@@ -74,3 +74,44 @@ func TestUserStateRoundTripAndOverlay(t *testing.T) {
 		t.Fatalf("cfg=%+v", cfg)
 	}
 }
+
+func TestFavouritesRoundTripAndParsing(t *testing.T) {
+	dir := t.TempDir()
+	// Hand-written file: indentation, comments, quotes and inline comments.
+	raw := "# my favourites\n- \"openrouter/anthropic/claude-opus-5.5\"\n  - glm-5.3  # Go\n\n"
+	p := filepath.Join(dir, userFavouritesName)
+	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := readFavourites(p)
+	if !got["glm-5.3"] || !got["openrouter/anthropic/claude-opus-5.5"] || len(got) != 2 {
+		t.Fatalf("parsed favourites=%v", got)
+	}
+	// Save is sorted and round-trips; an unset entry is dropped.
+	got["kimi-k3"] = true
+	got["glm-5.3"] = false
+	if err := saveFavourites(p, got); err != nil {
+		t.Fatal(err)
+	}
+	saved, _ := os.ReadFile(p)
+	want := "- kimi-k3\n- openrouter/anthropic/claude-opus-5.5\n"
+	if string(saved) != want {
+		t.Fatalf("saved=%q want=%q", saved, want)
+	}
+	if got := readFavourites(p); !got["kimi-k3"] || got["glm-5.3"] || len(got) != 2 {
+		t.Fatalf("reloaded=%v", got)
+	}
+	// Missing file and empty path are empty, not errors.
+	if got := readFavourites(filepath.Join(dir, "nope.yaml")); len(got) != 0 {
+		t.Fatalf("missing file=%v", got)
+	}
+	if got := readFavourites(""); len(got) != 0 {
+		t.Fatalf("empty path=%v", got)
+	}
+	if p := favouritesPathFor(""); p != "" {
+		t.Fatalf("no state path must mean session-only, got %q", p)
+	}
+	if p := favouritesPathFor(filepath.Join(dir, "state.json")); p != filepath.Join(dir, userFavouritesName) {
+		t.Fatalf("favourites path=%q", p)
+	}
+}

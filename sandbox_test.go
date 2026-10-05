@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -266,6 +267,26 @@ func TestShellOutsidePaths(t *testing.T) {
 	}
 }
 
+// TestShellOutsidePathsAllowsSystemReadOnly: the re-allowed system config
+// files never prompt, while /etc/passwd still does (asserted in
+// TestShellOutsidePaths). Skipped when /etc is hidden from this process, as
+// under the sandbox that runs the tests.
+func TestShellOutsidePathsAllowsSystemReadOnly(t *testing.T) {
+	useTempRoot(t)
+	sys := systemReadOnlyPaths()
+	if len(sys) == 0 {
+		t.Skip("system config paths hidden here")
+	}
+	for _, p := range sys {
+		if got := len(shellOutsidePaths("cat " + p)); got != 0 {
+			t.Errorf("system read-only %s must not ask, got %d", p, got)
+		}
+	}
+	if got := len(shellOutsidePaths("cat /etc/passwd")); got == 0 {
+		t.Error("/etc/passwd must still ask")
+	}
+}
+
 func TestGateShellOutsideAsksOncePerFolder(t *testing.T) {
 	useTempRoot(t)
 	target := filepath.Join(outsideDir(t), "valen-gate-test-x.txt")
@@ -424,6 +445,25 @@ func TestDestructiveLabels(t *testing.T) {
 	}
 }
 
+func TestGateShellApprovalNamesModel(t *testing.T) {
+	resetShellApprovals()
+	t.Cleanup(resetShellApprovals)
+	old := askPrompter
+	var got AskQuestion
+	askPrompter = func(_ context.Context, qs []AskQuestion) ([]string, error) {
+		got = qs[0]
+		return []string{"Allow"}, nil
+	}
+	t.Cleanup(func() { askPrompter = old })
+	ctx := context.WithValue(context.Background(), turnConfigKey{}, Config{Model: "deepseek-v4.1-flash"})
+	if err := gateShell(ctx, "git push", false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got.Question, "Allow deepseek-v4.1-flash to ") {
+		t.Fatalf("approval must name the model: %q", got.Question)
+	}
+}
+
 func TestGateShellAsksOncePerLabel(t *testing.T) {
 	useTempRoot(t)
 	asked := 0
@@ -562,6 +602,39 @@ func TestSandboxArgvReallowsGitConfig(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(args, " "), f) {
 		t.Errorf("read-only %s missing from sandbox argv", f)
+	}
+}
+
+func TestSandboxArgvReadOnlyFileAndDir(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("SBPL profile is darwin-only")
+	}
+	dir := t.TempDir()
+	file := filepath.Join(dir, "gitconfig")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Deny the parent so the re-allows have something to override.
+	_, args, err := sandboxArgv("true", sandboxPolicy{
+		Writable:     []string{"/tmp"},
+		ReadOnly:     []string{file, dir},
+		SystemHidden: []string{dir},
+	})
+	if err != nil {
+		t.Skipf("backend unavailable: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "(allow file-read* (literal (param") {
+		t.Errorf("file ReadOnly must emit a literal allow: %s", joined)
+	}
+	if !strings.Contains(joined, "(allow file-read* (subpath (param") {
+		t.Errorf("dir ReadOnly must emit a subpath allow: %s", joined)
+	}
+	// Later SBPL rules win: the subpath re-allow must follow the system deny.
+	deny := strings.Index(joined, "(deny file-read* (subpath")
+	allow := strings.Index(joined, "(allow file-read* (subpath (param")
+	if deny < 0 || allow < 0 || allow < deny {
+		t.Errorf("subpath re-allow must follow the system deny: %s", joined)
 	}
 }
 

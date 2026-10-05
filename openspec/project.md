@@ -17,6 +17,8 @@ Single-binary Go agent harness. No server/client split, everything in-process in
   `8MiB LimitReader` per round, `16k` tool-output truncate (storage/log),
   no secondary live-send truncation; rolling `32768`-byte UTF-8-safe TUI
   text/thinking tails, exact delta concatenation, ~60ms render throttle,
+  committed-scrollback line budget `[tui] max_lines` default `1000` (trims
+  reasoning then old turns, keeps prompts/tools; `0` disables),
   `100` grep matches, `1MiB/512KiB` search/fetch caps, `8000` fetch runes,
   `16384` output tokens default on all three transports (positive explicit
   overrides honored, no floor). Keep compaction caps: `15k` soft whole-turn

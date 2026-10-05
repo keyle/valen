@@ -155,6 +155,47 @@ func TestTUISessionsListShowsTitlesAndResumes(t *testing.T) {
 	}
 }
 
+func TestTUIHeaderShowsTitleAndMouseHint(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.session.Title = "fix the login redirect bug"
+	m.cfg.Model = "deepseek-v4.1-flash"
+	header := ansi.Strip(m.headerView())
+	if !strings.Contains(header, "fix the login redirect bug") {
+		t.Fatalf("header must show the session title, not the ses- id:\n%s", header)
+	}
+	if strings.Contains(header, "ses-tui") || strings.Contains(header, "tools") {
+		t.Fatalf("header must drop the ses- id and tool count:\n%s", header)
+	}
+	if !strings.Contains(header, "alt+m select") {
+		t.Fatalf("header must hint alt+m selection:\n%s", header)
+	}
+}
+
+func TestTUIEscInSessionsBacksWithoutArmingCancel(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	cancelled := 0
+	m.busy = true
+	m.cancel = func() { cancelled++ }
+	m.show(viewSessions)
+
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mode != viewChat {
+		t.Fatalf("esc in sessions must return to the current session: mode=%v", m.mode)
+	}
+	if cancelled != 0 || !m.escArmedAt.IsZero() {
+		t.Fatalf("esc in sessions must not arm or trigger cancel: cancelled=%d armed=%v", cancelled, !m.escArmedAt.IsZero())
+	}
+}
+
+func TestTUIAssistantHeaderAlignsWithValen(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.cfg.Model = "deepseek-v4.1-flash"
+	m.session.Turns = []Turn{{At: time.Now(), Prompt: "hi", Reply: "hello"}}
+	if out := ansi.Strip(m.renderChat()); !strings.Contains(out, " ✦ deepseek-v4.1-flash") {
+		t.Fatalf("assistant header must carry a leading space:\n%s", out)
+	}
+}
+
 func TestSessionTitleCapturedOnce(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmp)
@@ -672,6 +713,92 @@ func TestChatCacheIncrementalMatchesFull(t *testing.T) {
 		if !strings.Contains(wide, want) {
 			t.Fatalf("wide chat missing %q", want)
 		}
+	}
+}
+
+// TestTUICommittedTrimCollapsesReasoningKeepsPromptAndTools pins the scrollback
+// budget contract: once a turn alone exceeds max_lines, its reasoning and
+// reply bodies collapse but the user prompt and tool rows (priority content)
+// survive, and the result is bounded.
+func TestTUICommittedTrimCollapsesReasoningKeepsPromptAndTools(t *testing.T) {
+	limit := 30
+	m := newTestModel(t, testConfig("https://unused"))
+	m.cfg.TUI.MaxLines = &limit
+	m.viewport.Width = 80
+	var thinking strings.Builder
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&thinking, "reasoning line %d\n", i)
+	}
+	var reply strings.Builder
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(&reply, "reply line %d\n", i)
+	}
+	m.session.Turns = []Turn{{
+		At:       time.Now(),
+		Prompt:   "the pristine user request",
+		Thinking: thinking.String(),
+		Reply:    reply.String(),
+		Tools:    []ToolRecord{{Name: "read", Args: `{"path":"foo.go"}`, Output: "package main"}},
+	}}
+
+	out := m.renderChat()
+	if strings.Contains(out, "reasoning line 199") {
+		t.Fatalf("reasoning body must be trimmed past the budget:\n%s", out)
+	}
+	if got := strings.Count(out, "\n") + 1; got > limit {
+		t.Fatalf("transcript %d lines exceeds budget %d:\n%s", got, limit, out)
+	}
+	for _, want := range []string{"pristine user request", "read", "foo.go", "trimmed"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("priority content %q missing from compact transcript:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "reply line 39") {
+		t.Fatalf("reply body must collapse under budget:\n%s", out)
+	}
+}
+
+// TestTUICommittedTrimBudgetAcrossTurns verifies the budget drops the oldest
+// turns from scrollback with a notice while keeping the newest prompt, and
+// that toggling the cap back to unlimited restores every turn (disk history
+// stays lossless; the view is what shrinks).
+func TestTUICommittedTrimBudgetAcrossTurns(t *testing.T) {
+	limit := 20
+	m := newTestModel(t, testConfig("https://unused"))
+	m.cfg.TUI.MaxLines = &limit
+	m.viewport.Width = 80
+	for i := 0; i < 6; i++ {
+		m.session.Turns = append(m.session.Turns, Turn{
+			At: time.Now(), Prompt: fmt.Sprintf("prompt-%d", i), Reply: "ok",
+		})
+	}
+	out := m.renderChat()
+	if !strings.Contains(out, "earlier turn(s) trimmed") {
+		t.Fatalf("dropped turns need a notice:\n%s", out)
+	}
+	if !strings.Contains(out, "prompt-5") {
+		t.Fatalf("newest turn must survive the budget:\n%s", out)
+	}
+	if strings.Contains(out, "prompt-0") {
+		t.Fatalf("oldest turn should be trimmed at budget %d:\n%s", limit, out)
+	}
+	unlimited := 0
+	m.cfg.TUI.MaxLines = &unlimited
+	full := m.renderChat()
+	if !strings.Contains(full, "prompt-0") || strings.Contains(full, "trimmed") {
+		t.Fatalf("unlimited budget must restore the full transcript:\n%s", full)
+	}
+}
+
+func TestTUICommittedTrimDefaultsTo1000(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	if got := tuiMaxLines(m.cfg); got != 1000 {
+		t.Fatalf("default max_lines=%d, want 1000", got)
+	}
+	zero := 0
+	m.cfg.TUI.MaxLines = &zero
+	if got := tuiMaxLines(m.cfg); got != 0 {
+		t.Fatalf("explicit 0 should disable trimming, got %d", got)
 	}
 }
 
@@ -1216,6 +1343,60 @@ func TestTUIModelPickerListsAndSelects(t *testing.T) {
 	}
 }
 
+func TestTUIModelPickerFavouritesFloatAndToggle(t *testing.T) {
+	m, statePath := newTestModelWithConfig(t, "model = \"m\"\nbase_url = \"https://unused\"\n")
+	favPath := filepath.Join(filepath.Dir(statePath), userFavouritesName)
+	if err := os.WriteFile(favPath, []byte("- gpt-5.6-luna\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = m.Update(modelsLoadedMsg{ids: []string{"kimi-k3", "glm-5.3", "gpt-5.6-luna"}})
+	if m.mode != viewModels || len(m.modelChoices) != 3 {
+		t.Fatalf("mode=%v choices=%v", m.mode, m.modelChoices)
+	}
+	if m.modelChoices[0].id != "gpt-5.6-luna" {
+		t.Fatalf("favourite must sort to the top: %v", m.modelChoices)
+	}
+	if text := ansi.Strip(m.renderModelsList()); !strings.Contains(text, "★") {
+		t.Fatalf("favourite must render a star:\n%s", text)
+	}
+
+	// Space on the highlighted favourite unstars it and persists.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeySpace})
+	if m.isFavourite("gpt-5.6-luna") {
+		t.Fatal("space must unstar the highlighted model")
+	}
+	if m.modelChoices[m.cursor].id != "gpt-5.6-luna" {
+		t.Fatalf("cursor should stay on the toggled model: cursor=%d choices=%v", m.cursor, m.modelChoices)
+	}
+	if raw, _ := os.ReadFile(favPath); strings.Contains(string(raw), "gpt-5.6-luna") {
+		t.Fatalf("unstar must persist: %q", raw)
+	}
+
+	// Space on a plain row stars it, floats it to the top and writes the file.
+	m.cursor = 0
+	for i, c := range m.modelChoices {
+		if c.id == "glm-5.3" {
+			m.cursor = i
+		}
+	}
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeySpace})
+	if !m.isFavourite("glm-5.3") {
+		t.Fatal("space must star glm-5.3")
+	}
+	if m.modelChoices[0].id != "glm-5.3" {
+		t.Fatalf("new favourite must float to top: %v", m.modelChoices)
+	}
+	if raw, _ := os.ReadFile(favPath); !strings.Contains(string(raw), "- glm-5.3") {
+		t.Fatalf("star must persist: %q", raw)
+	}
+
+	// Enter still selects the highlighted model.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.cfg.Model != "glm-5.3" || m.mode != viewChat {
+		t.Fatalf("enter must select: model=%q mode=%v", m.cfg.Model, m.mode)
+	}
+}
+
 func TestTUIModelPickerSearchBoxKeepsFullWidth(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	m.width = 200
@@ -1533,6 +1714,31 @@ func TestLoadConfigInputTable(t *testing.T) {
 	}
 	if !inputBlink(cfg2) || inputHeight(cfg2) != 3 {
 		t.Fatalf("defaults: blink=%v height=%d, want true 3", inputBlink(cfg2), inputHeight(cfg2))
+	}
+}
+
+func TestLoadConfigTUITable(t *testing.T) {
+	cfg, err := loadConfig(writeConfig(t, "model = \"m\"\n[tui]\nmax_lines = 250\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tuiMaxLines(cfg); got != 250 {
+		t.Fatalf("max_lines = %d, want 250", got)
+	}
+	// Unset keeps the 1000-line default; explicit 0 disables trimming.
+	cfg2, err := loadConfig(writeConfig(t, "model = \"m\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tuiMaxLines(cfg2); got != 1000 {
+		t.Fatalf("default max_lines = %d, want 1000", got)
+	}
+	cfg3, err := loadConfig(writeConfig(t, "model = \"m\"\n[tui]\nmax_lines = 0\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tuiMaxLines(cfg3); got != 0 {
+		t.Fatalf("explicit max_lines = %d, want 0 (unlimited)", got)
 	}
 }
 

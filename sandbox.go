@@ -35,7 +35,7 @@ type sandboxPolicy struct {
 	Root         string
 	Writable     []string // existing dirs shell may write to
 	Readable     []string // existing dirs shell may read but not write (read-only approvals)
-	ReadOnly     []string // existing files shell may read but not write (git configs)
+	ReadOnly     []string // existing files/dirs shell may read but not write (git + system configs)
 	Hidden       []string // existing files/dirs shell cannot read or write
 	SystemHidden []string // system paths shell cannot read (approvable via folder approval)
 	Network      bool
@@ -86,7 +86,7 @@ func looksNetworkDenied(out string) bool {
 func sandboxCommand(ctx context.Context, command string, network bool) (*exec.Cmd, error) {
 	name, args, err := sandboxArgv(command, sandboxPolicy{
 		Root: getFileRoot(), Writable: writableRoots(), Readable: readableRoots(),
-		ReadOnly: gitReadOnlyPaths(),
+		ReadOnly: append(gitReadOnlyPaths(), systemReadOnlyPaths()...),
 		Hidden:   hiddenPaths(), SystemHidden: systemHiddenPaths(), Network: network,
 	})
 	if err != nil {
@@ -297,6 +297,22 @@ func gitReadOnlyPaths() []string {
 // mask on Linux).
 func systemHiddenPaths() []string {
 	return existing([]string{"/etc", real("/etc")}, true)
+}
+
+// systemReadOnlyPaths lists harmless system config files the sandbox re-allows
+// for reads and the shell gate never prompts for. /etc is denied wholesale on
+// Darwin (so obfuscated reads of /etc/passwd fail closed), but a few
+// world-readable files are still needed: a system gitconfig and path list, and
+// the TLS cert bundle. They are re-allowed by path, like gitReadOnlyPaths for
+// $HOME; everything else under /etc stays hidden. Only existing paths are
+// listed (bwrap cannot bind a missing one).
+func systemReadOnlyPaths() []string {
+	return existing([]string{
+		"/etc/gitconfig",
+		"/etc/paths",
+		"/etc/paths.d",
+		"/etc/ssl/cert.pem",
+	}, false)
 }
 
 // existingDirs keeps directories that exist, resolving symlinks.

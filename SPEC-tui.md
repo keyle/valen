@@ -49,7 +49,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 ## UX
 
 ```
- ✦ valen  ·  glm-5.3-flash  ·  ses-…  ·  3 tools
+ ✦ valen  ·  glm-5.3-flash  ·  <session title>  ·  alt+m select
 
   You  15:04
   ┌ summarise the latest go release notes
@@ -60,7 +60,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   ⏺ web_search  go release notes 2026
     → 8 results…
 
-  ✦ glm-5.3-flash
+   ✦ glm-5.3-flash
    Go 1.27 shipped with … (rendered markdown)
 
  ─────────────────────────────────────
@@ -71,8 +71,14 @@ tool activity, overlay recall views — all in one `tuiModel` with async
  /help for keys and commands                          5h 90% ↻38m · 7d 36%
 ```
 
+- Header: ` ✦ valen  ·  <model>  ·  <session title>  ·  alt+m select` — the
+  session title is the same English name shown in the Sessions view (first
+  prompt, 60 runes; falls back to the `ses-…` id before the first turn), the
+  tools count is not shown, and `alt+m select` names the plain-drag selection
+  toggle.
 - Transcript is padded conversation blocks separated by blank lines; no role
-  prefixes. `You` (orange) and `✦ <model>` (green) head each block.
+  prefixes. `You` (orange) and ` ✦ <model>` (green, leading space so it lines
+  up with ` ✦ valen`) head each block.
   A blank session shows only a `No turns yet.` label; the AGENTS.md-first
   behaviour lives in the default system prompt (`config.toml`), not as
   intro text in the transcript.
@@ -106,6 +112,14 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   tail), live from the call args while running and from the stored result on
   commit — so todo progress reads in the scrollback next to thinking.
 - Replies render as markdown via glamour (Monokai style, wrapped to viewport).
+- The committed scrollback is bounded by `[tui] max_lines` (default `1000`;
+  `0` disables). Past the budget, the newest turn stays full while it fits;
+  older turns collapse their reasoning to a `N chars trimmed` header and
+  their reply to its first 8 lines, then the oldest turns drop behind a
+  `… N earlier turn(s) trimmed — ctrl+h for history` row. User prompts and
+  tool rows are never trimmed, so the cap only removes in-between reasoning
+  — the viewport stays cheap without losing what was asked or run. History
+  on disk is untouched; ctrl+h and the recall/detail views expand everything.
 - Errors render as a pink `✗ <friendly>` block; details in Errors view.
 - Session totals render once, in the status row above the chatbox, in
   thousands (`N turns · win W/B · ↑P ↓C`, e.g. `3 turns · win 45k/300k ·
@@ -171,8 +185,11 @@ Rules:
   Read-only builtin result events arrive in
   completion order and match rows by call ID; history remains request-ordered.
   The committed `turnDoneMsg` always renders final state. Rendered committed
-  turns are cached append-only (keyed on turn count, width, thinking display,
-  model), so per-delta cost is the live pending block, not history depth.
+  turns are cached append-only per turn (keyed on turn count, width, thinking
+  display, model), each keeping a full and a lazily-built compact form; the
+  `[tui] max_lines` budget picks between them and bounds the assembly, so
+  per-delta cost is the bounded scrollback plus the live pending block, not
+  history depth or total history bytes.
 - Go plan quota refreshes share one in-flight fetch: the minute tick and the
   post-turn refresh never overlap on slow networks. The refresh dispatches by
   provider (`fetchQuotaCmd`): the OpenRouter balance on `openrouter/…` models,
@@ -229,7 +246,9 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
   saved session files read-only. Sessions view (Ctrl+L): every saved session
   with its title (first prompt, 60 runes), model/effort, turn count — Enter
   resumes it (latest `Turn.History` checkpoint plus later legacy turns, same
-  file continues). Legacy records reconstruct tool calls and results as well
+  file continues). Esc backs to the current session without arming the cancel
+  confirm, so browsing sessions never counts toward stopping a running turn.
+  Legacy records reconstruct tool calls and results as well
   as prompt/reply text. Titles and the model/effort in use live in
   `<id>.jsonl.meta.json` next to the
   append-only JSONL plus per-turn `model`/`effort`. Tools view (Ctrl+U):
@@ -275,7 +294,8 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
 - `/model` (ctrl+p, or ctrl+m where the terminal sends disambiguated ctrl+m)
   fetches the live catalogs — OpenCode Go (`GET {base_url}/models`) plus
   OpenRouter (`GET https://openrouter.ai/api/v1/models`) — and opens
-  a picker: ↑↓ move, Enter switches, Esc backs out. The picker search box is
+  a picker: ↑↓ move, Enter switches, Space stars/unstars, Esc backs out. The
+  picker search box is
   pinned to the full content width (like the chatbox) so typing never resizes
   it. Both providers list even
   without keys (curated fallbacks when offline/unkeyed); picking or sending
@@ -285,6 +305,12 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
   provider prefix (`go/…`, `openrouter/…`); Go transports (`/chat`,
   `/responses`, `/messages`) are marked, OpenRouter rows always converse
   over its OpenAI-compatible chat endpoint.
+- Favourites are a plain YAML list (`- glm-5.3`, OpenRouter IDs keep their
+  `openrouter/…` prefix) at
+  `~/.config/valen/favourites.yaml` (`$XDG_CONFIG_HOME/valen/`). Starred
+  models sort to the top of the picker with a ★, alphabetically within each
+  group, and the cursor stays on the toggled row. Space writes the file;
+  without a state path (tests, `-config <file>`) favourites are session-only.
 - `/model <filter>` switches directly on an exact or unique-substring match,
   otherwise opens the filtered picker. `/model <known-id>` works offline.
 - Switching keeps the conversation history; an incompatible thinking level

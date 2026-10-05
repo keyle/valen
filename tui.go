@@ -74,7 +74,9 @@ var (
 	// Confirmation hint: bold green like the ready status, so the waiting
 	// state is obvious at a glance.
 	confirmHintStyle = lipgloss.NewStyle().Foreground(mkGreen).Bold(true)
-	emptyStyle       = lipgloss.NewStyle().Foreground(mkComment).Padding(1, 2)
+	// Favourite marker in the model picker: warm yellow, like a lit star.
+	favStyle   = lipgloss.NewStyle().Foreground(mkYellow).Bold(true)
+	emptyStyle = lipgloss.NewStyle().Foreground(mkComment).Padding(1, 2)
 )
 
 // monokaiGlamour is a glamour JSON style approximating Monokai Pro.
@@ -375,6 +377,7 @@ type tuiModel struct {
 	modelFilter     string
 	modelLoadFilter string
 	modelSearch     textinput.Model
+	favourites      map[string]bool
 	effortLevels    []string
 	ask             *askState
 
@@ -1363,6 +1366,68 @@ func (m *tuiModel) filterModelChoices() {
 	for _, id := range matched {
 		m.modelChoices = append(m.modelChoices, byID[id])
 	}
+	// Starred models float to the top, keeping catalog (alphabetical) order
+	// within each group so a toggle never shuffles the rest of the list.
+	sort.SliceStable(m.modelChoices, func(i, j int) bool {
+		fi, fj := m.isFavourite(m.modelChoices[i].id), m.isFavourite(m.modelChoices[j].id)
+		return fi && !fj
+	})
+}
+
+// favouritesPath is the picker's favourites file, "" when there is no state
+// path (session-only, like model/thinking).
+func (m *tuiModel) favouritesPath() string { return favouritesPathFor(m.statePath) }
+
+func (m *tuiModel) isFavourite(id string) bool {
+	return m.favourites[normalizeModelID(id)]
+}
+
+// toggleFavourite stars or unstars the highlighted model, persists the set
+// and re-sorts the list, keeping the cursor on the same model. Space drives
+// it; Enter stays selection.
+func (m *tuiModel) toggleFavourite() {
+	if m.cursor < 0 || m.cursor >= len(m.modelChoices) {
+		return
+	}
+	if m.favourites == nil {
+		m.favourites = readFavourites(m.favouritesPath())
+	}
+	id := m.modelChoices[m.cursor].id
+	key := normalizeModelID(id)
+	added := !m.favourites[key]
+	if added {
+		m.favourites[key] = true
+	} else {
+		delete(m.favourites, key)
+	}
+	label := displayModelID(id)
+	suffix := ""
+	if path := m.favouritesPath(); path != "" {
+		if err := saveFavourites(path, m.favourites); err != nil {
+			m.notice = "Favourites save failed: " + err.Error()
+			m.noticeErr = true
+			m.refreshViewport()
+			return
+		}
+	} else {
+		suffix = " (session only)"
+	}
+	if added {
+		m.notice = "★ " + label + " added to favourites." + suffix
+	} else {
+		m.notice = label + " removed from favourites." + suffix
+	}
+	m.noticeErr = false
+	m.modelFilter = m.modelSearch.Value()
+	m.filterModelChoices()
+	for i, c := range m.modelChoices {
+		if c.id == id {
+			m.cursor = i
+			break
+		}
+	}
+	m.refreshViewport()
+	m.ensureCursorVisible()
 }
 
 // openEffortPicker lists the thinking levels available on the current model,
@@ -1743,6 +1808,12 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.modelSearch.SetValue(msg.filter)
 		m.modelFilter = msg.filter
+		if path := m.favouritesPath(); path != "" {
+			m.favourites = readFavourites(path)
+		}
+		if m.favourites == nil {
+			m.favourites = map[string]bool{}
+		}
 		m.filterModelChoices()
 		m.show(viewModels)
 		for i, c := range m.modelChoices {
@@ -2185,6 +2256,11 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.show(viewChat)
 			return m, nil
 		}
+		if m.mode == viewSessions {
+			// Back to the current session; never arms the cancel confirm.
+			m.show(viewChat)
+			return m, nil
+		}
 		if m.busy {
 			now := time.Now()
 			if !m.escArmedAt.IsZero() && now.Sub(m.escArmedAt) <= escConfirmWindow {
@@ -2365,6 +2441,10 @@ func (m *tuiModel) handleOverlayKey(msg tea.KeyMsg, s string) (tea.Model, tea.Cm
 			return m, nil
 		case "enter":
 			return m, m.openSelected()
+		case " ":
+			// Space stars the highlighted model; Enter keeps selecting.
+			m.toggleFavourite()
+			return m, nil
 		case "pgup", "pgdown":
 			if s == "pgup" {
 				m.viewport.PageUp()
@@ -2499,7 +2579,12 @@ func (m *tuiModel) headerView() string {
 	if m.cfg.Thinking != "" {
 		model += " · " + m.cfg.Thinking
 	}
-	meta := headerDimStyle.Render(fmt.Sprintf("  ·  %s  ·  %s  ·  %d tools", model, shortSession(m.session), len(m.registry.Names())))
+	label := sessionLabel(m.session)
+	if m.width > 0 {
+		reserved := lipgloss.Width(" ✦ valen") + lipgloss.Width(fmt.Sprintf("  ·  %s  ·  ", model)) + lipgloss.Width("  ·  alt+m select")
+		label = truncateRunes(label, m.columnWidth()-reserved)
+	}
+	meta := headerDimStyle.Render(fmt.Sprintf("  ·  %s  ·  %s  ·  alt+m select", model, label))
 	if m.cfg.Plan {
 		meta += headerDimStyle.Render("  ·  plan")
 	}
@@ -2529,6 +2614,16 @@ func (m *tuiModel) headerView() string {
 		return lipgloss.NewStyle().Width(m.columnWidth()).Render(line)
 	}
 	return line
+}
+
+func sessionLabel(s *Session) string {
+	if s == nil {
+		return "no-session"
+	}
+	if t := strings.TrimSpace(s.Title); t != "" {
+		return t
+	}
+	return shortSession(s)
 }
 
 func shortSession(s *Session) string {
@@ -2941,7 +3036,7 @@ func (m *tuiModel) renderTurnMode(t *Turn, w int, compact bool) string {
 		if compact {
 			reply = compactReply(reply)
 		}
-		aHead := asstHeadStyle.Render("✦ " + m.cfg.Model)
+		aHead := asstHeadStyle.Render(" ✦ " + m.cfg.Model)
 		aBody := asstBodyStyle.Width(bodyW).Render(breakLongWords(m.renderMarkdown(reply), bodyW-1))
 		parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, aHead, "", aBody))
 	}
@@ -3383,7 +3478,7 @@ func (m *tuiModel) renderPending(w int) string {
 		parts = append(parts, "")
 	}
 	if answer != "" {
-		parts = append(parts, asstHeadStyle.Render("✦ "+m.cfg.Model))
+		parts = append(parts, asstHeadStyle.Render(" ✦ "+m.cfg.Model))
 		parts = append(parts, "")
 		parts = append(parts, asstBodyStyle.Width(bodyW).Render(breakLongWords(streamTail(answer), bodyW-1)))
 		parts = append(parts, "")
@@ -3789,7 +3884,7 @@ func (m *tuiModel) renderModelsList() string {
 
 	var b strings.Builder
 	b.WriteString(searchBox + "\n\n")
-	b.WriteString(metaStyle.Render("Models — ↑/↓ select · enter switches · esc clears search / back") + "\n\n")
+	b.WriteString(metaStyle.Render("Models — ↑/↓ select · enter switches · space favourites · esc clears search / back") + "\n\n")
 	if len(m.modelChoices) == 0 {
 		query := strings.TrimSpace(m.modelFilter)
 		if query == "" {
@@ -3806,6 +3901,12 @@ func (m *tuiModel) renderModelsList() string {
 		m.cursor = len(m.modelChoices) - 1
 	}
 	for i, c := range m.modelChoices {
+		star := " "
+		starCell := " "
+		if m.isFavourite(c.id) {
+			star = "★"
+			starCell = favStyle.Render("★")
+		}
 		line := displayModelID(c.id)
 		if c.current {
 			line += "  ● current"
@@ -3813,14 +3914,14 @@ func (m *tuiModel) renderModelsList() string {
 		if c.transport != "chat" {
 			line += fmt.Sprintf("  [/%s]", c.transport)
 		}
-		line = truncateRunes(line, cw-4)
+		line = truncateRunes(line, cw-6)
 		if i == m.cursor {
-			b.WriteString(selectedStyle.Width(cw).Render(fmt.Sprintf("%2d  %s", i+1, line)) + "\n")
+			b.WriteString(selectedStyle.Width(cw).Render(fmt.Sprintf("%2d %s %s", i+1, star, line)) + "\n")
 		} else {
-			b.WriteString(fmt.Sprintf("  %2d  %s\n", i+1, line))
+			b.WriteString(fmt.Sprintf("  %2d %s %s\n", i+1, starCell, line))
 		}
 	}
-	b.WriteString("\n" + metaStyle.Render("Transports are marked: /chat, /responses and /messages all converse."))
+	b.WriteString("\n" + metaStyle.Render("★ favourites stay on top. Transports are marked: /chat, /responses and /messages all converse."))
 	return b.String()
 }
 
@@ -3868,7 +3969,7 @@ Keys
   ctrl+g help · ctrl+r history · ctrl+l sessions · ctrl+u tools · ctrl+x errors · ctrl+y thinking display
   ctrl+o details · ctrl+p/ctrl+m model · ctrl+n new session · ctrl+t thinking level (cycles low→high, wraps) · ctrl+s save · ctrl+q quit · ctrl+c/ctrl+d cancel · clear input · quit
   in lists: ↑↓ move · enter open · esc back
-  /model picker: type to filter · ↑↓ select · esc clears search, then backs
+  /model picker: type to filter · ↑↓ select · enter switches · space stars/unstars favourites (kept on top) · esc clears search, then backs
 
 Commands
    /help /history /sessions (/resume) /tools /errors /think /save /clear /new /plan /quit (or :q)
@@ -3883,6 +3984,8 @@ Go plan usage (5h rolling / 7d / 30d) shows in the footer, refreshed each
 minute and after every turn: dim normally, yellow past 80%, pink at the cap.
 
 Models persist to ~/.config/valen/state.json, so the last switch sticks across runs.
+Favourites live beside it in ~/.config/valen/favourites.yaml (a plain list) and
+show with a ★ at the top of the picker; space toggles them there.
 Thinking levels depend on the model (see /effort picker): muse-spark takes
 minimal/low/medium/high/xhigh, gpt/grok take low…max, glm/deepseek take
 low/high/max or high/max, kimi-k3 is max-only, toggle models take none/high.

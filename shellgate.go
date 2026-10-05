@@ -114,8 +114,12 @@ func approveShell(ctx context.Context, label, command string) error {
 	if label == "network" {
 		what = "give shell commands network access"
 	}
+	name := strings.TrimSpace(currentTurnConfig(ctx, Config{}).Model)
+	if name == "" {
+		name = "valen"
+	}
 	answers, err := promptUser(ctx, []AskQuestion{{
-		Question: fmt.Sprintf("Allow valen to %s for the rest of this session? Command: %s", what, truncateRunes(command, 200)),
+		Question: fmt.Sprintf("Allow %s to %s for the rest of this session? Command: %s", name, what, truncateRunes(command, 200)),
 		Header:   "Shell",
 		Options: []AskOption{
 			{Label: "Allow", Description: "Permit this for the rest of this session"},
@@ -166,8 +170,10 @@ var rootPathRe = regexp.MustCompile(`(?:^|[\s;|&(])["']?/["']?(?:$|[\s;|&)])`)
 // shellSafePrefixes are absolute prefixes that never trigger an outside
 // prompt: device nodes (`-o /dev/null`), the system toolchain, and tool
 // caches needed for builds, and shared /tmp (writable by the sandbox, the
-// preferred place for worktrees). $HOME is deliberately absent: explicit use
-// asks once per folder via checkFileAccess.
+// preferred place for worktrees). It also carries the harmless system config
+// files the sandbox re-allows for reads (systemReadOnlyPaths), so `cat
+// /etc/gitconfig` needs no approval while `/etc/passwd` still asks. $HOME is
+// deliberately absent: explicit use asks once per folder via checkFileAccess.
 func shellSafePrefixes() []string {
 	var out []string
 	for _, p := range []string{"/dev", "/usr", "/bin", "/sbin", "/opt", "/System", "/Library", sharedTmp} {
@@ -185,6 +191,7 @@ func shellSafePrefixes() []string {
 			out = append(out, real(gc))
 		}
 	}
+	out = append(out, systemReadOnlyPaths()...)
 	return out
 }
 

@@ -75,6 +75,7 @@ and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
 | `temperature` | float | unset | Pointer semantics: unset omits the field, `0.0` sends zero |
 | `max_tokens` | int | `16384` | Explicit output cap on all three transports (`max_tokens` on Chat/Messages, `max_output_tokens` on Responses); positive configured values are honored without a floor |
 | `compaction` | table | `auto=true, keep_tokens=15000, buffer=10%, thinking=medium` | Summary-mode, send-side only (prior disk records remain intact): `auto` prunes and summarizes before send and retries once after provider context overflow; `keep_tokens` is a soft whole-turn tail target, always protecting the entire current turn; `buffer` headroom below `max_context_tokens`; `model` summarizer override (empty = session model); `thinking` independent of top-level effort (default `medium` when accepted, cheapest fallback per model) |
+| `[tui]` | table | `max_lines=1000` | Transcript rendering (TUI only). `max_lines` bounds the rendered committed scrollback so the viewport never re-parses an ever-growing transcript (the slowdown after long sessions). Over budget, older turns collapse their reasoning, then reply bodies (user prompts and tool lines are kept), then drop oldest-first behind a `… N earlier turn(s) trimmed` row; disk history stays lossless and ctrl+h/recall views still expand everything. `0` disables trimming |
 | `[input]` | table | `blink=true, height=3` | Chatbox chrome (TUI only): block-cursor blink plus input box height in lines |
 | `tools` | string[] | empty | Subset of `shell`, `web_search`, `web_fetch`, `read`, `write`, `edit`, `glob`, `grep`, `AskUserQuestion`, `todowrite`, `todoread`. `AskUserQuestion` plus `todowrite`/`todoread` plus `task` are also registered automatically when absent, so model-driven questions, the session plan, and subagent delegation work in every frontend |
 | `mcp` | table[] | empty | Each entry needs `name` + `cmd`; optional `args`, `env` |
@@ -326,11 +327,15 @@ explain and ask.
   `read`, `write`, `edit` and `grep` all refuse `.env` secrets. On Linux `.env`
   files are found by scanning the workdir at command start. System reads
   outside `$HOME` (toolchain, `/usr`, libraries) stay allowed so
-  `go test -run 'Test' .`, `go vet` and `gofmt` never prompt.
+  `go test -run 'Test' .`, `go vet` and `gofmt` never prompt. `/etc` is denied
+  wholesale on Darwin so obfuscated reads fail closed; a few world-readable
+  files (`/etc/gitconfig`, `/etc/paths`, `/etc/paths.d`, `/etc/ssl/cert.pem`)
+  are re-allowed read-only and never prompt, while `/etc/passwd` still asks.
 - **Environment**: secret-looking variables (`*_KEY`, `*_TOKEN`, passwords,
   DSNs, `DATABASE_URL`, ...) are stripped from the `sh -c` child, so
   `printenv`/`env` cannot leak valen's own keys or the user's exported secrets.
-- **Network off** (loopback still works) unless the call sets `network: true`;
+- **Network off** (loopback egress works; binding a listener is denied) unless
+  the call sets `network: true`;
   the user is asked once per session.
 - **Ask once per session** before `git push`, `git reset --hard`, `git clean`,
   `rm -r` and `sudo`, and once per folder before explicit outside-workdir

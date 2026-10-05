@@ -75,16 +75,25 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 		fmt.Fprintf(&prof, "(deny file-read* file-write* (subpath (param \"H%d\")))\n", i)
 	}
 	// Git stats its configs on every run; re-allow reads only (writes stay
-	// denied) after the $HOME deny so `git status` works under the sandbox.
+	// denied) after the $HOME and /etc denies so `git status` works under the
+	// sandbox. A directory allow is a subpath (read its contents), a file one a
+	// literal.
 	for i := range p.ReadOnly {
-		fmt.Fprintf(&prof, "(allow file-read* (literal (param \"R%d\")))\n", i)
+		kind := "literal"
+		if fi, err := os.Stat(p.ReadOnly[i]); err == nil && fi.IsDir() {
+			kind = "subpath"
+		}
+		fmt.Fprintf(&prof, "(allow file-read* (%s (param \"R%d\")))\n", kind, i)
 		defs = append(defs, "-D", fmt.Sprintf("R%d=%s", i, p.ReadOnly[i]))
 	}
 	// Tools like git and go lstat every parent of the workdir (/Users/n, ...).
 	// Denying $HOME above also denied that metadata, which made
 	// `git worktree add` fail with "Invalid path '/Users/n'". Allow metadata
-	// only (stat, not listing or reading) on the ancestors of writable roots.
-	for i, a := range ancestorDirs(p.Writable) {
+	// only (stat, not listing or reading) on the ancestors of writable roots
+	// and of re-allowed read-only files (so /etc/gitconfig is reachable; /etc
+	// itself stays unlistable and /etc/passwd unreadable).
+	roots := append(append([]string{}, p.Writable...), p.ReadOnly...)
+	for i, a := range ancestorDirs(roots) {
 		fmt.Fprintf(&prof, "(allow file-read-metadata (literal (param \"A%d\")))\n", i)
 		defs = append(defs, "-D", fmt.Sprintf("A%d=%s", i, a))
 	}

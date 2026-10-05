@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -21,6 +22,7 @@ const (
 	userConfigName     = "config.toml"
 	userConfigOrigName = "config-ori.toml"
 	userStateName      = "state.json"
+	userFavouritesName = "favourites.yaml"
 )
 
 // userConfigDir is $XDG_CONFIG_HOME/valen, or ~/.config/valen.
@@ -149,4 +151,90 @@ func validateModelID(model string) error {
 		return fmt.Errorf("model %q has an unknown provider prefix (OpenRouter models need %q)", model, ProviderOpenRouter+"/vendor/model")
 	}
 	return nil
+}
+
+// favouritesPathFor returns the favourites file beside the state file, or ""
+// when there is no state path (tests, -config <file>): favourites stay
+// session-only then, like model/thinking.
+func favouritesPathFor(statePath string) string {
+	if statePath == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(statePath), userFavouritesName)
+}
+
+// parseFavouriteLine reads one YAML list item ("- glm-5.3"), tolerating
+// indentation, blank lines, comments, optional quotes and inline comments.
+// It returns the normalized model ID, or "" for a line to skip.
+func parseFavouriteLine(line string) string {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return ""
+	}
+	line = strings.TrimSpace(strings.TrimPrefix(line, "-"))
+	if i := strings.Index(line, " #"); i >= 0 {
+		line = strings.TrimSpace(line[:i])
+	}
+	if len(line) >= 2 {
+		if (line[0] == '"' && line[len(line)-1] == '"') || (line[0] == '\'' && line[len(line)-1] == '\'') {
+			line = line[1 : len(line)-1]
+		}
+	}
+	return normalizeModelID(line)
+}
+
+// readFavourites loads the favourites YAML list as a set keyed by normalized
+// model ID. A missing or unreadable file yields an empty set; malformed lines
+// are skipped rather than blocking the picker.
+func readFavourites(path string) map[string]bool {
+	set := map[string]bool{}
+	if path == "" {
+		return set
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return set
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if id := parseFavouriteLine(line); id != "" {
+			set[id] = true
+		}
+	}
+	return set
+}
+
+// saveFavourites writes the set as a sorted YAML list, atomically, so a crash
+// never leaves a truncated file.
+func saveFavourites(path string, set map[string]bool) error {
+	if path == "" {
+		return errors.New("no favourites path")
+	}
+	ids := make([]string, 0, len(set))
+	for id, on := range set {
+		if on && strings.TrimSpace(id) != "" {
+			ids = append(ids, normalizeModelID(id))
+		}
+	}
+	sort.Strings(ids)
+	var b strings.Builder
+	for _, id := range ids {
+		fmt.Fprintf(&b, "- %s\n", id)
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".favourites-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write([]byte(b.String())); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
