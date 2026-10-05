@@ -92,9 +92,48 @@ func withinRoot(root, abs string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// worktreeCacheTTL bounds how stale a worktree list may be. Worktrees get
+// created mid-session, so refresh after this window rather than spawning
+// `git worktree list` on every sandbox build and outside-root access check.
+const worktreeCacheTTL = 2 * time.Second
+
+type worktreeEntry struct {
+	dirs []string
+	at   time.Time
+}
+
+var (
+	worktreeMu    sync.Mutex
+	worktreeCache = map[string]worktreeEntry{}
+)
+
 // siblingWorktrees lists the checkout paths of the root's git repo (main plus
-// linked worktrees). Not cached: worktrees get created mid-session.
+// linked worktrees), memoized briefly: the list is stable between worktree
+// commands but this runs on every shell command and file access check.
 func siblingWorktrees(root string) []string {
+	worktreeMu.Lock()
+	if e, ok := worktreeCache[root]; ok && time.Since(e.at) < worktreeCacheTTL {
+		worktreeMu.Unlock()
+		return e.dirs
+	}
+	worktreeMu.Unlock()
+	dirs := listSiblingWorktrees(root)
+	worktreeMu.Lock()
+	worktreeCache[root] = worktreeEntry{dirs: dirs, at: time.Now()}
+	worktreeMu.Unlock()
+	return dirs
+}
+
+// resetWorktreeCache drops cached lists after a command that can change them
+// (git worktree add/remove/prune), so a new worktree is usable immediately
+// instead of waiting out the TTL.
+func resetWorktreeCache() {
+	worktreeMu.Lock()
+	worktreeCache = map[string]worktreeEntry{}
+	worktreeMu.Unlock()
+}
+
+func listSiblingWorktrees(root string) []string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "git", "-C", root, "worktree", "list", "--porcelain").Output()

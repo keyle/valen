@@ -209,6 +209,9 @@ func ShellTool() Tool {
 			cmd.Stdout = &buf
 			cmd.Stderr = &buf
 			err = cmd.Run()
+			if strings.Contains(a.Command, "worktree") {
+				resetWorktreeCache()
+			}
 			out := strings.TrimSpace(buf.String())
 			var exit *exec.ExitError
 			switch {

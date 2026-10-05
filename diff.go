@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"strings"
+	"sync"
 
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/lexers"
@@ -15,6 +16,25 @@ var (
 	diffDelBg = lipgloss.Color("#3B2030")
 	diffAddBg = lipgloss.Color("#26361C")
 )
+
+// diffStyle and the per-path lexer are hot on every live render, so resolve
+// the style once and each lexer once instead of per frame.
+var (
+	diffStyle   = styles.Get("monokai")
+	diffLexerMu sync.Mutex
+	diffLexers  = map[string]chroma.Lexer{}
+)
+
+func diffLexer(path string) chroma.Lexer {
+	diffLexerMu.Lock()
+	defer diffLexerMu.Unlock()
+	if lx, ok := diffLexers[path]; ok {
+		return lx
+	}
+	lx := lexers.Match(path)
+	diffLexers[path] = lx
+	return lx
+}
 
 // diffPath pulls the file path out of edit/write args so the lexer can be
 // picked from its extension.
@@ -87,6 +107,49 @@ func highlightDiffRows(path string, lines []string, w int) []string {
 	return out
 }
 
+// diffRowKey identifies one highlighted diff block for the memo cache.
+type diffRowKey struct {
+	path string
+	w    int
+	body string
+}
+
+// diffRowCacheMax bounds the memo so a long session cannot grow it without
+// end. Entries are small (one block's rendered rows) and evicted oldest-first.
+const diffRowCacheMax = 128
+
+var (
+	diffRowMu    sync.Mutex
+	diffRows     = map[diffRowKey][]string{}
+	diffRowOrder []diffRowKey
+)
+
+// highlightDiffRowsCached memoizes highlightDiffRows by (path, width, content).
+// The live transcript re-renders running edits/writes on every stream flush,
+// so without this each frame re-lexes the same diff through chroma.
+func highlightDiffRowsCached(path string, lines []string, w int) []string {
+	key := diffRowKey{path: path, w: w, body: strings.Join(lines, "\n")}
+	diffRowMu.Lock()
+	if rows, ok := diffRows[key]; ok {
+		diffRowMu.Unlock()
+		return rows
+	}
+	diffRowMu.Unlock()
+
+	rows := highlightDiffRows(path, lines, w)
+	diffRowMu.Lock()
+	defer diffRowMu.Unlock()
+	if _, ok := diffRows[key]; !ok {
+		diffRows[key] = rows
+		diffRowOrder = append(diffRowOrder, key)
+		if len(diffRowOrder) > diffRowCacheMax {
+			delete(diffRows, diffRowOrder[0])
+			diffRowOrder = diffRowOrder[1:]
+		}
+	}
+	return rows
+}
+
 type styledText struct {
 	text         string
 	fg           lipgloss.Color
@@ -109,7 +172,7 @@ func highlightLines(path, src string) [][]styledText {
 			}
 		}
 	}
-	lx := lexers.Match(path)
+	lx := diffLexer(path)
 	if lx == nil {
 		add(src, mkFg, false, false)
 		return lines
@@ -120,7 +183,7 @@ func highlightLines(path, src string) [][]styledText {
 		add(src, mkFg, false, false)
 		return lines
 	}
-	style := styles.Get("monokai")
+	style := diffStyle
 	for tok := it(); tok != chroma.EOF; tok = it() {
 		e := style.Get(tok.Type)
 		fg := mkFg

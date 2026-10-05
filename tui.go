@@ -1683,14 +1683,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			cmds = append(cmds, cmd)
-			// Keep the live transcript repainting at the ~10fps tick while
-			// a turn runs: open tool threads animate in the scrollback and
-			// the status spinner never goes stale between events. Committed
-			// turns are cached, so this is just the small pending block.
-			m.refreshViewport()
-			if m.mode == viewChat && m.follow {
-				m.viewport.GotoBottom()
-			}
+			// Only the status-line spinner animates on the tick; the scrollback
+			// is refreshed by flushStream on real content changes, so a tick no
+			// longer re-renders (and re-lexes) the whole pending block.
 		}
 		return m, tea.Batch(cmds...)
 
@@ -3367,10 +3362,10 @@ func (m *tuiModel) renderToolLine(tr ToolRecord) string {
 	if tr.Name == "edit" {
 		if del, add, ok := editDiffLines(tr.Args, maxText); ok {
 			out := toolLineStyle.Width(cw).Render(breakLongWords(label, cw-2))
-			for _, ln := range highlightDiffRows(diffPath(tr.Args), del, cw) {
+			for _, ln := range highlightDiffRowsCached(diffPath(tr.Args), del, cw) {
 				out += "\n" + ln
 			}
-			for _, ln := range highlightDiffRows(diffPath(tr.Args), add, cw) {
+			for _, ln := range highlightDiffRowsCached(diffPath(tr.Args), add, cw) {
 				out += "\n" + ln
 			}
 			return out
@@ -3379,7 +3374,7 @@ func (m *tuiModel) renderToolLine(tr ToolRecord) string {
 	if tr.Name == "write" {
 		if lines, ok := writeDiffLines(tr.Args, maxText); ok {
 			out := toolLineStyle.Width(cw).Render(breakLongWords(label, cw-2))
-			for _, ln := range highlightDiffRows(diffPath(tr.Args), lines, cw) {
+			for _, ln := range highlightDiffRowsCached(diffPath(tr.Args), lines, cw) {
 				out += "\n" + ln
 			}
 			return out
@@ -3422,10 +3417,10 @@ func (m *tuiModel) renderPendingTool(t pendingTool) string {
 	if t.name == "edit" {
 		if del, add, ok := editDiffLines(t.args, maxText); ok {
 			out := toolLineStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("%s  %s  %s · running", m.spinner.View(), t.name, summary), cw-2))
-			for _, ln := range highlightDiffRows(diffPath(t.args), del, cw) {
+			for _, ln := range highlightDiffRowsCached(diffPath(t.args), del, cw) {
 				out += "\n" + ln
 			}
-			for _, ln := range highlightDiffRows(diffPath(t.args), add, cw) {
+			for _, ln := range highlightDiffRowsCached(diffPath(t.args), add, cw) {
 				out += "\n" + ln
 			}
 			return out
@@ -3434,7 +3429,7 @@ func (m *tuiModel) renderPendingTool(t pendingTool) string {
 	if t.name == "write" {
 		if lines, ok := writeDiffLines(t.args, maxText); ok {
 			out := toolLineStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("%s  %s  %s · running", m.spinner.View(), t.name, summary), cw-2))
-			for _, ln := range highlightDiffRows(diffPath(t.args), lines, cw) {
+			for _, ln := range highlightDiffRowsCached(diffPath(t.args), lines, cw) {
 				out += "\n" + ln
 			}
 			return out
@@ -3823,7 +3818,7 @@ func (m *tuiModel) renderSessionsList() string {
 		}
 		line = truncateRunes(line+cur, cw)
 		if i == m.cursor {
-			b.WriteString(selectedStyle.Width(cw).Render(line) + "\n")
+			b.WriteString(selectedStyle.Width(cw).Render(" " + line) + "\n")
 		} else {
 			b.WriteString("  " + line + "\n")
 		}
@@ -3862,7 +3857,7 @@ func (m *tuiModel) renderErrorsList() string {
 		t := m.session.Turns[ti]
 		line := truncateRunes(fmt.Sprintf("%2d  %s  %s", i+1, t.At.Format("15:04:05"), t.Error.Title), cw)
 		if i == m.cursor {
-			b.WriteString(selectedStyle.Width(cw).Render(line) + "\n")
+			b.WriteString(selectedStyle.Width(cw).Render(" " + line) + "\n")
 		} else {
 			b.WriteString("  " + line + "\n")
 		}
