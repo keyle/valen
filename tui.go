@@ -55,6 +55,7 @@ var (
 				BorderStyle(lipgloss.NormalBorder()).BorderLeft(true).BorderForeground(mkBorder).
 				PaddingLeft(1)
 	toolLineStyle = lipgloss.NewStyle().Foreground(mkCyan).PaddingLeft(2)
+	toolRunStyle  = lipgloss.NewStyle().Foreground(mkYellow).PaddingLeft(2)
 	toolErrStyle  = lipgloss.NewStyle().Foreground(mkPink).PaddingLeft(2).Bold(true)
 	toolDimStyle  = lipgloss.NewStyle().Foreground(mkComment).PaddingLeft(2)
 	asstHeadStyle = lipgloss.NewStyle().Bold(true).Foreground(mkGreen)
@@ -3395,8 +3396,9 @@ func (m *tuiModel) renderToolLine(tr ToolRecord) string {
 }
 
 // renderPendingTool renders one live tool row. In-flight tools (no result
-// yet) carry the animated spinner frame so concurrent threads are visible
-// in the scrollback; finished tools render the usual line plus preview.
+// yet) read "now: <action>" in yellow; the scrollback no longer redraws on
+// every spinner tick, so an animated glyph there would just freeze mid-frame.
+// Finished tools render the usual line plus preview.
 func (m *tuiModel) renderPendingTool(t pendingTool) string {
 	if t.done {
 		return m.renderToolLine(ToolRecord{Name: t.name, Args: t.args, Output: t.output, DurMs: t.durMs})
@@ -3410,7 +3412,7 @@ func (m *tuiModel) renderPendingTool(t pendingTool) string {
 	// planned list — show the checklist under the running header.
 	if t.name == "todowrite" || t.name == "todoread" {
 		if lines, ok := formatTodoChecklist(t.args); ok {
-			out := toolLineStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("%s  %s · running", m.spinner.View(), t.name), cw-2))
+			out := toolRunStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("now: %s", t.name), cw-2))
 			for _, ln := range lines {
 				out += "\n" + toolDimStyle.Width(cw).Render(breakLongWords(ln, cw-2))
 			}
@@ -3421,7 +3423,7 @@ func (m *tuiModel) renderPendingTool(t pendingTool) string {
 	// A running edit already carries old/new strings — show the diff live.
 	if t.name == "edit" {
 		if del, add, ok := editDiffLines(t.args, maxText); ok {
-			out := toolLineStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("%s  %s  %s · running", m.spinner.View(), t.name, summary), cw-2))
+			out := toolRunStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("now: %s  %s", t.name, summary), cw-2))
 			for _, ln := range highlightDiffRowsCached(diffPath(t.args), del, cw) {
 				out += "\n" + ln
 			}
@@ -3433,16 +3435,16 @@ func (m *tuiModel) renderPendingTool(t pendingTool) string {
 	}
 	if t.name == "write" {
 		if lines, ok := writeDiffLines(t.args, maxText); ok {
-			out := toolLineStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("%s  %s  %s · running", m.spinner.View(), t.name, summary), cw-2))
+			out := toolRunStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("now: %s  %s", t.name, summary), cw-2))
 			for _, ln := range highlightDiffRowsCached(diffPath(t.args), lines, cw) {
 				out += "\n" + ln
 			}
 			return out
 		}
 	}
-	label := fmt.Sprintf("%s  %s  %s · running", m.spinner.View(), t.name, summary)
+	label := fmt.Sprintf("now: %s  %s", t.name, summary)
 	// Tool styles carry PaddingLeft(2), so break two short of cw.
-	return toolLineStyle.Width(cw).Render(breakLongWords(label, cw-2))
+	return toolRunStyle.Width(cw).Render(breakLongWords(label, cw-2))
 }
 
 func (m *tuiModel) renderPending(w int) string {

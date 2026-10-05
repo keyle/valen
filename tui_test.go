@@ -802,7 +802,7 @@ func TestTUICommittedTrimDefaultsTo1000(t *testing.T) {
 	}
 }
 
-func TestTUIPendingRunningToolsShowSpinnerAndCounts(t *testing.T) {
+func TestTUIPendingRunningToolsShowNowMarker(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	m.viewport.Width = 80
 	m.busy = true
@@ -817,32 +817,14 @@ func TestTUIPendingRunningToolsShowSpinnerAndCounts(t *testing.T) {
 		t.Fatalf("parallel running status=%q", m.toolStatus)
 	}
 
-	frame0 := m.spinner.View()
+	// The scrollback no longer redraws on spinner ticks, so live rows read
+	// "now: <action>" instead of a frozen spinner frame.
 	out := m.renderPending(80)
-	if !strings.Contains(out, frame0) || !strings.Contains(out, "running") {
-		t.Fatalf("open threads must show the spinner frame %q:\n%s", frame0, out)
+	if strings.Count(out, "now:") != 2 {
+		t.Fatalf("both open threads should carry the now marker:\n%s", out)
 	}
-	if strings.Count(out, "· running") != 2 {
-		t.Fatalf("both open threads should be marked:\n%s", out)
-	}
-
-	// Spinner ticks advance the frame in the scrollback across consecutive
-	// ticks, not just once.
-	_, _ = m.Update(spinner.TickMsg{})
-	frame1 := m.spinner.View()
-	if frame1 == frame0 {
-		t.Fatal("spinner frame should advance on tick")
-	}
-	if out2 := m.renderPending(80); !strings.Contains(out2, frame1) {
-		t.Fatalf("scrolled frame should track the tick %q:\n%s", frame1, out2)
-	}
-	_, _ = m.Update(spinner.TickMsg{})
-	frame2 := m.spinner.View()
-	if frame2 == frame1 || frame2 == frame0 {
-		t.Fatal("spinner frame should keep advancing across ticks")
-	}
-	if out2b := m.renderPending(80); !strings.Contains(out2b, frame2) {
-		t.Fatalf("scrolled frame should track the second tick %q:\n%s", frame2, out2b)
+	if strings.Contains(out, "· running") {
+		t.Fatalf("open threads must not use the old running label:\n%s", out)
 	}
 
 	_, _ = m.Update(toolEventMsg{kind: "tool_result", text: "web_search", output: "1. release notes"})
@@ -850,8 +832,8 @@ func TestTUIPendingRunningToolsShowSpinnerAndCounts(t *testing.T) {
 		t.Fatalf("partial completion status=%q", m.toolStatus)
 	}
 	out3 := m.renderPending(80)
-	if strings.Count(out3, "· running") != 1 {
-		t.Fatalf("finished thread must lose its spinner:\n%s", out3)
+	if strings.Count(out3, "now:") != 1 {
+		t.Fatalf("finished thread must lose its now marker:\n%s", out3)
 	}
 	if !strings.Contains(out3, "1. release notes") {
 		t.Fatalf("finished thread keeps its preview:\n%s", out3)
@@ -1161,7 +1143,7 @@ func TestTUITodoChecklistInScrollback(t *testing.T) {
 	args := `{"todos":[{"content":"Slice it","status":"completed","priority":"high"},{"content":"Wire UI","status":"in_progress","priority":"medium"}]}`
 	_, _ = m.Update(toolEventMsg{kind: "tool_start", text: "todowrite", args: args})
 	live := m.renderPending(80)
-	for _, want := range []string{"todowrite", "· running", "☑ Slice it", "◐ Wire UI"} {
+	for _, want := range []string{"todowrite", "now:", "☑ Slice it", "◐ Wire UI"} {
 		if !strings.Contains(live, want) {
 			t.Fatalf("live todowrite must checklist %q:\n%s", want, live)
 		}
@@ -1230,7 +1212,7 @@ func TestTUIToolSummariesInScrollback(t *testing.T) {
 	m.pendingPrompt = "fix it"
 	_, _ = m.Update(toolEventMsg{kind: "tool_start", text: "edit", args: editArgs})
 	live := ansi.Strip(m.renderPending(80))
-	for _, want := range []string{"edit", "· running", "- b := 2", "+ b := 3"} {
+	for _, want := range []string{"edit", "now:", "- b := 2", "+ b := 3"} {
 		if !strings.Contains(live, want) {
 			t.Fatalf("live edit must diff %q:\n%s", want, live)
 		}
