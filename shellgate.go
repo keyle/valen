@@ -144,11 +144,15 @@ func approveShell(ctx context.Context, label, command string) error {
 // sandbox still blocks unapproved HOME writes, credential files, .env secrets
 // and (Darwin) /etc reads, so a bypass fails closed instead of leaking.
 // shellObfuscatedPath reports dynamic absolute-path construction the regex
-// above cannot see (`S=$(printf '\057'); cat ${S}etc/passwd`). Safe builds
-// (`go test $(go list ./...)`) use plain `$(go ...)` without these markers
-// and stay unflagged; the markers below (printenv/printf/eval/backtick/${)
-// force a prompt for /etc so silent exfiltration asks first.
+// above cannot see (`S=$(printf '\057'); cat ${S}etc/passwd`). /etc is the only
+// tree hidden wholesale, so a marker alone proves nothing: ordinary expansion
+// (`git diff ${BASE}`, `git show ${REF}`) must not ask to read /etc. Flag only
+// when the command also names etc; an obfuscated /etc read that slips past
+// still hits the kernel deny and fails closed.
 func shellObfuscatedPath(command string) bool {
+	if !strings.Contains(strings.ToLower(command), "etc") {
+		return false
+	}
 	for _, m := range []string{"printenv", "printf", "eval ", "`", "${", "\\057", "\\x2f", "$'"} {
 		if strings.Contains(command, m) {
 			return true
@@ -275,8 +279,10 @@ func shellOutsidePaths(command string) []string {
 		}
 	}
 	// Dynamic path construction asks for /etc: the literal scan above misses
-	// `$vars`/`$(...)`-built absolutes, and the kernel now blocks /etc reads
-	// until approved, so force the prompt here instead of silent success.
+	// `$vars`/`$()`-built absolutes, and the kernel blocks /etc reads until
+	// approved, so force the prompt here instead of a silent failure. Only when
+	// the command names etc, so plain `${VAR}` expansion (`git diff "${BASE}"`)
+	// never asks.
 	if shellObfuscatedPath(command) {
 		add(filepath.Clean("/etc"))
 	}

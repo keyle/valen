@@ -252,6 +252,14 @@ func TestShellOutsidePaths(t *testing.T) {
 		"sed 's/a //' f":  0,
 		"git diff HEAD~1": 0,
 		`ls "/"`:          1,
+		// Variable expansion is not /etc obfuscation: read-only git commands
+		// (and anything else using ${...} or backticks) must not prompt for /etc.
+		"git log ${REF}":                         0,
+		`git diff "${BASE}"`:                     0,
+		"git log --pretty=format:'${FMT}'":       0,
+		"git log --oneline `git rev-parse HEAD`": 0,
+		// Building the slash then naming etc still asks.
+		`S=$(printf '\057'); cat ${S}etc/passwd`: 1,
 	} {
 		if got := len(shellOutsidePaths(cmd)); got != want {
 			t.Errorf("%q -> %d outside paths, want %d (%q)", cmd, got, want, shellOutsidePaths(cmd))
