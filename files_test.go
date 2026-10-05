@@ -404,8 +404,18 @@ func TestShellRunsInFileRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(out) != root {
-		t.Fatalf("pwd=%q root=%q", out, root)
+	// macOS /var is a symlink to /private/var: the shell's pwd reports the
+	// resolved path while t.TempDir returns the unresolved one.
+	want, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := filepath.EvalSymlinks(strings.TrimSpace(out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("pwd=%q root=%q", got, want)
 	}
 }
 

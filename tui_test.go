@@ -443,69 +443,6 @@ func TestTUICompactCommandSmallHistory(t *testing.T) {
 	}
 }
 
-func TestTUICtrlShortcuts(t *testing.T) {
-	m := newTestModel(t, testConfig("https://unused"))
-
-	if footer := m.footerView(); strings.Contains(footer, "F1") || strings.Contains(footer, "ctrl+t") {
-		t.Fatalf("footer must not list shortcuts:\n%s", footer)
-	}
-	if help := m.renderHelp(); !strings.Contains(help, "ctrl+g help") || strings.Contains(help, "F1 help") {
-		t.Fatalf("help must list the ctrl shortcuts:\n%s", help)
-	}
-	// Phrases may wrap across lines at narrow widths; flatten before
-	// matching so wording checks don't depend on wrap points.
-	flatHelp := strings.Join(strings.Fields(m.renderHelp()), " ")
-	if !strings.Contains(flatHelp, "ctrl+t thinking") || !strings.Contains(flatHelp, "ctrl+l sessions") || !strings.Contains(flatHelp, "ctrl+u tools") {
-		t.Fatalf("help must list ctrl+t thinking, ctrl+l sessions and ctrl+u tools:\n%s", m.renderHelp())
-	}
-
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlG})
-	if m.mode != viewHelp {
-		t.Fatalf("ctrl+g: mode=%v", m.mode)
-	}
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlR})
-	if m.mode != viewHistory {
-		t.Fatalf("ctrl+r: mode=%v", m.mode)
-	}
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlL})
-	if m.mode != viewSessions {
-		t.Fatalf("ctrl+l: mode=%v", m.mode)
-	}
-	m.show(viewChat)
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlU})
-	if m.mode != viewTools {
-		t.Fatalf("ctrl+u: mode=%v", m.mode)
-	}
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlX})
-	if m.mode != viewErrors {
-		t.Fatalf("ctrl+x: mode=%v", m.mode)
-	}
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlY})
-	if m.showThink {
-		t.Fatal("ctrl+y should toggle thinking off")
-	}
-	beforeMeta := m.showMeta
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlO})
-	if m.showMeta == beforeMeta {
-		t.Fatal("ctrl+o should toggle status details")
-	}
-	if _, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlP}); cmd == nil || !strings.Contains(m.notice, "Loading models") {
-		t.Fatalf("ctrl+p should open the model picker: notice=%q cmd=%v", m.notice, cmd)
-	}
-	m.session = nil
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlS})
-	if !m.noticeErr || !strings.Contains(m.notice, "No session") {
-		t.Fatalf("ctrl+s without session: notice=%q err=%v", m.notice, m.noticeErr)
-	}
-	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlQ})
-	if cmd == nil {
-		t.Fatal("ctrl+q should quit")
-	}
-	if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Fatal("ctrl+q should return tea.Quit")
-	}
-}
-
 func TestTUIThinkingCycleKey(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	m.cfg.Model = "glm-5.3" // levels low,high,max

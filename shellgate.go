@@ -130,7 +130,15 @@ func shellObfuscatedPath(command string) bool {
 	return false
 }
 
-var outsidePathRe = regexp.MustCompile("~(?:/[^\\s'\"`;|&()<>$\\\\]*)?|/(?:[^/\\s'\"`;|&()<>$\\\\][^\\s'\"`;|&()<>$\\\\]*)?")
+// outsidePathRe captures an absolute path (`/x/y`) or ~-home path that starts
+// at a word boundary (group 1). Without the boundary `./...`, `foo/bar` and
+// `HEAD~1` would match mid-word. `)` is deliberately not a boundary, so the
+// `/` in `"$(pwd)/"` is a suffix, not a path.
+var outsidePathRe = regexp.MustCompile("(?:^|[\\s\"'=:,(<>|;&])(~(?:/[^\\s'\"`;|&()<>$\\\\]*)?|/[^\\s'\"`;|&()<>$\\\\]+)")
+
+// rootPathRe matches the filesystem root only as a whole shell word (`ls /`,
+// `ls "/"`), never as the tail of `"$PWD"/` or `"$(pwd)/"`.
+var rootPathRe = regexp.MustCompile(`(?:^|[\s;|&(])["']?/["']?(?:$|[\s;|&)])`)
 
 // shellSafePrefixes are absolute prefixes that never trigger an outside
 // prompt: device nodes (`-o /dev/null`), the system toolchain, and tool
@@ -190,34 +198,11 @@ func shellOutsidePaths(command string) []string {
 		}
 		out = append(out, abs)
 	}
-	for _, loc := range outsidePathRe.FindAllStringIndex(command, -1) {
-		m := command[loc[0]:loc[1]]
-		// Skip `/...` inside `./...` and `/bar` inside `foo/bar`: absolute
-		// paths start at a boundary, not mid-word after `.` or alphanumerics.
-		if strings.HasPrefix(m, "/") && loc[0] > 0 {
-			if prev := command[loc[0]-1]; prev == '.' || prev == '/' ||
-				prev == '-' || prev == '_' ||
-				(prev >= '0' && prev <= '9') ||
-				(prev >= 'a' && prev <= 'z') || (prev >= 'A' && prev <= 'Z') {
-				continue
-			}
-		}
-		// A bare `/` glued onto an expansion or a closing quote is a path
-		// suffix, not the filesystem root: `"$(pwd)/"`, `"$PWD"/x`,
-		// `"$(git rev-parse --show-toplevel)"/f`. Treating it as `/` would
-		// prompt for (and on approval grant) the entire disk.
-		if m == "/" && loc[0] > 0 {
-			switch prev := command[loc[0]-1]; prev {
-			case ')', '}':
-				continue
-			case '"', '\'', '`':
-				// Only a closing quote (odd count before it); `ls "/"`
-				// opens the quote and really names the root.
-				if strings.Count(command[:loc[0]-1], string(prev))%2 == 1 {
-					continue
-				}
-			}
-		}
+	if rootPathRe.MatchString(command) {
+		add("/")
+	}
+	for _, sm := range outsidePathRe.FindAllStringSubmatch(command, -1) {
+		m := sm[1]
 		var abs string
 		switch {
 		case m == "~" || strings.HasPrefix(m, "~/"):
@@ -226,16 +211,10 @@ func shellOutsidePaths(command string) []string {
 			}
 			abs = filepath.Clean(filepath.Join(home, strings.TrimPrefix(m, "~")))
 		case strings.HasPrefix(m, "/"):
-			if m == "/" {
-				abs = "/"
-				break
-			}
-			// Skip lone `/` in `2>&1`-style redirection noise and
-			// single-char matches that are almost never real paths.
-			if len(m) < 2 {
+			abs = filepath.Clean(m)
+			if abs == "/" { // `//` as in sed s//x/; real root is rootPathRe's job
 				continue
 			}
-			abs = filepath.Clean(m)
 			// `grep -v /vendor/` is a pattern, not a path: a real absolute
 			// path starts in an existing top-level entry (/etc, /tmp,
 			// /Users, ...). The sandbox is read-only for anything missing.

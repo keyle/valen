@@ -227,8 +227,10 @@ func TestShellOutsidePaths(t *testing.T) {
 		`cd "$(pwd)/" && ls`:                          0,
 		`ls "$PWD"/`:                                  0,
 		`ls "$(git rev-parse --show-toplevel)"/x`:     0,
-		"ls /":   1,
-		`ls "/"`: 1,
+		"ls /":            1,
+		"sed 's/a //' f":  0,
+		"git diff HEAD~1": 0,
+		`ls "/"`:          1,
 	} {
 		if got := len(shellOutsidePaths(cmd)); got != want {
 			t.Errorf("%q -> %d outside paths, want %d (%q)", cmd, got, want, shellOutsidePaths(cmd))
