@@ -1986,6 +1986,13 @@ func TestViewCentersCappedColumn(t *testing.T) {
 		t.Fatalf("columnWidth = %d, want %d", got, maxColumnWidth)
 	}
 	pad := (200 - maxColumnWidth) / 2
+	// Strip SGR color codes before layout assertions: with color forced
+	// (e.g. CLICOLOR_FORCE=1 or CI) the border carries escape sequences,
+	// but the centering geometry is what this test pins down.
+	strip := func(s string) string {
+		re := regexp.MustCompile("\x1b\\[[0-9;]*m")
+		return re.ReplaceAllString(s, "")
+	}
 	lines := strings.Split(m.View(), "\n")
 	for i, l := range lines {
 		if w := lipgloss.Width(l); w > pad+maxColumnWidth {
@@ -1995,7 +2002,7 @@ func TestViewCentersCappedColumn(t *testing.T) {
 	// The input box top border sits at the left edge of the column.
 	var found bool
 	for _, l := range lines {
-		if strings.HasPrefix(l, strings.Repeat(" ", pad)+"╭") {
+		if strings.HasPrefix(strip(l), strings.Repeat(" ", pad)+"╭") {
 			found = true
 		}
 	}
@@ -2009,7 +2016,7 @@ func TestViewCentersCappedColumn(t *testing.T) {
 		t.Fatalf("narrow columnWidth = %d", m.columnWidth())
 	}
 	for _, l := range strings.Split(m.View(), "\n") {
-		if strings.HasPrefix(l, " ╭") || strings.HasPrefix(l, "  ╭") {
+		if s := strip(l); strings.HasPrefix(s, " ╭") || strings.HasPrefix(s, "  ╭") {
 			t.Fatalf("unexpected padding on narrow terminal: %q", l)
 		}
 	}
