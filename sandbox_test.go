@@ -118,18 +118,38 @@ func TestSandboxFollowsApprovedFolder(t *testing.T) {
 	if _, err := os.Stat(target); err == nil {
 		t.Fatal("should be blocked before approval")
 	}
-	// Same approval path as the file tools: one answer covers the folder.
+	// Same approval path as the file tools: one write answer covers the folder.
 	defer stubPrompter("Allow", nil)()
 	seed := filepath.Join(dir, "seed.txt")
-	if err := os.WriteFile(seed, []byte("s"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ReadTool().Fn(context.Background(), `{"path":`+quoteJSON(seed)+`}`); err != nil {
+	if _, err := WriteTool().Fn(context.Background(), `{"path":`+quoteJSON(seed)+`,"content":"s"}`); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 	sh(t, "echo yes > "+target)
 	if b, err := os.ReadFile(target); err != nil || strings.TrimSpace(string(b)) != "yes" {
 		t.Fatalf("approved folder should be writable: %q %v", b, err)
+	}
+}
+
+// A read approval must not silently grant write: the folder stays readable,
+// but writes ask separately and are denied here (no prompter).
+func TestReadApprovalDoesNotGrantWrite(t *testing.T) {
+	useTempRoot(t)
+	dir := outsideDir(t)
+	seed := filepath.Join(dir, "seed.txt")
+	if err := os.WriteFile(seed, []byte("s"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	restore := stubPrompter("Allow", nil)
+	if _, err := ReadTool().Fn(ctx, `{"path":`+quoteJSON(seed)+`}`); err != nil {
+		t.Fatalf("read approval: %v", err)
+	}
+	restore()
+	if err := checkFileAccess(ctx, "read", seed); err != nil {
+		t.Fatalf("read approval should persist: %v", err)
+	}
+	if err := checkFileAccess(ctx, "write", filepath.Join(dir, "new.txt")); err == nil {
+		t.Fatal("read approval must not grant write")
 	}
 }
 
@@ -308,6 +328,30 @@ func TestSandboxHidesDotEnvFiles(t *testing.T) {
 	}
 	if out := sh(t, "cat .env.example"); out != "TOKEN=" {
 		t.Fatalf("template should stay readable, out=%q", out)
+	}
+}
+
+// Shell must not see a secret .env through an innocently-named link: the file
+// tools follow links via blocksSecret, and the kernel profile/mask must too.
+func TestSandboxHidesDotEnvThroughLink(t *testing.T) {
+	requireShellSandbox(t)
+	root := useTempRoot(t)
+	env := filepath.Join(root, ".env")
+	if err := os.WriteFile(env, []byte("TOKEN=abc"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "innocent.txt")
+	if err := os.Symlink(env, link); err != nil {
+		t.Fatal(err)
+	}
+	if out := sh(t, "cat innocent.txt 2>&1"); strings.Contains(out, "abc") {
+		t.Fatalf(".env leaked through a symlink: %q", out)
+	}
+	hard := filepath.Join(root, "hard.txt")
+	if err := os.Link(env, hard); err == nil {
+		if out := sh(t, "cat hard.txt 2>&1"); strings.Contains(out, "abc") {
+			t.Fatalf(".env leaked through a hardlink: %q", out)
+		}
 	}
 }
 

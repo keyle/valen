@@ -3,8 +3,9 @@ package main
 // Shell sandbox. Every `shell` command runs under an OS-enforced policy:
 //
 //   - writes only inside the workdir, sibling git worktrees, folders the user
-//     approved this session (see checkFileAccess), shared /tmp, the private
-//     temp dir and tool caches;
+//     approved for write this session (see checkFileAccess), shared /tmp, the
+//     private temp dir and tool caches. Read approvals re-expose reads only;
+//     a read approval never grants writes;
 //   - $HOME is hidden (reads and writes ask first via gateShell), as are
 //     credential files (~/.ssh, ~/.aws, ~/.netrc, ... and any .env* secrets,
 //     reads and writes; templates stay readable);
@@ -33,6 +34,7 @@ const sharedTmp = "/tmp"
 type sandboxPolicy struct {
 	Root         string
 	Writable     []string // existing dirs shell may write to
+	Readable     []string // existing dirs shell may read but not write (read-only approvals)
 	ReadOnly     []string // existing files shell may read but not write (git configs)
 	Hidden       []string // existing files/dirs shell cannot read or write
 	SystemHidden []string // system paths shell cannot read (approvable via folder approval)
@@ -83,8 +85,9 @@ func looksNetworkDenied(out string) bool {
 // the policy as it stands now (approvals made mid-session are picked up).
 func sandboxCommand(ctx context.Context, command string, network bool) (*exec.Cmd, error) {
 	name, args, err := sandboxArgv(command, sandboxPolicy{
-		Root: getFileRoot(), Writable: writableRoots(), ReadOnly: gitReadOnlyPaths(),
-		Hidden: hiddenPaths(), SystemHidden: systemHiddenPaths(), Network: network,
+		Root: getFileRoot(), Writable: writableRoots(), Readable: readableRoots(),
+		ReadOnly: gitReadOnlyPaths(),
+		Hidden:   hiddenPaths(), SystemHidden: systemHiddenPaths(), Network: network,
 	})
 	if err != nil {
 		return nil, err
@@ -99,10 +102,25 @@ func sandboxCommand(ctx context.Context, command string, network bool) (*exec.Cm
 // needs them: valen's own HTTP calls keep using the process env, only the
 // sandboxed `sh -c` child gets the scrubbed copy, so `printenv`/`env` can't
 // leak them even via `$VAR`/obfuscated construction that gateShell can't see.
+// The match is token-based (see sensitiveEnvKey) so PATH != PAT and
+// SSH_AUTH_SOCK != AUTH.
 func sensitiveEnvKey(key string) bool {
 	u := strings.ToUpper(key)
-	for _, sub := range []string{"KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIALS"} {
-		if strings.Contains(u, sub) {
+	switch u {
+	// Not secret despite a matching token: keep so git/ssh keep working.
+	case "SSH_AUTH_SOCK", "SSH_AGENT_PID", "PWD", "OLDPWD":
+		return false
+	}
+	for _, s := range []string{"KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "PRIVATE"} {
+		if strings.Contains(u, s) {
+			return true
+		}
+	}
+	for _, t := range strings.FieldsFunc(u, func(r rune) bool {
+		return r == '_' || r == '-' || r == '.' || r == '/' || r == ':'
+	}) {
+		switch t {
+		case "PASS", "PWD", "PAT", "AUTH", "URL", "DSN", "SK", "BEARER":
 			return true
 		}
 	}
@@ -130,24 +148,62 @@ func scrubShellEnv() []string {
 // for git worktrees: `git worktree add /tmp/<name>`). /var/tmp is not. The
 // private per-user temp dir (os.TempDir, /var/folders/... on macOS, used by
 // t.TempDir and go builds) stays writable so `go test` never prompts.
+// Environment-derived roots (TMPDIR, GOCACHE) that would re-expose $HOME are
+// dropped; explicit user approvals are honored even when broad.
 func writableRoots() []string {
 	root := getFileRoot()
+	home, _ := os.UserHomeDir()
 	c := []string{root, os.TempDir(), sharedTmp, os.Getenv("GOCACHE")}
-	approvedMu.Lock()
-	for dir := range approvedOutside {
-		c = append(c, dir)
-	}
-	approvedMu.Unlock()
-	c = append(c, siblingWorktrees(root)...)
 	if cd, err := os.UserCacheDir(); err == nil {
 		c = append(c, cd)
 	}
-	if home, err := os.UserHomeDir(); err == nil {
+	if home != "" {
 		for _, d := range []string{"go", ".cache", ".npm", ".cargo"} {
 			c = append(c, filepath.Join(home, d))
 		}
 	}
+	c = dropBroadRoots(c, home)
+	approvedMu.Lock()
+	for dir := range approvedWritable {
+		c = append(c, dir)
+	}
+	approvedMu.Unlock()
+	c = append(c, siblingWorktrees(root)...)
 	return existingDirs(c)
+}
+
+// readableRoots lists folders approved for read this session; writable
+// approvals are already re-exposed by writableRoots.
+func readableRoots() []string {
+	approvedMu.Lock()
+	c := make([]string, 0, len(approvedRead))
+	for dir := range approvedRead {
+		c = append(c, dir)
+	}
+	approvedMu.Unlock()
+	return existingDirs(c)
+}
+
+// dropBroadRoots removes implicit roots that equal $HOME or contain it (an
+// ancestor such as GOCACHE=$HOME or a TMPDIR above the home dir). Binding one
+// would erase the home confinement.
+func dropBroadRoots(paths []string, home string) []string {
+	if home == "" {
+		return paths
+	}
+	h := real(home)
+	out := paths[:0]
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		rp := real(p)
+		if rp == h || withinRoot(rp, h) {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // ancestorDirs returns the sorted, de-duplicated proper ancestors of dirs
@@ -187,6 +243,24 @@ func hiddenPaths() []string {
 		".local/share/valen", ".bash_history", ".zsh_history", ".zshrc", ".bashrc"} {
 		c = append(c, filepath.Join(home, d))
 	}
+	// Sibling user homes: only the current user's home is denied above, so
+	// other accounts' dirs (and their credentials) would otherwise stay
+	// readable by default. Hide them too, except one that contains the
+	// workdir. Restricted to the standard /Users and /home parents so temp
+	// dirs that merely happen to be siblings are left alone.
+	parent := filepath.Dir(home)
+	if parent != "/" && parent != home && (filepath.Base(parent) == "Users" || filepath.Base(parent) == "home") {
+		root := real(getFileRoot())
+		if entries, err := os.ReadDir(parent); err == nil {
+			for _, e := range entries {
+				p := filepath.Join(parent, e.Name())
+				if !e.IsDir() || real(p) == real(home) || withinRoot(real(p), root) {
+					continue
+				}
+				c = append(c, p)
+			}
+		}
+	}
 	return existing(c, false)
 }
 
@@ -219,7 +293,8 @@ func gitReadOnlyPaths() []string {
 // string-matching gate and read /etc with no prompt. Denying /etc here
 // fails closed: direct `cat /etc/passwd` still asks, obfuscated reads now
 // hit "Operation not permitted", and an approved /etc folder is re-allowed
-// via writableRoots (later rules win on Darwin; bind after mask on Linux).
+// via readableRoots on a read approval (later rules win on Darwin; bind after
+// mask on Linux).
 func systemHiddenPaths() []string {
 	return existing([]string{"/etc", real("/etc")}, true)
 }

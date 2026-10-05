@@ -351,8 +351,8 @@ forwards `text_delta` / `thinking_delta` via `prog.Send(toolEventMsg)` plus
 `tool_start` (with args) / `tool_result` (with output); `Update` accumulates a
 `pendingTools` timeline plus `pendingText` / `pendingThinking` and re-renders
 the pending block throttled with the viewport pinned to the bottom. Text
-fragments concatenate exactly, without inserted newlines; every thinking
-addition starts on its own line. Rolling
+fragments concatenate exactly, without inserted newlines; the first delta of
+a new reasoning part starts on its own line. Rolling
 32768-byte buffers keep the newest UTF-8-safe tail instead of freezing at the
 cap; only a short tail is displayed live. On commit the full reply renders as
 markdown. Display buffers are not provider-native reasoning replay state.

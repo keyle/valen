@@ -348,8 +348,8 @@ func TestTUINewSessionMintsBlankID(t *testing.T) {
 	if len(m.history) != 1 || len(m.session.Turns) != 0 || m.session.TotalUsage.Total != 0 {
 		t.Fatalf("fresh session must reset memory: history=%d turns=%d usage=%+v", len(m.history), len(m.session.Turns), m.session.TotalUsage)
 	}
-	if m.pendingText != "" || m.input.Value() != "" || m.chatCacheTurns != 0 || m.chatCache != "" {
-		t.Fatalf("pending/live state not released: text=%q input=%q cache=%q/%d", m.pendingText, m.input.Value(), m.chatCache, m.chatCacheTurns)
+	if m.pendingText != "" || m.input.Value() != "" || m.chatCacheTurns != 0 || len(m.chatCache) != 0 {
+		t.Fatalf("pending/live state not released: text=%q input=%q cache=%d turns/%d", m.pendingText, m.input.Value(), len(m.chatCache), m.chatCacheTurns)
 	}
 	if _, err := os.Stat(oldPath); err != nil {
 		// Old file may not exist (nothing committed) — but the pointer must
@@ -766,22 +766,21 @@ func TestTUIStatusShowsPhase(t *testing.T) {
 }
 
 func TestAppendThinkingDeltaBoundaries(t *testing.T) {
-	// Every new addition starts on its own line so updates never pile
-	// onto the same line.
+	// Fragments within one part concatenate exactly (no shredding).
 	s, cur := appendThinkingDelta("", "Hel", 0, 0)
 	s, cur = appendThinkingDelta(s, "lo", 0, cur)
-	if s != "Hel\nlo" || cur != 0 {
-		t.Fatalf("addition missing newline: %q/%d", s, cur)
+	if s != "Hello" || cur != 0 {
+		t.Fatalf("fragments glued wrong: %q/%d", s, cur)
 	}
-	// A new part also starts on its own line.
+	// A new part starts on its own line.
 	s, cur = appendThinkingDelta(s, "Reading config", 1, cur)
-	if s != "Hel\nlo\nReading config" || cur != 1 {
+	if s != "Hello\nReading config" || cur != 1 {
 		t.Fatalf("part boundary missing newline: %q/%d", s, cur)
 	}
-	// Same part continues on its own line too.
+	// Same part continues on the same line without another break.
 	s, cur = appendThinkingDelta(s, " more", 1, cur)
-	if s != "Hel\nlo\nReading config\n more" {
-		t.Fatalf("continuation glued: %q", s)
+	if s != "Hello\nReading config more" {
+		t.Fatalf("continuation broke: %q", s)
 	}
 	// No doubled newlines when either side already breaks.
 	s, cur = appendThinkingDelta("a\n", "b", 1, 0)
@@ -799,34 +798,51 @@ func TestAppendThinkingDeltaBoundaries(t *testing.T) {
 	}
 }
 
-// TestTUIThinkingPartsSeparateLiveLines: every reasoning update lands on
-// its own line in the live view (muse streams status-like updates with
-// no trailing newline, which used to glue into one wrapped line).
+// TestTUIThinkingPartsSeparateLiveLines: the first update of a new reasoning
+// part lands on its own line in the live view, matching the committed join of
+// final summary parts; fragments that share a part concatenate exactly.
 func TestTUIThinkingPartsSeparateLiveLines(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	_, _ = m.Update(toolEventMsg{kind: "thinking_delta", text: "Checking the repo layout", idx: 0})
 	_, _ = m.Update(toolEventMsg{kind: "thinking_delta", text: "Reading the config file", idx: 1})
 	if m.pendingThinking != "Checking the repo layout\nReading the config file" {
-		t.Fatalf("live thinking glued: %q", m.pendingThinking)
+		t.Fatalf("live thinking glued across parts: %q", m.pendingThinking)
 	}
-	// Same-part updates separate too, not just part boundaries.
+	// Same-part fragments concatenate exactly; only a part boundary breaks.
 	m2 := newTestModel(t, testConfig("https://unused"))
 	_, _ = m2.Update(toolEventMsg{kind: "thinking_delta", text: "Checking the repo layout", idx: 0})
-	_, _ = m2.Update(toolEventMsg{kind: "thinking_delta", text: "Reading the config file", idx: 0})
-	if m2.pendingThinking != "Checking the repo layout\nReading the config file" {
-		t.Fatalf("live thinking glued on same part: %q", m2.pendingThinking)
+	_, _ = m2.Update(toolEventMsg{kind: "thinking_delta", text: " and more", idx: 0})
+	if m2.pendingThinking != "Checking the repo layout and more" {
+		t.Fatalf("same-part fragments shredded: %q", m2.pendingThinking)
 	}
 }
 
-// TestTUICommittedThinkingKeepsLiveLineReturns: the success-path commit
-// must keep the newline-separated streamed thinking for display instead
-// of the exactly-concatenated authoritative reply (which glues additions
-// into one wrapped line in scrollback). Replay history stays exact.
-func TestTUICommittedThinkingKeepsLiveLineReturns(t *testing.T) {
+// TestThinkingFragmentsJoinIntoProse: reasoning arrives as short multi-word
+// fragments (DeepSeek-style). They must concatenate into one flowing thought,
+// not one line per delta.
+func TestThinkingFragmentsJoinIntoProse(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	frags := []string{
+		"passing", " network=true triggers", " the ask", ". Avoiding",
+		" silly", " prompts means", ": don't invoke", " network", "=true",
+	}
+	for _, frag := range frags {
+		_, _ = m.Update(toolEventMsg{kind: "thinking_delta", text: frag, idx: 0})
+	}
+	want := "passing network=true triggers the ask. Avoiding silly prompts means: don't invoke network=true"
+	if m.pendingThinking != want {
+		t.Fatalf("reasoning shredded:\n got %q\nwant %q", m.pendingThinking, want)
+	}
+}
+
+// TestTUICommittedThinkingKeepsStreamedText: the success-path commit must
+// keep the streamed thinking buffer for display; replay history keeps the
+// exactly-concatenated authoritative reasoning.
+func TestTUICommittedThinkingKeepsStreamedText(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"Checking the repo layout\"}}]}\n\n")
-		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"Reading the config file\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\" and reading the config\"}}]}\n\n")
 		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 	}))
 	defer srv.Close()
@@ -836,33 +852,30 @@ func TestTUICommittedThinkingKeepsLiveLineReturns(t *testing.T) {
 		t.Fatalf("turns: %+v", m.session.Turns)
 	}
 	turn := m.session.Turns[0]
-	if turn.Thinking != "Checking the repo layout\nReading the config file" {
-		t.Fatalf("committed thinking glued: %q", turn.Thinking)
+	if turn.Thinking != "Checking the repo layout and reading the config" {
+		t.Fatalf("committed thinking altered: %q", turn.Thinking)
 	}
 	if turn.Reply != "done" {
 		t.Fatalf("reply: %q", turn.Reply)
 	}
 	// History keeps the exact concatenation for provider replay.
 	last := m.history[len(m.history)-1]
-	if last.ReasoningContent != "Checking the repo layoutReading the config file" {
+	if last.ReasoningContent != "Checking the repo layout and reading the config" {
 		t.Fatalf("replay reasoning altered: %q", last.ReasoningContent)
 	}
-	if !strings.Contains(m.renderChat(), "Checking the repo layout") || !strings.Contains(m.renderChat(), "Reading the config file") {
+	if !strings.Contains(m.renderChat(), "Checking the repo layout and reading the config") {
 		t.Fatalf("scrollback missing thinking:\n%s", m.renderChat())
 	}
 }
 
-// TestThinkingRoundsKeepLineReturnBetweenAdditions: every thinking round
-// (each thinking_delta addition) must land on its own line in the
-// committed turn, not glued onto the previous round's text. Regression
-// test: the success-path commit once overwrote the newline-separated
-// live buffer with the exactly-concatenated reply.
-func TestThinkingRoundsKeepLineReturnBetweenAdditions(t *testing.T) {
+// TestThinkingFragmentsJoinWithinRound: fragments in one round join into a
+// single flowing thought instead of one line per delta.
+func TestThinkingFragmentsJoinWithinRound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"first round\"}}]}\n\n")
-		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"second round\"}}]}\n\n")
-		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"third round\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\" second part\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\" third part\"}}]}\n\n")
 		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 	}))
 	defer srv.Close()
@@ -871,15 +884,8 @@ func TestThinkingRoundsKeepLineReturnBetweenAdditions(t *testing.T) {
 	if len(m.session.Turns) != 1 {
 		t.Fatalf("turns: %+v", m.session.Turns)
 	}
-	thinking := m.session.Turns[0].Thinking
-	lines := strings.Split(thinking, "\n")
-	if len(lines) != 3 || lines[0] != "first round" || lines[1] != "second round" || lines[2] != "third round" {
-		t.Fatalf("thinking rounds not one-per-line: %q", thinking)
-	}
-	for _, glued := range []string{"first roundsecond", "second roundthird"} {
-		if strings.Contains(thinking, glued) {
-			t.Fatalf("thinking rounds glued: %q", thinking)
-		}
+	if thinking := m.session.Turns[0].Thinking; thinking != "first round second part third part" {
+		t.Fatalf("thinking fragments not joined: %q", thinking)
 	}
 }
 

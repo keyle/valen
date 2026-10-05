@@ -43,6 +43,11 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 	for _, w := range p.Writable {
 		args = append(args, "--bind", w, w)
 	}
+	// Read-only approvals re-expose a folder over the masked $HOME without
+	// granting writes; hidden masks below still win for credential paths.
+	for _, r := range p.Readable {
+		args = append(args, "--ro-bind", r, r)
+	}
 	for _, h := range p.Hidden {
 		if home != "" && (h == home || h == real(home)) {
 			continue

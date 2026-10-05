@@ -71,6 +71,18 @@ thinking = "high"
 # keep_tokens = 15000             # soft whole-turn tail target; entire current turn always kept; threshold keep*3.
 # buffer = 30000                  # headroom below max_context_tokens; default 10% of the budget.
 
+[tui]                           # transcript rendering (TUI only).
+# max_lines = 1000              # rendered committed-transcript line budget.
+                                # Long sessions otherwise rebuild an ever-
+                                # growing scrollback every ~60ms and slow the
+                                # TUI down. Over budget, older turns collapse
+                                # their reasoning then reply bodies (user
+                                # prompts and tool lines are kept; a "… N
+                                # earlier turns trimmed" row marks any dropped
+                                # turns). Disk history stays lossless and
+                                # ctrl+h/recall views still expand everything.
+                                # 0 (or less) disables trimming.
+
 # NOTE: [input] must stay the last table in this file. In TOML every key
 # after a [table] header belongs to that table, so top-level keys placed
 # below it decode as input.* and fail strict loading.

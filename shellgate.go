@@ -69,12 +69,35 @@ func gateShell(ctx context.Context, command string, network bool) error {
 			return err
 		}
 	}
+	op := "use"
+	if shellLooksWrite(command) {
+		op = "write"
+	}
 	for _, abs := range shellOutsidePaths(command) {
-		if err := checkFileAccess(ctx, "use", abs); err != nil {
+		if err := checkFileAccess(ctx, op, abs); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// fdDupRe matches file-descriptor duplication (`2>&1`, `>&2`, `>&-`), which
+// is not a write to a file. Anything else containing `>` is a redirect.
+var fdDupRe = regexp.MustCompile(`\d*>&\d*-?`)
+
+// writeCmdRe matches write-capable commands at a command position (after the
+// start, a pipe, or a separator), so `grep form x` is not mistaken for `rm`.
+var writeCmdRe = regexp.MustCompile(`(^|[|;&(]\s*)(tee|cp|mv|mkdir|touch|rm|chmod|chown|ln|truncate|dd|install)\b`)
+
+// shellLooksWrite reports whether a command likely writes to an outside path
+// (a file redirect or a write-capable command), so approving it grants read
+// and write rather than read only. Best-effort like the rest of the gate; the
+// kernel is the boundary.
+func shellLooksWrite(command string) bool {
+	if strings.Contains(fdDupRe.ReplaceAllString(command, ""), ">") {
+		return true
+	}
+	return writeCmdRe.MatchString(command)
 }
 
 func approveShell(ctx context.Context, label, command string) error {
@@ -183,14 +206,9 @@ func shellOutsidePaths(command string) []string {
 		if withinRoot(root, abs) || inSiblingWorktree(root, abs) {
 			return
 		}
-		approvedMu.Lock()
-		for dir := range approvedOutside {
-			if withinRoot(dir, abs) {
-				approvedMu.Unlock()
-				return
-			}
+		if allowedWithoutPrompt(root, abs) {
+			return
 		}
-		approvedMu.Unlock()
 		for _, s := range safe {
 			if s != "" && withinRoot(s, abs) {
 				return

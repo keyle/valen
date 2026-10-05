@@ -98,6 +98,7 @@ type Config struct {
 	Tools       []string         `toml:"tools"`
 	MCPServers  []MCPServer      `toml:"mcp"`
 	Compaction  CompactionConfig `toml:"compaction"`
+	TUI         TUIConfig        `toml:"tui"`
 	Input       InputConfig      `toml:"input"`
 }
 
@@ -113,6 +114,30 @@ type CompactionConfig struct {
 	Buffer     int    `toml:"buffer"`
 	Model      string `toml:"model"`
 	Thinking   string `toml:"thinking"`
+}
+
+// TUIConfig mirrors the [tui] table: transcript rendering (TUI only).
+// MaxLines nil means the 1000-line default; 0 or less disables trimming.
+// When the rendered committed transcript exceeds the cap, older turns
+// collapse their reasoning/reply bodies (user prompts and tool lines stay)
+// and, if needed, the oldest turns drop from scrollback. History on disk
+// stays lossless and the recall views still expand everything.
+type TUIConfig struct {
+	MaxLines *int `toml:"max_lines"`
+}
+
+// defaultTUIMaxLines bounds the rendered committed transcript so the
+// viewport never re-parses an ever-growing scrollback (the TUI slowdown
+// after long sessions). Reasoning collapses first; prompts/tools survive.
+const defaultTUIMaxLines = 1000
+
+// tuiMaxLines is the transcript line budget: the default when unset, else
+// the configured value (0 or less means unlimited).
+func tuiMaxLines(cfg Config) int {
+	if cfg.TUI.MaxLines == nil {
+		return defaultTUIMaxLines
+	}
+	return *cfg.TUI.MaxLines
 }
 
 // InputConfig mirrors the [input] table: chatbox chrome (TUI only).
@@ -450,9 +475,9 @@ type Event struct {
 	// DurMs carries wall execution time on tool_result.
 	DurMs int64
 	// Index carries the reasoning part index on thinking_delta (Responses
-	// summary_index, messages content-block index). The live view starts
-	// every thinking addition on its own line; the index is retained so
-	// callers can still tell summary parts apart.
+	// summary_index, messages content-block index). Fragments that share an
+	// index concatenate exactly; the first delta of a new part starts on its
+	// own line, mirroring the committed join of separate summary parts.
 	Index int
 }
 

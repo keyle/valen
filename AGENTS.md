@@ -19,11 +19,14 @@ How to work in this repo: fast loop, small steps, together.
 2. Think deeply, verify cheaply: confirm with the smallest possible check
    before widening.
 3. While iterating, run ONLY targeted tests:
-   `go test -run 'TestName|TestOther' .`. Run the full suite only when
-   something looks off, when touching shared code (`runTurn`, config
-   loading, registry), or as a final gate.
+   `go test -run 'TestName|TestOther' .` (tests that bind a server need
+   `network=true`). Run the full suite only when something looks off, when
+   touching shared code (`runTurn`, config loading, registry), or as a
+   final gate.
 4. Final gate: `gofmt -l .` clean, `go vet ./...` green, `go test ./...`
-   green (`-race` for concurrency-adjacent changes).
+   green (`-race` for concurrency-adjacent changes). Pass `network=true`:
+   `httptest` binds a loopback port and the sandbox denies the bind even
+   though loopback egress is allowed.
 5. If two cheap attempts don't fix it, stop and report: summarize what you
    tried and ask.
 
@@ -49,17 +52,24 @@ How to work in this repo: fast loop, small steps, together.
 
 ## Git
 
-- When asked for a worktree: branch off fresh `main`
-  (`git fetch origin`, `git worktree add ../<name> -b <branch> origin/main`).
-- Keep history linear — rebase the worktree branch onto `main`
-  (`git fetch origin && git rebase origin/main`), never merge `main`
+- When asked for a worktree, put it under `/tmp` — paths beside the repo
+  are not writable under the sandbox:
+  `git worktree add /tmp/<name> -b <branch> origin/master` (after
+  `git fetch origin`).
+- If that fails with "Operation not permitted" because the repo tracks a
+  blocked secret (e.g. `.env*`), add `--no-checkout`, exclude the path
+  (`git -C /tmp/<name> sparse-checkout set --no-cone '/*' '!/<file>'`),
+  then `git -C /tmp/<name> checkout`.
+- Keep history linear — rebase the worktree branch onto `origin/master`
+  (`git fetch origin && git rebase origin/master`), never merge `master`
   into it back-and-forth.
 - Merge back with rebase + fast-forward
-  (`git checkout main && git merge --ff-only <branch>`), then
-  `git worktree remove ../<name>` and delete the branch.
+  (`git checkout master && git merge --ff-only <branch>`), then
+  `git worktree remove /tmp/<name>` and delete the branch.
 
 ## Never
 
 - No `user:`/`assistant:` role prefixes in the transcript.
-- No real network in tests: all tests are offline via `httptest` fakes.
+- No real network in tests: all tests use `httptest` fakes. The sandbox
+  still needs `network=true` for the loopback bind.
 - Don't hand-edit `go.sum` (`go mod tidy` owns it).

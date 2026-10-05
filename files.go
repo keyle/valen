@@ -37,10 +37,11 @@ const (
 )
 
 var (
-	fileRootMu      sync.Mutex
-	fileRoot        string
-	approvedMu      sync.Mutex
-	approvedOutside = map[string]bool{}
+	fileRootMu       sync.Mutex
+	fileRoot         string
+	approvedMu       sync.Mutex
+	approvedRead     = map[string]bool{}
+	approvedWritable = map[string]bool{}
 )
 
 // setFileRoot pins the sandbox root and drops prior outside approvals.
@@ -49,7 +50,8 @@ func setFileRoot(dir string) {
 	fileRoot = dir
 	fileRootMu.Unlock()
 	approvedMu.Lock()
-	approvedOutside = map[string]bool{}
+	approvedRead = map[string]bool{}
+	approvedWritable = map[string]bool{}
 	approvedMu.Unlock()
 	resetShellApprovals()
 }
@@ -151,37 +153,79 @@ func canonicalAccessPath(abs string) string {
 	return abs
 }
 
-// allowedWithoutPrompt reports whether abs is inside the root, an approved
-// folder, or a sibling worktree — the no-ask cases. Both the lexical path
-// and its symlink-resolved canonical must pass; callers check both.
-// Comparisons try the stored root and its resolved form (macOS /var ->
-// /private/var): temp roots like t.TempDir() are lexical /var/... while
-// canonicalAccessPath returns /private/..., which must still match.
-func allowedWithoutPrompt(root, abs string) bool {
-	roots := []string{root}
-	if rr := real(root); rr != "" && rr != root {
-		roots = append(roots, rr)
-	}
-	for _, r := range roots {
-		if withinRoot(r, abs) {
-			return true
-		}
-	}
-	approvedMu.Lock()
-	dirs := make([]string, 0, len(approvedOutside))
-	for dir := range approvedOutside {
-		dirs = append(dirs, dir)
-	}
-	approvedMu.Unlock()
-	for _, dir := range dirs {
-		if withinRoot(dir, abs) {
-			return true
-		}
-		if rd := real(dir); rd != "" && rd != dir && withinRoot(rd, abs) {
+// inRootOrWorktree reports whether abs is inside the root or a sibling git
+// worktree of the same repo. Comparisons try the stored root and its resolved
+// form (macOS /var -> /private/var): temp roots like t.TempDir() are lexical
+// /var/... while canonicalAccessPath returns /private/..., which must match.
+func inRootOrWorktree(root, abs string) bool {
+	for _, r := range []string{root, real(root)} {
+		if r != "" && withinRoot(r, abs) {
 			return true
 		}
 	}
 	return inSiblingWorktree(root, abs)
+}
+
+// inApproved reports whether abs lies inside dir, trying the stored path and
+// its symlink-resolved form.
+func inApproved(dir, abs string) bool {
+	if withinRoot(dir, abs) {
+		return true
+	}
+	if rd := real(dir); rd != "" && rd != dir && withinRoot(rd, abs) {
+		return true
+	}
+	return false
+}
+
+// approvedDirs snapshots an approval set.
+func approvedDirs(m map[string]bool) []string {
+	approvedMu.Lock()
+	defer approvedMu.Unlock()
+	dirs := make([]string, 0, len(m))
+	for dir := range m {
+		dirs = append(dirs, dir)
+	}
+	return dirs
+}
+
+// isWriteOp reports whether a checkFileAccess op changes the filesystem.
+func isWriteOp(op string) bool { return op == "write" || op == "edit" }
+
+// allowedWithoutPrompt reports read access without asking: inside the root or
+// a sibling worktree, or any folder approved for read or write this session.
+// Both the lexical path and its symlink-resolved canonical must pass; callers
+// check both.
+func allowedWithoutPrompt(root, abs string) bool {
+	if inRootOrWorktree(root, abs) {
+		return true
+	}
+	for _, dir := range approvedDirs(approvedRead) {
+		if inApproved(dir, abs) {
+			return true
+		}
+	}
+	for _, dir := range approvedDirs(approvedWritable) {
+		if inApproved(dir, abs) {
+			return true
+		}
+	}
+	return false
+}
+
+// allowedWriteWithoutPrompt reports write access without asking: inside the
+// root or a sibling worktree, or a folder approved specifically for write or
+// edit this session. A read-only approval does not count.
+func allowedWriteWithoutPrompt(root, abs string) bool {
+	if inRootOrWorktree(root, abs) {
+		return true
+	}
+	for _, dir := range approvedDirs(approvedWritable) {
+		if inApproved(dir, abs) {
+			return true
+		}
+	}
+	return false
 }
 
 // blocksSecret reports whether reading/writing abs would touch a secret
@@ -204,21 +248,29 @@ func blocksSecret(abs string) bool {
 func checkFileAccess(ctx context.Context, op, abs string) error {
 	root := getFileRoot()
 	canon := canonicalAccessPath(abs)
-	if allowedWithoutPrompt(root, abs) && allowedWithoutPrompt(root, canon) {
+	allowed := allowedWithoutPrompt
+	if isWriteOp(op) {
+		allowed = allowedWriteWithoutPrompt
+	}
+	if allowed(root, abs) && allowed(root, canon) {
 		return nil
 	}
 	// Prompt for the resolved target when the link escapes: approving the
 	// link name alone must not grant the outside folder.
 	outside := abs
-	if !allowedWithoutPrompt(root, canon) {
+	if !allowed(root, canon) {
 		outside = canon
 	}
 	folder := accessFolder(outside)
 	if askPrompter == nil {
 		return fmt.Errorf("denied: %s is outside workdir %s (no interactive prompter to approve it)", abs, root)
 	}
+	access := "read"
+	if isWriteOp(op) {
+		access = "read and write"
+	}
 	answers, err := promptUser(ctx, []AskQuestion{{
-		Question: fmt.Sprintf("Allow %s of %s? This permits all of folder %s. Workdir is %s.", op, abs, folder, root),
+		Question: fmt.Sprintf("Allow %s of %s? This grants %s access to all of folder %s. Workdir is %s.", op, abs, access, folder, root),
 		Header:   "File access",
 		Options: []AskOption{
 			{Label: "Allow", Description: "Permit this folder for the rest of this session"},
@@ -230,7 +282,10 @@ func checkFileAccess(ctx context.Context, op, abs string) error {
 	}
 	if len(answers) > 0 && strings.Contains(strings.ToLower(answers[0]), "allow") {
 		approvedMu.Lock()
-		approvedOutside[folder] = true
+		approvedRead[folder] = true
+		if isWriteOp(op) {
+			approvedWritable[folder] = true
+		}
 		approvedMu.Unlock()
 		return nil
 	}

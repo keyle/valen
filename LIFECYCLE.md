@@ -325,8 +325,9 @@ viewport pinned) → `turnDoneMsg` commits the `Turn` (JSONL append, history
 swap, totals, continuation checkpoint) and clears pending. Live text
 buffers retain the newest 32768 bytes on UTF-8 boundaries, concatenate exact
 fragments without invented newlines, and do not cap the committed reply.
-Live thinking buffers share the same cap but start every addition on its
-own line. Tool records come from Events, not a possibly compacted history diff.
+Live thinking buffers share the same cap; fragments in one reasoning part
+concatenate exactly, and each new part starts on its own line. Tool records
+come from Events, not a possibly compacted history diff.
 Historical headers use each turn's model/effort; live model switches affect
 future requests, not past attribution. Rendered committed turns cache
 append-only (key: count, width, thinking toggle, model), so streaming costs

@@ -201,6 +201,18 @@ type pendingTool struct {
 	durMs  int64
 }
 
+// chatTurnRender caches one committed turn's rendered forms for the scrollback
+// budget: the full render and a lazily-built compact one (reasoning/reply
+// bodies collapsed) used when the transcript is over max_lines. Line counts
+// ride along so assembling the budget stays O(turns), not O(rendered bytes).
+type chatTurnRender struct {
+	full         string
+	fullN        int
+	compact      string
+	compactN     int
+	compactReady bool
+}
+
 // turnDoneMsg carries the finished turn back to the UI thread.
 type turnDoneMsg struct {
 	prompt   string
@@ -326,13 +338,14 @@ type tuiModel struct {
 	// only re-render the live pending block, not the whole history. Committed
 	// turns are immutable, so the prefix extends append-only; any key change
 	// (turn count reset, width, thinking toggle, model switch) rebuilds.
-	// Memory is one extra copy of the rendered transcript, proportional to
-	// history already held in session.Turns; /clear drops it.
+	// Each turn keeps a full and a lazily-rendered compact form; the budgeted
+	// assembly in committedTurns picks per turn so older reasoning collapses
+	// instead of feeding an ever-growing scrollback to the viewport.
 	chatCacheTurns int
 	chatCacheW     int
 	chatCacheThink bool
 	chatCacheModel string
-	chatCache      string
+	chatCache      []chatTurnRender
 	// usageInflight dedupes quota refreshes: the minute tick and the
 	// post-turn refresh share it, so slow networks never stack fetches.
 	usageInflight bool
@@ -1095,11 +1108,12 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 			if reply.ReasoningContent != "" {
 				thinking = reply.ReasoningContent
 			}
-			// The live view starts every thinking addition on its own
-			// line; the authoritative reply concatenates fragments
-			// exactly, so prefer the streamed buffer for display when
-			// deltas arrived. Empty means the non-streaming fallback
-			// (or <think> in content only) with nothing to preserve.
+			// The streamed buffer carries the part boundaries the live
+			// view rendered (a newline between summary parts); the
+			// authoritative reply may concatenate fragments exactly, so
+			// prefer the streamed buffer for display when deltas
+			// arrived. Empty means the non-streaming fallback (or
+			// <think> in content only) with nothing to preserve.
 			if streamedThinking != "" {
 				thinking = streamedThinking
 			}
@@ -1244,7 +1258,7 @@ func (m *tuiModel) startFreshSession() {
 	m.pendingThinkIdx = 0
 	m.toolStatus = ""
 	m.cancel = nil
-	m.chatCache, m.chatCacheTurns = "", 0
+	m.chatCache, m.chatCacheTurns = nil, 0
 	m.input.SetValue("")
 	m.notice = "New session " + m.session.ID + " — blank."
 	m.noticeErr = false
@@ -2700,7 +2714,7 @@ func (m *tuiModel) renderViewportContent() string {
 func (m *tuiModel) renderChat() string {
 	w := m.viewWidth()
 	if m.session == nil || len(m.session.Turns) == 0 {
-		m.chatCache, m.chatCacheTurns = "", 0
+		m.chatCache, m.chatCacheTurns = nil, 0
 		if m.pendingPrompt == "" {
 			return emptyStyle.Render("No turns yet.")
 		}
@@ -2716,23 +2730,104 @@ func (m *tuiModel) renderChat() string {
 	return committed + "\n\n\n" + m.renderPending(w)
 }
 
-// committedTurns renders the immutable committed turns, extending the cached
-// prefix append-only. Delta flushes during streaming reuse the prefix, so
-// per-delta cost is the live pending block, not history.
+// committedTurns renders the immutable committed turns from the append-only
+// per-turn cache. Delta flushes during streaming reuse the cache, so per-delta
+// cost is the budgeted assembly (bounded by max_lines) plus the live pending
+// block — not total history depth.
 func (m *tuiModel) committedTurns(w int) string {
 	if m.session == nil {
 		return ""
 	}
 	n := len(m.session.Turns)
 	if m.chatCacheW != w || m.chatCacheThink != m.showThink || m.chatCacheModel != m.cfg.Model || m.chatCacheTurns > n {
-		m.chatCache, m.chatCacheTurns = "", 0
+		m.chatCache, m.chatCacheTurns = nil, 0
 	}
 	for m.chatCacheTurns < n {
-		m.chatCache += m.renderTurn(&m.session.Turns[m.chatCacheTurns], w) + "\n\n\n"
+		full := m.renderTurn(&m.session.Turns[m.chatCacheTurns], w)
+		m.chatCache = append(m.chatCache, chatTurnRender{full: full, fullN: lineCount(full)})
 		m.chatCacheTurns++
 	}
 	m.chatCacheW, m.chatCacheThink, m.chatCacheModel = w, m.showThink, m.cfg.Model
-	return strings.TrimSuffix(m.chatCache, "\n\n\n")
+	return m.assembleCommitted(tuiMaxLines(m.cfg))
+}
+
+// lineCount is the rendered line count of one turn, used to budget the
+// scrollback without splitting the styled string back into lines.
+func lineCount(s string) int {
+	if s == "" {
+		return 0
+	}
+	return strings.Count(s, "\n") + 1
+}
+
+// ensureCompact lazily builds (and caches) a turn's compact scrollback form.
+func (m *tuiModel) ensureCompact(i int) {
+	p := &m.chatCache[i]
+	if p.compactReady {
+		return
+	}
+	p.compact = m.renderTurnCompact(&m.session.Turns[i], m.chatCacheW)
+	p.compactN = lineCount(p.compact)
+	p.compactReady = true
+}
+
+// assembleCommitted joins cached turns under max_lines, newest first. The
+// newest turn always survives (full when it fits, else compact); older turns
+// stay full while they fit, then collapse to their compact form, then drop.
+// A leading notice marks dropped turns. max_lines <= 0 means unlimited.
+func (m *tuiModel) assembleCommitted(maxLines int) string {
+	n := len(m.chatCache)
+	if n == 0 {
+		return ""
+	}
+	parts := m.chatCache
+	// Unlimited budget: everything renders full.
+	fullFrom, start, used := 0, 0, 0
+	if maxLines > 0 {
+		newest := n - 1
+		if parts[newest].fullN <= maxLines {
+			fullFrom = newest
+			used = parts[newest].fullN
+			for fullFrom > 0 && used+parts[fullFrom-1].fullN <= maxLines {
+				fullFrom--
+				used += parts[fullFrom].fullN
+			}
+			start = fullFrom
+		} else {
+			// A single huge turn: collapse it rather than hand the viewport
+			// thousands of lines. fullFrom stays n, so every turn is compact.
+			m.ensureCompact(newest)
+			fullFrom = n
+			start = newest
+			used = parts[newest].compactN
+		}
+		// Older turns join compact while the budget allows.
+		for start > 0 {
+			m.ensureCompact(start - 1)
+			l := parts[start-1].compactN
+			if used+l > maxLines {
+				break
+			}
+			start--
+			used += l
+		}
+	}
+	var b strings.Builder
+	if start > 0 {
+		b.WriteString(metaStyle.Render(fmt.Sprintf("… %d earlier turn(s) trimmed — ctrl+h for history", start)))
+		b.WriteString("\n\n\n")
+	}
+	for i := start; i < n; i++ {
+		if i > start {
+			b.WriteString("\n\n\n")
+		}
+		if i >= fullFrom {
+			b.WriteString(parts[i].full)
+		} else {
+			b.WriteString(parts[i].compact)
+		}
+	}
+	return b.String()
 }
 
 // thinkDurSuffix renders the persisted thinking timestamp, e.g. " (1m3s)".
@@ -2789,6 +2884,19 @@ func (m *tuiModel) liveThinkSuffix() string {
 }
 
 func (m *tuiModel) renderTurn(t *Turn, w int) string {
+	return m.renderTurnMode(t, w, false)
+}
+
+// renderTurnCompact is the scrollback form used once the transcript is over
+// the max_lines budget: reasoning and reply bodies collapse to a bounded head.
+// The user prompt and tool lines (the priority content) render unchanged, so
+// trimming only ever removes the in-between reasoning, never what the user
+// said or what the agent ran.
+func (m *tuiModel) renderTurnCompact(t *Turn, w int) string {
+	return m.renderTurnMode(t, w, true)
+}
+
+func (m *tuiModel) renderTurnMode(t *Turn, w int, compact bool) string {
 	var parts []string
 	// bodyW is the style width; textW leaves room for the left border plus
 	// padding so force-broken words still fit inside the chrome.
@@ -2800,11 +2908,8 @@ func (m *tuiModel) renderTurn(t *Turn, w int) string {
 	parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, head, "", body))
 
 	if t.Thinking != "" {
-		if m.showThink {
-			thHead := thinkHeaderStyle.Render("✦ thinking" + thinkDurSuffix(t.DurMs))
-			thBody := thinkBodyStyle.Width(bodyW).Render(breakLongWords(t.Thinking, textW))
-			parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, thHead, thBody))
-		} else {
+		switch {
+		case !m.showThink:
 			label := "✦ thinking" + thinkDurSuffix(t.DurMs)
 			if t.DurMs > 0 {
 				label = fmt.Sprintf("%s · %d chars — ctrl+y to expand", label, len(t.Thinking))
@@ -2812,6 +2917,13 @@ func (m *tuiModel) renderTurn(t *Turn, w int) string {
 				label = fmt.Sprintf("%s (%d chars) — ctrl+y to expand", label, len(t.Thinking))
 			}
 			parts = append(parts, thinkHeaderStyle.Render(label))
+		case compact:
+			label := fmt.Sprintf("✦ thinking%s · %d chars trimmed — ctrl+y to expand", thinkDurSuffix(t.DurMs), len(t.Thinking))
+			parts = append(parts, thinkHeaderStyle.Render(label))
+		default:
+			thHead := thinkHeaderStyle.Render("✦ thinking" + thinkDurSuffix(t.DurMs))
+			thBody := thinkBodyStyle.Width(bodyW).Render(breakLongWords(t.Thinking, textW))
+			parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, thHead, thBody))
 		}
 	} else if m.showThink && t.DurMs > 0 && len(t.Tools) > 0 {
 		// Tool-only turn: no thinking text, but the wall time still lands
@@ -2825,8 +2937,12 @@ func (m *tuiModel) renderTurn(t *Turn, w int) string {
 	}
 
 	if t.Reply != "" {
+		reply := t.Reply
+		if compact {
+			reply = compactReply(reply)
+		}
 		aHead := asstHeadStyle.Render("✦ " + m.cfg.Model)
-		aBody := asstBodyStyle.Width(bodyW).Render(breakLongWords(m.renderMarkdown(t.Reply), bodyW-1))
+		aBody := asstBodyStyle.Width(bodyW).Render(breakLongWords(m.renderMarkdown(reply), bodyW-1))
 		parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, aHead, "", aBody))
 	}
 
@@ -3299,15 +3415,15 @@ func appendStreamText(s, delta string) string {
 }
 
 // appendThinkingDelta accumulates one reasoning update into the live view.
-// Every new addition starts on its own line so status-like updates never
-// pile onto the same line; only an already-present line break suppresses
-// the separator. cur tracks the part index of the tail (kept so callers
-// can still distinguish summary parts).
+// Deltas are arbitrary fragments, so fragments that share a part index
+// concatenate exactly and the thought stays whole; only the first delta of
+// a new part starts on its own line, mirroring the committed newline join
+// of separate summary parts. cur tracks the part index of the tail.
 func appendThinkingDelta(s, delta string, idx, cur int) (string, int) {
 	if delta == "" {
 		return s, cur
 	}
-	if s != "" && !strings.HasSuffix(s, "\n") && !strings.HasPrefix(delta, "\n") {
+	if s != "" && idx != cur && !strings.HasSuffix(s, "\n") && !strings.HasPrefix(delta, "\n") {
 		s += "\n"
 	}
 	return appendStreamText(s, delta), idx
@@ -3356,6 +3472,21 @@ func indexRune(r []rune, c rune) int {
 		}
 	}
 	return -1
+}
+
+// compactReplyMaxLines caps the markdown head kept in a compacted turn. The
+// tail marker tells the user the full reply is still in history (ctrl+h).
+const compactReplyMaxLines = 8
+
+// compactReply truncates a reply to its first compactReplyMaxLines lines for
+// the budgeted scrollback. Short replies pass through untouched.
+func compactReply(s string) string {
+	total := strings.Count(s, "\n") + 1
+	if total <= compactReplyMaxLines {
+		return s
+	}
+	head := strings.Join(strings.Split(s, "\n")[:compactReplyMaxLines], "\n")
+	return fmt.Sprintf("%s\n… %d more lines — ctrl+h for history", head, total-compactReplyMaxLines)
 }
 
 func (m *tuiModel) historyItems() []historyItem {
@@ -3552,7 +3683,7 @@ func (m *tuiModel) resumeSessionPath(path string) {
 	m.pendingPrompt, m.pendingText, m.pendingThinking, m.toolStatus = "", "", "", ""
 	m.pendingTools = nil
 	m.cancel = nil
-	m.chatCache, m.chatCacheTurns = "", 0
+	m.chatCache, m.chatCacheTurns = nil, 0
 	m.notice = "Resumed " + m.session.ID + " (" + itoa(len(turns)) + " turns)."
 	m.noticeErr = false
 	m.show(viewChat)

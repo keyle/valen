@@ -52,7 +52,28 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 	for i := range p.Writable {
 		fmt.Fprintf(&prof, " (subpath (param \"W%d\"))", i)
 	}
+	for i, r := range p.Readable {
+		fmt.Fprintf(&prof, " (subpath (param \"RW%d\"))", i)
+		defs = append(defs, "-D", fmt.Sprintf("RW%d=%s", i, r))
+	}
 	prof.WriteString(")\n")
+	// Re-deny the credential paths inside $HOME after the writable/read allows
+	// above. A broad approval (reading a file directly in $HOME makes the whole
+	// home a root) must not re-expose ~/.ssh, ~/.aws, ~/.config, histories:
+	// later rules win, and those were allowed away above. $HOME itself is
+	// skipped so safe subpaths (caches, approved folders) stay reachable;
+	// sibling user homes live outside $HOME and stay approvable for reads.
+	home, _ := os.UserHomeDir()
+	homeReal := ""
+	if home != "" {
+		homeReal = real(home)
+	}
+	for i, hid := range p.Hidden {
+		if hid == home || hid == homeReal || !withinRoot(home, hid) {
+			continue
+		}
+		fmt.Fprintf(&prof, "(deny file-read* file-write* (subpath (param \"H%d\")))\n", i)
+	}
 	// Git stats its configs on every run; re-allow reads only (writes stay
 	// denied) after the $HOME deny so `git status` works under the sandbox.
 	for i := range p.ReadOnly {
@@ -68,7 +89,10 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 		defs = append(defs, "-D", fmt.Sprintf("A%d=%s", i, a))
 	}
 	if !p.Network {
-		// Loopback stays up: dev servers and httptest-style tests keep working.
+		// Deny all network ops, then re-allow outbound connections to
+		// loopback. The blanket deny also covers bind/listen, so an
+		// in-sandbox server (or an httptest-style test) cannot bind unless
+		// network is on; only loopback egress works here.
 		prof.WriteString("(deny network*)\n(allow network* (remote ip \"localhost:*\"))\n")
 	}
 	// .env files anywhere, except templates (keep in sync with isSecretFile).

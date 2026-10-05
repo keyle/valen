@@ -302,28 +302,34 @@ File tools and `shell` share one sandbox root: the startup directory,
 `-dir <path>`, or a positional directory in TUI mode
 (`./valen ~/Code/something`). Paths escaping the root pause for approval
 through the active `AskUserQuestion` frontend (one answer covers the whole
-folder, remembered for the session). Sibling git worktrees of the same repo
-(`git worktree list`) are in scope and never prompt. Without an interactive
-frontend they are denied with a clear error, so the model can explain and ask.
+folder, remembered for the session). A read approval grants read only; write
+and edit ask separately and grant read and write. Sibling git worktrees of the
+same repo (`git worktree list`) are in scope and never prompt. Without an
+interactive frontend they are denied with a clear error, so the model can
+explain and ask.
 
 `shell` runs under an OS sandbox (`sandbox.go`), enforced by the kernel so
 `eval`, `$(...)` and scripts cannot escape it:
 
-- **Writes** only in the workdir, sibling git worktrees, folders approved this
-  session, the private temp dir and tool caches (`~/go`, `~/.cache`, `~/.npm`,
-  `~/.cargo`, the user cache dir). Shared `/tmp` and `$HOME` are not writable
-  by default: explicit use asks once per folder via `shellgate.go`, like
-  `git push` does.
+- **Writes** only in the workdir, sibling git worktrees, folders approved for
+  write this session, the private temp dir and tool caches (`~/go`, `~/.cache`,
+  `~/.npm`, `~/.cargo`, the user cache dir). Shared `/tmp` and `$HOME` are not
+  writable by default: explicit use asks once per folder via `shellgate.go`,
+  like `git push` does. Environment-derived roots that would re-expose `$HOME`
+  (`GOCACHE=$HOME`, a `TMPDIR` above the home dir) are ignored.
 - **Reads**: `$HOME` is hidden (reads ask once per folder, then the approved
-  folder is re-allowed), as are credential files (`~/.ssh`, `~/.aws`,
+  folder is re-allowed read-only), as are credential files (`~/.ssh`, `~/.aws`,
   `~/.gnupg`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.netrc`, `~/.npmrc`,
-  `~/.pypirc`, `~/.config`, session data) and `.env` / `.env.*` secrets
-  anywhere (reads and writes denied; templates
-  `.env.example|sample|template` stay readable). `read`, `write`, `edit`
-  and `grep` all refuse `.env` secrets. On Linux `.env` files are found by
-  scanning the workdir at command start. System reads outside `$HOME`
-  (toolchain, `/usr`, libraries) stay allowed so `go test -run 'Test' .`,
-  `go vet` and `gofmt` never prompt.
+  `~/.pypirc`, `~/.config`, session data), other users' home directories
+  (`/Users/*`, `/home/*`), and `.env` / `.env.*` secrets anywhere (reads and
+  writes denied; templates `.env.example|sample|template` stay readable).
+  `read`, `write`, `edit` and `grep` all refuse `.env` secrets. On Linux `.env`
+  files are found by scanning the workdir at command start. System reads
+  outside `$HOME` (toolchain, `/usr`, libraries) stay allowed so
+  `go test -run 'Test' .`, `go vet` and `gofmt` never prompt.
+- **Environment**: secret-looking variables (`*_KEY`, `*_TOKEN`, passwords,
+  DSNs, `DATABASE_URL`, ...) are stripped from the `sh -c` child, so
+  `printenv`/`env` cannot leak valen's own keys or the user's exported secrets.
 - **Network off** (loopback still works) unless the call sets `network: true`;
   the user is asked once per session.
 - **Ask once per session** before `git push`, `git reset --hard`, `git clean`,
