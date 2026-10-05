@@ -307,6 +307,7 @@ type tuiModel struct {
 	busy          bool
 	pendingPrompt string
 	pendingSince  time.Time
+	askSince      time.Time // set while a question overlay pauses the timer
 	toolStatus    string
 	// roundCur/roundMax track loop progress for the status row (parsed from
 	// round_start events); reset on submit and turnDone.
@@ -464,6 +465,26 @@ func (m *tuiModel) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// turnElapsed is the working time of the current turn; time spent waiting
+// on a question overlay does not count.
+func (m *tuiModel) turnElapsed() time.Duration {
+	if !m.askSince.IsZero() {
+		return m.askSince.Sub(m.pendingSince)
+	}
+	return time.Since(m.pendingSince)
+}
+
+// resumeTimer shifts the turn start forward by the time spent asking.
+func (m *tuiModel) resumeTimer() {
+	if m.askSince.IsZero() {
+		return
+	}
+	if !m.pendingSince.IsZero() {
+		m.pendingSince = m.pendingSince.Add(time.Since(m.askSince))
+	}
+	m.askSince = time.Time{}
+}
+
 // askPrompt is the TUI's AskFunc: it forwards the questions to the UI thread
 // and blocks until the user submits or dismisses.
 func (m *tuiModel) askPrompt(ctx context.Context, qs []AskQuestion) ([]string, error) {
@@ -488,6 +509,7 @@ func (m *tuiModel) dismissAsk(err error) {
 	}
 	try := m.ask.reply
 	m.ask = nil
+	m.resumeTimer()
 	if m.mode == viewAsk {
 		m.mode = viewChat
 	}
@@ -590,6 +612,7 @@ func (m *tuiModel) handleAskKey(s string) (tea.Model, tea.Cmd) {
 		case "enter", "y":
 			a.reply <- askReply{answers: m.askAnswers()}
 			m.ask = nil
+			m.resumeTimer()
 			m.mode = viewChat
 			m.input.Focus()
 		case "esc", "n":
@@ -1012,6 +1035,7 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	m.busy = true
 	m.pendingPrompt = trimmed
 	m.pendingSince = time.Now()
+	m.askSince = time.Time{}
 	m.toolStatus = "Sending…"
 	m.roundCur, m.roundMax = 0, 0
 	m.pendingTools = nil
@@ -1604,9 +1628,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "tool_start":
 			m.pendingTools = append(m.pendingTools, pendingTool{name: msg.text, args: msg.args, id: msg.id})
 			if n := m.runningToolCount(); n > 1 {
-				m.toolStatus = fmt.Sprintf("⏺ %s… · %d running", msg.text, n)
+				m.toolStatus = fmt.Sprintf("%s… · %d running", msg.text, n)
 			} else {
-				m.toolStatus = "⏺ " + msg.text + "…"
+				m.toolStatus = msg.text + "…"
 			}
 		case "tool_result":
 			m.finishPendingTool(msg.id, msg.text, msg.output, msg.durMs)
@@ -1722,6 +1746,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.ask = &askState{qs: msg.qs, reply: msg.reply, picks: picks, ownText: make([]string, len(msg.qs)), phase: "pick"}
 		m.mode = viewAsk
+		if m.askSince.IsZero() {
+			m.askSince = time.Now()
+		}
 		m.input.Blur()
 		m.refreshViewport()
 		return m, nil
@@ -1733,6 +1760,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Model: msg.model, Effort: msg.effort, History: msg.history,
 		}
 		if !m.pendingSince.IsZero() {
+			m.resumeTimer()
 			turn.DurMs = time.Since(m.pendingSince).Milliseconds()
 			if turn.DurMs < 1 {
 				turn.DurMs = 1
@@ -2520,7 +2548,7 @@ func parseRoundProgress(s string) (cur, max int, ok bool) {
 func (m *tuiModel) statusView() string {
 	var left string
 	if m.busy {
-		elapsed := time.Since(m.pendingSince).Round(time.Second)
+		elapsed := m.turnElapsed().Round(time.Second)
 		tool := m.toolStatus
 		if tool == "" {
 			tool = "Working…"
@@ -2757,7 +2785,7 @@ func (m *tuiModel) liveThinkSuffix() string {
 	if m.pendingSince.IsZero() {
 		return ""
 	}
-	return " (" + formatThinkDur(time.Since(m.pendingSince)) + ")"
+	return " (" + formatThinkDur(m.turnElapsed()) + ")"
 }
 
 func (m *tuiModel) renderTurn(t *Turn, w int) string {
@@ -2775,7 +2803,7 @@ func (m *tuiModel) renderTurn(t *Turn, w int) string {
 		if m.showThink {
 			thHead := thinkHeaderStyle.Render("✦ thinking" + thinkDurSuffix(t.DurMs))
 			thBody := thinkBodyStyle.Width(bodyW).Render(breakLongWords(t.Thinking, textW))
-			parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, thHead, "", thBody))
+			parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, thHead, thBody))
 		} else {
 			label := "✦ thinking" + thinkDurSuffix(t.DurMs)
 			if t.DurMs > 0 {
@@ -2819,7 +2847,7 @@ func (m *tuiModel) renderTurnFull(t *Turn) string {
 		b.WriteString(m.wrapPlain("✦ thinking"+thinkDurSuffix(t.DurMs)+"\n"+t.Thinking) + "\n\n")
 	}
 	for _, tr := range t.Tools {
-		head := fmt.Sprintf("⏺ %s  %s%s", tr.Name, toolSummary(tr.Name, tr.Args, 300), toolDurSuffix(tr.DurMs))
+		head := fmt.Sprintf("%s  %s%s", tr.Name, toolSummary(tr.Name, tr.Args, 300), toolDurSuffix(tr.DurMs))
 		var body strings.Builder
 		body.WriteString(head)
 		if tr.Name == "edit" {
@@ -3106,7 +3134,7 @@ func (m *tuiModel) renderToolLine(tr ToolRecord) string {
 	// and committed. Anything unparseable falls through to the default row.
 	if tr.Name == "todowrite" || tr.Name == "todoread" {
 		if lines, ok := todoChecklistLines(tr); ok {
-			out := toolLineStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("⏺ %s%s", tr.Name, toolDurSuffix(tr.DurMs)), cw-2))
+			out := toolLineStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("%s%s", tr.Name, toolDurSuffix(tr.DurMs)), cw-2))
 			for _, ln := range lines {
 				out += "\n" + toolDimStyle.Width(cw).Render(breakLongWords(ln, cw-2))
 			}
@@ -3114,7 +3142,7 @@ func (m *tuiModel) renderToolLine(tr ToolRecord) string {
 		}
 	}
 	summary := toolSummary(tr.Name, tr.Args, maxText)
-	label := fmt.Sprintf("⏺ %s  %s%s", tr.Name, summary, toolDurSuffix(tr.DurMs))
+	label := fmt.Sprintf("%s  %s%s", tr.Name, summary, toolDurSuffix(tr.DurMs))
 	// Tool styles carry PaddingLeft(2), so break two short of cw.
 	if tr.Err != "" || strings.HasPrefix(strings.TrimSpace(tr.Output), "error:") {
 		return toolErrStyle.Width(cw).Render(breakLongWords("✗ "+label, cw-2))
@@ -3212,11 +3240,23 @@ func (m *tuiModel) renderPending(w int) string {
 	// streams in) so the live elapsed is always visible while busy, even
 	// across long tool-only stretches with no thinking deltas yet. The
 	// trailing blank keeps a line return after the thinking state.
+	// Models that stream <think> inside content would otherwise show their
+	// reasoning as plain (white) answer text; route it to the thinking style.
+	live, answer := m.pendingThinking, m.pendingText
+	if strings.Contains(answer, "<think>") {
+		t, a := splitThinking(answer)
+		answer = a
+		if t != "" {
+			if live != "" {
+				live += "\n"
+			}
+			live += t
+		}
+	}
 	if m.showThink {
 		parts = append(parts, thinkHeaderStyle.Render("✦ thinking"+m.liveThinkSuffix()))
-		if m.pendingThinking != "" {
-			parts = append(parts, "")
-			parts = append(parts, thinkBodyStyle.Width(bodyW).Render(breakLongWords(m.pendingThinking, textW)))
+		if live != "" {
+			parts = append(parts, thinkBodyStyle.Width(bodyW).Render(breakLongWords(live, textW)))
 		}
 		parts = append(parts, "")
 	}
@@ -3226,10 +3266,10 @@ func (m *tuiModel) renderPending(w int) string {
 	if len(m.pendingTools) > 0 {
 		parts = append(parts, "")
 	}
-	if m.pendingText != "" {
+	if answer != "" {
 		parts = append(parts, asstHeadStyle.Render("✦ "+m.cfg.Model))
 		parts = append(parts, "")
-		parts = append(parts, asstBodyStyle.Width(bodyW).Render(breakLongWords(streamTail(m.pendingText), bodyW-1)))
+		parts = append(parts, asstBodyStyle.Width(bodyW).Render(breakLongWords(streamTail(answer), bodyW-1)))
 		parts = append(parts, "")
 	}
 

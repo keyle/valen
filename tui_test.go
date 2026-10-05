@@ -745,11 +745,11 @@ func TestTUIPendingRunningToolsShowSpinnerAndCounts(t *testing.T) {
 	m.pendingPrompt = "do things"
 
 	_, _ = m.Update(toolEventMsg{kind: "tool_start", text: "web_search", args: `{"query":"go"}`})
-	if m.toolStatus != "⏺ web_search…" {
+	if m.toolStatus != "web_search…" {
 		t.Fatalf("single running status=%q", m.toolStatus)
 	}
 	_, _ = m.Update(toolEventMsg{kind: "tool_start", text: "web_fetch", args: `{"url":"https://x"}`})
-	if m.toolStatus != "⏺ web_fetch… · 2 running" {
+	if m.toolStatus != "web_fetch… · 2 running" {
 		t.Fatalf("parallel running status=%q", m.toolStatus)
 	}
 
@@ -807,7 +807,7 @@ func TestTUIStatusShowsPhase(t *testing.T) {
 	m.busy = true
 
 	_, _ = m.Update(toolEventMsg{kind: "tool_start", text: "shell", args: `{"command":"ls"}`})
-	if m.toolStatus != "⏺ shell…" {
+	if m.toolStatus != "shell…" {
 		t.Fatalf("tool status=%q", m.toolStatus)
 	}
 	_, _ = m.Update(toolEventMsg{kind: "tool_result", text: "shell", output: "x"})
@@ -823,7 +823,7 @@ func TestTUIStatusShowsPhase(t *testing.T) {
 		t.Fatalf("writing status=%q", m.toolStatus)
 	}
 	_, _ = m.Update(toolEventMsg{kind: "tool_start", text: "read", args: `{"path":"a"}`})
-	if m.toolStatus != "⏺ read…" {
+	if m.toolStatus != "read…" {
 		t.Fatalf("back-to-tool status=%q", m.toolStatus)
 	}
 }
@@ -1110,7 +1110,7 @@ func TestTUITodoChecklistInScrollback(t *testing.T) {
 	}
 
 	row := m.renderToolLine(ToolRecord{Name: "todowrite", Args: args, Output: out})
-	for _, want := range []string{"⏺ todowrite", "☑ Slice it", "◐ Wire UI"} {
+	for _, want := range []string{"todowrite", "☑ Slice it", "◐ Wire UI"} {
 		if !strings.Contains(row, want) {
 			t.Fatalf("committed todowrite must checklist %q:\n%s", want, row)
 		}
@@ -1136,7 +1136,7 @@ func TestTUIToolSummariesInScrollback(t *testing.T) {
 	// Strip styling: chroma/lipgloss split diff text with ANSI runs when
 	// the terminal reports color support, so assert on visible text.
 	row := ansi.Strip(m.renderToolLine(ToolRecord{Name: "edit", Args: editArgs, Output: "edited foo.go"}))
-	for _, want := range []string{"⏺ edit", "foo.go", "- b := 2", "+ b := 3"} {
+	for _, want := range []string{"edit", "foo.go", "- b := 2", "+ b := 3"} {
 		if !strings.Contains(row, want) {
 			t.Fatalf("edit row must show diff %q:\n%s", want, row)
 		}
@@ -1225,6 +1225,7 @@ func newTestModelWithConfig(t *testing.T, body string) (*tuiModel, string) {
 }
 
 func TestTUIModelDirectSwitchPersists(t *testing.T) {
+	t.Setenv(goKeyEnv, "test-key")
 	m, path := newTestModelWithConfig(t, "model = \"glm-5.3-flash\"\nthinking = \"max\"\nbase_url = \"https://unused\"\n")
 	m.handleCommand("/model kimi-k2.6")
 	if m.cfg.Model != "kimi-k2.6" {
