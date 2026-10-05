@@ -1160,6 +1160,30 @@ func TestTUIToolSummariesInScrollback(t *testing.T) {
 	}
 }
 
+// TestToolSummaryPrefersLocalPaths: an absolute path inside the workdir
+// renders workdir-relative in tool headers; outside paths keep the full path.
+func TestToolSummaryPrefersLocalPaths(t *testing.T) {
+	root := useTempRoot(t)
+	inside := filepath.Join(root, "sub", "foo.go")
+	for _, name := range []string{"read", "write", "edit"} {
+		args := fmt.Sprintf(`{"path":%q}`, inside)
+		if got := toolSummary(name, args, 300); got != "sub/foo.go" {
+			t.Fatalf("%s inside root = %q, want sub/foo.go", name, got)
+		}
+	}
+	if got := toolSummary("read", `{"path":"foo.go"}`, 300); got != "foo.go" {
+		t.Fatalf("relative path = %q, want foo.go", got)
+	}
+	outside := filepath.Join(filepath.Dir(root), "elsewhere.go")
+	if got := toolSummary("read", fmt.Sprintf(`{"path":%q}`, outside), 300); got != outside {
+		t.Fatalf("outside root = %q, want %q", got, outside)
+	}
+	grepArgs := fmt.Sprintf(`{"pattern":"foo","path":%q}`, inside)
+	if got := toolSummary("grep", grepArgs, 300); !strings.Contains(got, "in sub/foo.go") {
+		t.Fatalf("grep must localize path, got %q", got)
+	}
+}
+
 func TestTUIUnknownCommandNotices(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	m.handleCommand("/nope")

@@ -2652,6 +2652,18 @@ func (m *tuiModel) renderTurnFull(t *Turn) string {
 // floods the transcript; the tail counts the remainder. 16 = 8 del + 8 add.
 const maxEditDiffLines = 16
 
+// displayPath renders a tool-call path for compact headers, preferring the
+// workdir-local form over a full path when the model passed an absolute path
+// inside the root (`read /work/foo.go` reads as `read foo.go`). Paths outside
+// the root, and already-relative paths, pass through unchanged.
+func displayPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" || !filepath.IsAbs(p) {
+		return p
+	}
+	return relToRoot(p)
+}
+
 // toolSummary renders tool args in plain English for scrollback headers
 // instead of raw JSON: paths, patterns and commands read as words.
 // Unknown tools and unparseable args fall back to truncated raw args.
@@ -2667,7 +2679,7 @@ func toolSummary(name, args string, maxText int) string {
 		if json.Unmarshal([]byte(args), &a) != nil || strings.TrimSpace(a.Path) == "" {
 			return short(args)
 		}
-		p := strings.TrimSpace(a.Path)
+		p := displayPath(a.Path)
 		if a.Offset <= 1 && a.Limit <= 0 {
 			return short(p)
 		}
@@ -2686,7 +2698,7 @@ func toolSummary(name, args string, maxText int) string {
 		if json.Unmarshal([]byte(args), &a) != nil || strings.TrimSpace(a.Path) == "" {
 			return short(args)
 		}
-		return short(a.Path)
+		return short(displayPath(a.Path))
 	case "grep":
 		var a struct {
 			Pattern string `json:"pattern"`
@@ -2698,7 +2710,7 @@ func toolSummary(name, args string, maxText int) string {
 		}
 		var b strings.Builder
 		b.WriteString(short(`"` + strings.TrimSpace(a.Pattern) + `"`))
-		if p := strings.TrimSpace(a.Path); p != "" && p != "." {
+		if p := displayPath(a.Path); p != "" && p != "." {
 			b.WriteString(" in " + short(p))
 		}
 		if inc := strings.TrimSpace(a.Include); inc != "" {
@@ -2714,7 +2726,7 @@ func toolSummary(name, args string, maxText int) string {
 			return short(args)
 		}
 		s := strings.TrimSpace(a.Pattern)
-		if p := strings.TrimSpace(a.Path); p != "" && p != "." {
+		if p := displayPath(a.Path); p != "" && p != "." {
 			s += " in " + p
 		}
 		return short(s)
