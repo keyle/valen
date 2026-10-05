@@ -843,6 +843,30 @@ func (m *tuiModel) columnWidth() int {
 	return m.width
 }
 
+// isPickerMode reports whether the active view is a list picker that hides
+// the chatbox and footer.
+func (m *tuiModel) isPickerMode() bool {
+	return m.mode == viewSessions || m.mode == viewModels
+}
+
+// viewportHeight is the scrollback height for the current mode and terminal
+// size. Chat reserves room for the chatbox, status and footer; pickers drop
+// the chatbox and footer, so the viewport grows to keep the status row pinned
+// to the bottom edge instead of leaving dead space beneath it.
+func (m *tuiModel) viewportHeight() int {
+	if m.height == 0 {
+		return m.viewport.Height
+	}
+	h := m.height - 6 - inputHeight(m.cfg)
+	if m.isPickerMode() {
+		h = m.height - 2 // header + status
+	}
+	if h < 5 {
+		h = 5
+	}
+	return h
+}
+
 func (m *tuiModel) viewWidth() int {
 	if m.viewport.Width > 0 {
 		return m.viewport.Width
@@ -988,6 +1012,7 @@ func (m *tuiModel) show(mode viewMode) {
 	}
 	m.mode = mode
 	m.cursor = 0
+	m.viewport.Height = m.viewportHeight()
 	if mode == viewChat {
 		m.input.Focus()
 		m.modelSearch.Blur()
@@ -1661,16 +1686,14 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ready = true
 		// Chrome around the transcript: header, status, footer, the input
 		// border plus a line of slack (6) beside the configured box lines.
-		vpH := msg.Height - 6 - inputHeight(m.cfg)
-		if vpH < 5 {
-			vpH = 5
-		}
+		// Pickers hide the chatbox and footer, so viewportHeight reclaims
+		// that space for the scrollback.
 		vpW := m.columnWidth() - 4
 		if vpW < 40 {
 			vpW = 40
 		}
 		m.viewport.Width = vpW
-		m.viewport.Height = vpH
+		m.viewport.Height = m.viewportHeight()
 		m.input.SetWidth(vpW - 2)
 		m.glam = nil
 		m.refreshViewport()
@@ -2568,7 +2591,7 @@ func (m *tuiModel) View() string {
 	// The picker views (sessions and models) are navigation surfaces: the
 	// chatbox and quota footer don't apply there, but the ready/working
 	// status stays so the session state remains visible.
-	if m.mode != viewSessions && m.mode != viewModels {
+	if !m.isPickerMode() {
 		parts = append(parts, m.inputView(), m.footerView())
 	}
 	block := lipgloss.JoinVertical(lipgloss.Left, parts...)

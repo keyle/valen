@@ -1408,7 +1408,7 @@ func TestTUIModelPickerSearchAndEscape(t *testing.T) {
 	if m.mode != viewModels {
 		t.Fatalf("mode=%v", m.mode)
 	}
-	if text := ansi.Strip(m.renderViewportContent()); !strings.Contains(text, "Search...") {
+	if text := ansi.Strip(m.renderViewportContent()); !strings.Contains(text, "Filter available models...") {
 		t.Fatalf("picker should render its search box:\n%s", text)
 	}
 
@@ -2158,12 +2158,13 @@ func TestViewCentersCappedColumn(t *testing.T) {
 }
 
 // The sessions/models pickers are navigation surfaces: the chatbox and quota
-// footer are hidden there, while the ready/working status row stays visible.
+// footer are hidden there, while the ready/working status row stays visible
+// and is pinned to the bottom edge (no dead space below it).
 func TestPickerViewsHideChatboxAndFooter(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 	for _, mode := range []viewMode{viewSessions, viewModels} {
-		m.mode = mode
+		m.show(mode)
 		out := ansi.Strip(m.View())
 		if strings.Contains(out, "Type a message") {
 			t.Fatalf("%v should hide the chatbox:\n%s", mode, out)
@@ -2171,8 +2172,13 @@ func TestPickerViewsHideChatboxAndFooter(t *testing.T) {
 		if strings.Contains(out, "/help for keys and commands") {
 			t.Fatalf("%v should hide the footer:\n%s", mode, out)
 		}
-		if !strings.Contains(out, "ready") && !strings.Contains(out, "working") {
-			t.Fatalf("%v should keep the status row:\n%s", mode, out)
+		lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+		last := lines[len(lines)-1]
+		if !strings.Contains(last, "ready") && !strings.Contains(last, "working") {
+			t.Fatalf("%v should end with the status row, got %q", mode, last)
+		}
+		if len(lines) != m.height {
+			t.Fatalf("%v view has %d lines, want %d (status pinned to bottom)", mode, len(lines), m.height)
 		}
 	}
 }
