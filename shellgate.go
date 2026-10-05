@@ -5,8 +5,8 @@ package main
 // it can reach the network; this file covers WHAT it does inside those
 // bounds. Network use, a short list of destructive commands (each once per
 // session) and explicit outside-workdir paths (once per folder via
-// checkFileAccess, so `cat /etc/passwd` or `echo hi > /tmp/x` ask like
-// `git push` does while `go test -run 'Test' .` never prompts) ask first.
+// checkFileAccess, so `cat /etc/passwd` or `cat ~/notes` ask like `git push`
+// does while `go test -run 'Test' .` and shared /tmp never prompt) ask first.
 // The command-text match is best-effort (a script can hide `git push`); the
 // sandbox is the boundary, this is the speed bump for honest mistakes.
 
@@ -120,14 +120,15 @@ var outsidePathRe = regexp.MustCompile("~(?:/[^\\s'\"`;|&()<>$\\\\]*)?|/(?:[^/\\
 
 // shellSafePrefixes are absolute prefixes that never trigger an outside
 // prompt: device nodes (`-o /dev/null`), the system toolchain, and tool
-// caches needed for builds. $HOME and shared /tmp are deliberately absent:
-// explicit use asks once per folder via checkFileAccess, while `go test`
-// (no explicit outside paths) never prompts.
+// caches needed for builds, and shared /tmp (writable by the sandbox, the
+// preferred place for worktrees). $HOME is deliberately absent: explicit use
+// asks once per folder via checkFileAccess.
 func shellSafePrefixes() []string {
 	var out []string
-	for _, p := range []string{"/dev", "/usr", "/bin", "/sbin", "/opt", "/System", "/Library"} {
+	for _, p := range []string{"/dev", "/usr", "/bin", "/sbin", "/opt", "/System", "/Library", sharedTmp} {
 		out = append(out, p)
 	}
+	out = append(out, real(sharedTmp))
 	if cd, err := os.UserCacheDir(); err == nil && cd != "" {
 		out = append(out, real(cd))
 	}
@@ -205,6 +206,12 @@ func shellOutsidePaths(command string) []string {
 				continue
 			}
 			abs = filepath.Clean(m)
+			// `grep -v /vendor/` is a pattern, not a path: a real absolute
+			// path starts in an existing top-level entry (/etc, /tmp,
+			// /Users, ...). The sandbox is read-only for anything missing.
+			if _, err := os.Lstat("/" + strings.SplitN(strings.TrimPrefix(abs, "/"), "/", 2)[0]); err != nil {
+				continue
+			}
 		default:
 			continue
 		}

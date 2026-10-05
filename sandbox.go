@@ -3,8 +3,8 @@ package main
 // Shell sandbox. Every `shell` command runs under an OS-enforced policy:
 //
 //   - writes only inside the workdir, sibling git worktrees, folders the user
-//     approved this session (see checkFileAccess), the private temp dir and
-//     tool caches (shared /tmp is not writable by default);
+//     approved this session (see checkFileAccess), shared /tmp, the private
+//     temp dir and tool caches;
 //   - $HOME is hidden (reads and writes ask first via gateShell), as are
 //     credential files (~/.ssh, ~/.aws, ~/.netrc, ... and any .env* secrets,
 //     reads and writes; templates stay readable);
@@ -25,6 +25,9 @@ import (
 	"sort"
 	"strings"
 )
+
+// sharedTmp is the shared scratch dir shell may use without asking.
+const sharedTmp = "/tmp"
 
 // sandboxPolicy is what one command may do. Root is the workdir.
 type sandboxPolicy struct {
@@ -54,7 +57,7 @@ func isSecretFile(name string) bool {
 
 // sandboxHint is appended to a failed command's output when it looks like a
 // sandbox denial, so the model knows what to do instead of retrying blindly.
-const sandboxHint = "[sandbox: shell may only write inside the workdir, sibling git worktrees, approved folders, the private temp dir and tool caches (shared /tmp and $HOME are blocked). To get another folder, call glob or read on it (the user is asked once per folder), then re-run.]"
+const sandboxHint = "[sandbox: shell may only write inside the workdir, sibling git worktrees, approved folders, /tmp, the private temp dir and tool caches ($HOME is blocked). To get another folder, call glob or read on it (the user is asked once per folder), then re-run.]"
 
 // looksSandboxDenied matches the errno texts a blocked write produces:
 // EPERM from Seatbelt, EROFS from bubblewrap's read-only mounts.
@@ -88,13 +91,13 @@ func sandboxCommand(ctx context.Context, command string, network bool) (*exec.Cm
 
 // writableRoots lists the existing, symlink-resolved directories shell may
 // write to. Paths must exist: both backends refuse to bind a missing path.
-// Shared /tmp and /var/tmp are NOT writable by default: explicit /tmp use
-// asks first (see gateShell), while the private per-user temp dir
-// (os.TempDir, /var/folders/... on macOS, used by t.TempDir and go builds)
-// stays writable so `go test` never prompts.
+// Shared /tmp is writable by default (scratch space, and the preferred place
+// for git worktrees: `git worktree add /tmp/<name>`). /var/tmp is not. The
+// private per-user temp dir (os.TempDir, /var/folders/... on macOS, used by
+// t.TempDir and go builds) stays writable so `go test` never prompts.
 func writableRoots() []string {
 	root := getFileRoot()
-	c := []string{root, os.TempDir(), os.Getenv("GOCACHE")}
+	c := []string{root, os.TempDir(), sharedTmp, os.Getenv("GOCACHE")}
 	approvedMu.Lock()
 	for dir := range approvedOutside {
 		c = append(c, dir)
@@ -110,6 +113,23 @@ func writableRoots() []string {
 		}
 	}
 	return existingDirs(c)
+}
+
+// ancestorDirs returns the sorted, de-duplicated proper ancestors of dirs
+// (excluding "/"), e.g. /Users/n/Code for /Users/n/Code/valen.
+func ancestorDirs(dirs []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, d := range dirs {
+		for p := filepath.Dir(d); p != "/" && p != "." && p != filepath.Dir(p); p = filepath.Dir(p) {
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // hiddenPaths lists credential files and dirs the sandbox hides from the

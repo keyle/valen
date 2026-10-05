@@ -15,8 +15,7 @@ const sandboxExec = "/usr/bin/sandbox-exec" // absolute: no PATH lookup to hijac
 // In SBPL later rules win, so allows come after the denies they override:
 // $HOME (and credential paths) are denied, then the safe subset (workdir,
 // sibling worktrees, approved folders, private temp, tool caches) is
-// re-allowed for both reads and writes. Shared /tmp is not in Writable, so
-// explicit /tmp use fails closed until approved.
+// re-allowed for both reads and writes (shared /tmp included).
 func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 	if _, err := os.Stat(sandboxExec); err != nil {
 		return "", nil, fmt.Errorf("shell sandbox unavailable: %s not found", sandboxExec)
@@ -39,6 +38,14 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 		fmt.Fprintf(&prof, " (subpath (param \"W%d\"))", i)
 	}
 	prof.WriteString(")\n")
+	// Tools like git and go lstat every parent of the workdir (/Users/n, ...).
+	// Denying $HOME above also denied that metadata, which made
+	// `git worktree add` fail with "Invalid path '/Users/n'". Allow metadata
+	// only (stat, not listing or reading) on the ancestors of writable roots.
+	for i, a := range ancestorDirs(p.Writable) {
+		fmt.Fprintf(&prof, "(allow file-read-metadata (literal (param \"A%d\")))\n", i)
+		defs = append(defs, "-D", fmt.Sprintf("A%d=%s", i, a))
+	}
 	if !p.Network {
 		// Loopback stays up: dev servers and httptest-style tests keep working.
 		prof.WriteString("(deny network*)\n(allow network* (remote ip \"localhost:*\"))\n")

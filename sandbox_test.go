@@ -163,10 +163,46 @@ func TestWritableRootsContents(t *testing.T) {
 			t.Fatalf("too broad: %q", p)
 		}
 	}
-	// Shared /tmp is not writable by default: explicit use must ask first.
-	// (On Linux os.TempDir is /tmp itself, kept writable for t.TempDir/go builds.)
-	if tmp := real("/tmp"); tmp != real(os.TempDir()) && contains(got, tmp) {
-		t.Fatalf("/tmp should not be writable by default: %v", got)
+	// Shared /tmp is writable by default (worktrees and scratch files).
+	if tmp := real(sharedTmp); !contains(got, tmp) {
+		t.Fatalf("/tmp should be writable by default: %v", got)
+	}
+}
+
+func TestAncestorDirs(t *testing.T) {
+	got := ancestorDirs([]string{"/Users/n/Code/valen", "/tmp", "/Users/n/go"})
+	want := []string{"/Users", "/Users/n", "/Users/n/Code"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+// git stats every parent of the workdir; hiding $HOME must not break that.
+func TestSandboxLetsGitResolveWorkdirParents(t *testing.T) {
+	root := useTempRoot(t)
+	home, err := os.UserHomeDir()
+	if err != nil || !withinRoot(home, root) {
+		t.Skip("workdir is not under $HOME")
+	}
+	if out := sh(t, "stat "+filepath.Dir(root)+" >/dev/null 2>&1 && echo ok"); out != "ok" {
+		t.Fatalf("parent of workdir not stat-able: %q", out)
+	}
+}
+
+func TestSandboxAllowsSharedTmp(t *testing.T) {
+	useTempRoot(t)
+	dir, err := os.MkdirTemp(sharedTmp, "valen-sbx-test-")
+	if err != nil {
+		t.Skipf("cannot create dir in /tmp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	f := filepath.Join(dir, "f.txt")
+	sh(t, "echo hi > "+f)
+	if b, err := os.ReadFile(f); err != nil || strings.TrimSpace(string(b)) != "hi" {
+		t.Fatalf("/tmp should be writable: %q %v", b, err)
+	}
+	if err := gateShell(context.Background(), "echo hi > "+f, false); err != nil {
+		t.Fatalf("/tmp must not prompt: %v", err)
 	}
 }
 
@@ -180,9 +216,13 @@ func TestShellOutsidePaths(t *testing.T) {
 		"go vet ./...":               0,
 		"ls":                         0,
 		"cat /etc/passwd":            1,
-		"echo hi > /tmp/x":           1,
-		"ls /dev/null":               0,
-		"ls /usr/bin":                0,
+		"echo hi > /tmp/x":           0,
+		"cat ~/.zshrc":               1,
+		"go test $(go list ./... | grep -v /vendor/)": 0,
+		"go test ./... | grep -v /pkg/":               0,
+		"go test -coverprofile=/tmp/c.out ./...":      0,
+		"ls /dev/null":                                0,
+		"ls /usr/bin":                                 0,
 	} {
 		if got := len(shellOutsidePaths(cmd)); got != want {
 			t.Errorf("%q -> %d outside paths, want %d (%q)", cmd, got, want, shellOutsidePaths(cmd))
@@ -200,7 +240,7 @@ func TestShellOutsidePaths(t *testing.T) {
 
 func TestGateShellOutsideAsksOncePerFolder(t *testing.T) {
 	useTempRoot(t)
-	target := filepath.Join(string(filepath.Separator)+"tmp", "valen-gate-test-x.txt")
+	target := filepath.Join(outsideDir(t), "valen-gate-test-x.txt")
 	asked := 0
 	old := askPrompter
 	askPrompter = func(context.Context, []AskQuestion) ([]string, error) { asked++; return []string{"Allow"}, nil }
