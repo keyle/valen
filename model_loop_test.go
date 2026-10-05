@@ -15,6 +15,7 @@ import (
 )
 
 func TestModelLoopFreshReadsAndNativeReplayOnWire(t *testing.T) {
+	t.Setenv(goKeyEnv, "test-key")
 	for _, transport := range []string{"chat", "messages", "responses"} {
 		for _, mode := range []string{"stream", "unary", "rejected"} {
 			t.Run(transport+"/"+mode, func(t *testing.T) {
@@ -251,6 +252,7 @@ func TestToolBatchPotentialWritesStaySerial(t *testing.T) {
 }
 
 func TestRunTurnCarriesCurrentConfig(t *testing.T) {
+	t.Setenv(goKeyEnv, "test-key")
 	srv, _ := fakeServer(t, completion(toolCall("task", `{}`), ""), completion(nil, "done"))
 	cfg := newTestConfig(srv.URL)
 	cfg.Thinking, cfg.MaxTokens = "high", 512

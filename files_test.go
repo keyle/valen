@@ -346,7 +346,7 @@ func TestOutsideAccessAskAllowAndDeny(t *testing.T) {
 
 func TestOutsideApprovalCoversFolder(t *testing.T) {
 	useTempRoot(t)
-	dir := t.TempDir()
+	dir := real(t.TempDir()) // resolve macOS /var -> /private/var
 	for _, n := range []string{"a.txt", "b.txt"} {
 		if err := os.WriteFile(filepath.Join(dir, n), []byte(n), 0o600); err != nil {
 			t.Fatal(err)

@@ -202,6 +202,22 @@ func shellOutsidePaths(command string) []string {
 				continue
 			}
 		}
+		// A bare `/` glued onto an expansion or a closing quote is a path
+		// suffix, not the filesystem root: `"$(pwd)/"`, `"$PWD"/x`,
+		// `"$(git rev-parse --show-toplevel)"/f`. Treating it as `/` would
+		// prompt for (and on approval grant) the entire disk.
+		if m == "/" && loc[0] > 0 {
+			switch prev := command[loc[0]-1]; prev {
+			case ')', '}':
+				continue
+			case '"', '\'', '`':
+				// Only a closing quote (odd count before it); `ls "/"`
+				// opens the quote and really names the root.
+				if strings.Count(command[:loc[0]-1], string(prev))%2 == 1 {
+					continue
+				}
+			}
+		}
 		var abs string
 		switch {
 		case m == "~" || strings.HasPrefix(m, "~/"):
