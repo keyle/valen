@@ -3,10 +3,14 @@ package main
 // Shell sandbox. Every `shell` command runs under an OS-enforced policy:
 //
 //   - writes only inside the workdir, sibling git worktrees, folders the user
-//     approved this session (see checkFileAccess), temp dirs and tool caches;
-//   - credential files (~/.ssh, ~/.aws, ~/.netrc, ... and any .env*) are hidden;
+//     approved this session (see checkFileAccess), the private temp dir and
+//     tool caches (shared /tmp is not writable by default);
+//   - $HOME is hidden (reads and writes ask first via gateShell), as are
+//     credential files (~/.ssh, ~/.aws, ~/.netrc, ... and any .env* secrets,
+//     reads and writes; templates stay readable);
 //   - network is off unless the user allowed it this session (localhost stays);
-//   - everything else (reads, processes) behaves normally.
+//   - system reads outside $HOME (toolchain, /usr, libraries) stay allowed so
+//     `go test` never prompts.
 //
 // The kernel enforces it, so `$(...)`, `eval`, scripts and `python -c` can't
 // get around it. The per-OS part is sandboxArgv (sandbox_darwin.go uses
@@ -50,7 +54,7 @@ func isSecretFile(name string) bool {
 
 // sandboxHint is appended to a failed command's output when it looks like a
 // sandbox denial, so the model knows what to do instead of retrying blindly.
-const sandboxHint = "[sandbox: shell may only write inside the workdir, sibling git worktrees, approved folders and temp/cache dirs. To get another folder, call glob or read on it (the user is asked once per folder), then re-run.]"
+const sandboxHint = "[sandbox: shell may only write inside the workdir, sibling git worktrees, approved folders, the private temp dir and tool caches (shared /tmp and $HOME are blocked). To get another folder, call glob or read on it (the user is asked once per folder), then re-run.]"
 
 // looksSandboxDenied matches the errno texts a blocked write produces:
 // EPERM from Seatbelt, EROFS from bubblewrap's read-only mounts.
@@ -84,9 +88,13 @@ func sandboxCommand(ctx context.Context, command string, network bool) (*exec.Cm
 
 // writableRoots lists the existing, symlink-resolved directories shell may
 // write to. Paths must exist: both backends refuse to bind a missing path.
+// Shared /tmp and /var/tmp are NOT writable by default: explicit /tmp use
+// asks first (see gateShell), while the private per-user temp dir
+// (os.TempDir, /var/folders/... on macOS, used by t.TempDir and go builds)
+// stays writable so `go test` never prompts.
 func writableRoots() []string {
 	root := getFileRoot()
-	c := []string{root, os.TempDir(), "/tmp", "/var/tmp", os.Getenv("GOCACHE")}
+	c := []string{root, os.TempDir(), os.Getenv("GOCACHE")}
 	approvedMu.Lock()
 	for dir := range approvedOutside {
 		c = append(c, dir)
@@ -106,14 +114,22 @@ func writableRoots() []string {
 
 // hiddenPaths lists credential files and dirs the sandbox hides from the
 // command. Only ones that exist (both backends need a real path to mask).
+// The home directory itself is hidden: reads/writes outside the workdir ask
+// first (see gateShell/checkFileAccess) and the kernel blocks unapproved
+// access, so `cat ~/.zshrc` or `cat ~/.config/valen/config.toml` cannot leak
+// personal info. Safe home subpaths (tool caches, approved folders, sibling
+// worktrees, the workdir itself when under $HOME) are re-allowed after this
+// deny (later SBPL rules win; bwrap re-binds after the tmpfs).
 func hiddenPaths() []string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
 	}
 	var c []string
+	c = append(c, home)
 	for _, d := range []string{".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure",
-		".netrc", ".npmrc", ".pypirc", ".config/gh", ".config/gcloud"} {
+		".netrc", ".npmrc", ".pypirc", ".config/gh", ".config/gcloud", ".config",
+		".local/share/valen", ".bash_history", ".zsh_history", ".zshrc", ".bashrc"} {
 		c = append(c, filepath.Join(home, d))
 	}
 	return existing(c, false)

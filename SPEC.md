@@ -33,7 +33,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `stream.go` | Shared streaming layer: raw POST, SSE scanner, unary-JSON fallback |
 | `session.go` | Turn model + JSONL session log at `$XDG_DATA_HOME/valen/sessions/` |
 | `compaction.go` | Summary-mode compaction (prune + cheap-model summary, send-side only) |
-| `usage.go` | OpenCode Go plan quota (`GET /usage`) for the TUI footer |
+| `usage.go` | Quota for the TUI footer: Go plan quota (`GET /usage`) and OpenRouter balance (`GET /credits`) |
 | `errors.go` | Friendly one-line errors mapped from status codes/causes (ctrl+x has details) |
 | `think.go` | Splits `<think>` blocks out of replies so the UI can collapse them |
 | `tools.go` | Tool contract, ordered registry, builtin loader, output limits, `shell` |
@@ -105,7 +105,11 @@ retries and apply to every call the OpenAI client makes. The `messages` and
 `GET {base_url}/usage` returns the Go plan quota (`rolling` / `weekly` /
 `monthly`, each with `status`, `percent`, `resetsAt`). The TUI polls it at
 startup, once a minute, and after each turn to render the footer; non-200s and
-non-Go keys are ignored so the footer simply stays hidden.
+non-Go keys are ignored so the footer simply stays hidden. On
+`openrouter/…` models the Go quota stays hidden and the footer shows the
+OpenRouter balance instead (`GET {openrouter_base}/credits` →
+`OR $X.XX left`); plain API keys 403 on that endpoint, so the footer stays
+clean until a management-key balance lands.
 
 Transport is selected per model by `modelTransport` (live Go table, Oct 2
 2026): `grok-4.x`, `gpt-*-luna` and `muse-spark-*-contributor` are
@@ -301,20 +305,26 @@ frontend they are denied with a clear error, so the model can explain and ask.
 `eval`, `$(...)` and scripts cannot escape it:
 
 - **Writes** only in the workdir, sibling git worktrees, folders approved this
-  session, temp dirs and tool caches (`~/go`, `~/.cache`, `~/.npm`, `~/.cargo`,
-  the user cache dir).
-- **Hidden** (no read or write): `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`,
-  `~/.docker`, `~/.azure`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`,
-  `~/.config/gh`, `~/.config/gcloud`, and `.env` / `.env.*` files anywhere
-  (templates `.env.example|sample|template` stay readable). `read` and `grep`
-  skip `.env` files too. On Linux `.env` files are found by scanning the
-  workdir at command start.
+  session, the private temp dir and tool caches (`~/go`, `~/.cache`, `~/.npm`,
+  `~/.cargo`, the user cache dir). Shared `/tmp` and `$HOME` are not writable
+  by default: explicit use asks once per folder via `shellgate.go`, like
+  `git push` does.
+- **Reads**: `$HOME` is hidden (reads ask once per folder, then the approved
+  folder is re-allowed), as are credential files (`~/.ssh`, `~/.aws`,
+  `~/.gnupg`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.netrc`, `~/.npmrc`,
+  `~/.pypirc`, `~/.config`, session data) and `.env` / `.env.*` secrets
+  anywhere (reads and writes denied; templates
+  `.env.example|sample|template` stay readable). `read`, `write`, `edit`
+  and `grep` all refuse `.env` secrets. On Linux `.env` files are found by
+  scanning the workdir at command start. System reads outside `$HOME`
+  (toolchain, `/usr`, libraries) stay allowed so `go test -run 'Test' .`,
+  `go vet` and `gofmt` never prompt.
 - **Network off** (loopback still works) unless the call sets `network: true`;
   the user is asked once per session.
 - **Ask once per session** before `git push`, `git reset --hard`, `git clean`,
-  `rm -r` and `sudo` (`shellgate.go`). Text matching is best-effort; the
-  sandbox is the boundary.
-- Other reads and processes are unrestricted.
+  `rm -r` and `sudo`, and once per folder before explicit outside-workdir
+  paths (`/tmp/...`, `/etc/passwd`, `~/...`) (`shellgate.go`). Text matching
+  is best-effort; the sandbox is the boundary.
 
 macOS uses `sandbox-exec` (Seatbelt); Linux needs `bwrap` (bubblewrap) on PATH,
 else `shell` errors with an install hint. Other OSes do not compile
@@ -432,7 +442,8 @@ sticks across runs and overrides `config.toml`'s `model`/`thinking`; headless
 mode reads the same overlay (not with `-config <file>`). `/plan` toggles plan
 mode at runtime (read-only investigation, reply is the plan; header shows
 `· plan`); it does not persist. The TUI footer also
-shows Go plan usage (`5h` / `7d` / `30d`), yellow past 80% and pink at the cap.
+shows Go plan usage (`5h` / `7d` / `30d`), yellow past 80% and pink at the cap —
+or the OpenRouter balance (`OR $X.XX left`) on `openrouter/…` models.
 
 ## Extension points
 

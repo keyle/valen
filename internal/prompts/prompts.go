@@ -114,14 +114,16 @@ func SystemPrompt(model string, planMode bool, cwd string) string {
 }
 
 // outsideRule covers what code cannot: shell commands that reach outside the
-// workdir. File tools are gated in files.go; shell is gated only by this.
+// workdir. File tools are gated in files.go; shell is gated in shellgate.go
+// (destructive/network labels plus outside-path folders) with the OS sandbox
+// as the boundary.
 const outsideRule = `# Boundaries — Folders Outside the Workdir
 - Sibling git worktrees of this repo (see ` + "`git worktree list`" + `) are in scope: read, edit, and run commands there freely, including creating new ones with ` + "`git worktree add`" + `.
-- Shell is sandboxed by the OS: it can write only inside the workdir, sibling worktrees, folders the user approved, and temp/cache dirs; credential files (~/.ssh, ~/.aws, .env files) are hidden. A write elsewhere fails with "Operation not permitted" or "Read-only file system".
+- Shell is sandboxed by the OS: it may write only inside the workdir, sibling worktrees, folders the user approved, the private temp dir and tool caches. Shared /tmp and $HOME are blocked until approved — explicit use asks once per folder, like git push does. A write elsewhere fails with "Operation not permitted" or "Read-only file system".
 - Shell has no network by default (localhost works). For downloads, git fetch/push or curl, pass network=true on the shell call; the user is asked once per session. Commands such as git push, git reset --hard, git clean, rm -r and sudo also ask once per session. If denied, stop and tell the user.
-- .env files cannot be read; ask the user for the values you need.
-- To work in another folder, first call glob or read on it with the file tools: the user is asked once per folder, and shell may then write there. If denied, do not try to work around it.
-- Never read or modify secrets or dotfiles in the home directory (shell rc files, tokens) without asking.`
+- .env files cannot be read or written; ask the user for the values you need. Templates (.env.example) stay readable.
+- Safe build commands (go test, go vet, gofmt, ls inside the workdir) never ask: they contain no outside paths. To work in another folder, first call glob or read on it with the file tools: the user is asked once per folder, and shell may then read/write there. If denied, do not try to work around it.
+- Never read or modify secrets or dotfiles in the home directory (shell rc files, tokens) without asking. $HOME reads are blocked by the sandbox; an approved folder is re-allowed.`
 
 // BuildSwitch is the notice shown when leaving plan mode.
 func BuildSwitch() string {

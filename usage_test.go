@@ -145,3 +145,132 @@ func TestTUIUsageFetchCmd(t *testing.T) {
 		t.Fatal("fetch should dispatch again after the reply")
 	}
 }
+
+func TestFetchOpenRouterCredits(t *testing.T) {
+	var gotAuth, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":{"total_credits":20,"total_usage":7.5}}`)
+	}))
+	defer srv.Close()
+
+	c, err := fetchOpenRouterCredits(context.Background(), srv.Client(), srv.URL, "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/credits" || gotAuth != "Bearer key" {
+		t.Fatalf("request: path=%q auth=%q", gotPath, gotAuth)
+	}
+	if c.Remaining() != 12.5 {
+		t.Fatalf("remaining: %+v", c)
+	}
+}
+
+func TestFetchOpenRouterCreditsHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Plain API keys get a 403 here; the footer must stay hidden rather
+		// than surface an error.
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+	if _, err := fetchOpenRouterCredits(context.Background(), srv.Client(), srv.URL, "key"); err == nil {
+		t.Fatal("403 must be an error so the footer stays hidden")
+	}
+}
+
+func TestORCreditsRemainingAndFooter(t *testing.T) {
+	c := ORCredits{TotalCredits: 20, TotalUsage: 7.555}
+	if got := c.footerText(); got != "OR $12.45 left" {
+		t.Fatalf("footer text %q", got)
+	}
+	over := ORCredits{TotalCredits: 1, TotalUsage: 2}
+	if over.Remaining() != 0 {
+		t.Fatalf("over-spend must floor at zero: %v", over.Remaining())
+	}
+	if got := over.footerText(); got != "OR $0.00 left" {
+		t.Fatalf("footer text %q", got)
+	}
+}
+
+func orTestConfig(url string) Config {
+	cfg := testConfig(url)
+	cfg.Model = "openrouter/anthropic/claude-test"
+	cfg.OpenRouterKey = "or-key"
+	return cfg
+}
+
+func TestTUIFooterHidesGoUsageOnOpenRouter(t *testing.T) {
+	m := newTestModel(t, orTestConfig("https://unused"))
+	m.width = 200
+	// Even with a Go usage snapshot around, an OpenRouter model never shows
+	// the Go plan quota.
+	m.goUsage = &GoUsage{Rolling: UsageWindow{Status: "ok", Percent: 90}}
+	if footer := m.footerView(); strings.Contains(footer, "5h") || strings.Contains(footer, "90%") {
+		t.Fatalf("OpenRouter footer must hide Go usage:\n%s", footer)
+	}
+	if footer := m.footerView(); !strings.Contains(footer, "/help for keys and commands") {
+		t.Fatalf("hint must remain:\n%s", footer)
+	}
+	// A failed credits refresh keeps the footer clean (or keeps the last
+	// good balance).
+	_, _ = m.Update(orCreditsMsg{err: fmt.Errorf("boom")})
+	if m.orCredits != nil {
+		t.Fatal("failed refresh must not set credits")
+	}
+	_, _ = m.Update(orCreditsMsg{credits: ORCredits{TotalCredits: 20, TotalUsage: 7.5}})
+	footer := m.footerView()
+	if !strings.Contains(footer, "OR $12.50 left") {
+		t.Fatalf("footer must show the balance:\n%s", footer)
+	}
+	if strings.Contains(footer, "5h") {
+		t.Fatalf("balance footer must not leak Go usage:\n%s", footer)
+	}
+	_, _ = m.Update(orCreditsMsg{err: fmt.Errorf("boom")})
+	if !strings.Contains(m.footerView(), "OR $12.50 left") {
+		t.Fatal("balance should survive a failed refresh")
+	}
+}
+
+func TestFetchQuotaCmdDispatchesByProvider(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/credits":
+			fmt.Fprint(w, `{"data":{"total_credits":10,"total_usage":3}}`)
+		case "/usage":
+			fmt.Fprint(w, `{"usage":{"rolling":{"status":"ok","percent":7,"resetsAt":"2026-10-02T06:53:55Z"}}}`)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+	oldBase := openRouterBaseURL
+	openRouterBaseURL = srv.URL
+	defer func() { openRouterBaseURL = oldBase }()
+
+	// OpenRouter model -> credits fetch, never the Go usage fetch.
+	om := newTestModel(t, orTestConfig("https://unused"))
+	om.httpClient = srv.Client()
+	cmd := om.fetchQuotaCmd()
+	if cmd == nil {
+		t.Fatal("OpenRouter model should dispatch a credits fetch")
+	}
+	msg, ok := cmd().(orCreditsMsg)
+	if !ok || msg.err != nil || msg.credits.Remaining() != 7 {
+		t.Fatalf("credits msg: %+v ok=%v", msg, ok)
+	}
+
+	// Go model -> usage fetch, never the credits fetch.
+	gm := newTestModel(t, testConfig(srv.URL))
+	gm.httpClient = srv.Client()
+	gcmd := gm.fetchQuotaCmd()
+	if gcmd == nil {
+		t.Fatal("Go model should dispatch a usage fetch")
+	}
+	gmsg := gcmd()
+	if _, ok := gmsg.(usageMsg); !ok {
+		t.Fatalf("Go model must fetch usage, got %T", gmsg)
+	}
+}

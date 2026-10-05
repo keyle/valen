@@ -91,14 +91,21 @@ func TestSandboxAllowsTempDir(t *testing.T) {
 	}
 }
 
-func TestSandboxAllowsReads(t *testing.T) {
+func TestSandboxReadsOutsideAsk(t *testing.T) {
 	useTempRoot(t)
-	other := filepath.Join(outsideDir(t), "r.txt")
-	if err := os.WriteFile(other, []byte("readable"), 0o600); err != nil {
-		t.Fatal(err)
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home dir")
 	}
-	if out := sh(t, "cat "+other); out != "readable" {
-		t.Fatalf("reads outside the root should work, out=%q", out)
+	other := filepath.Join(home, ".valen-probe-r.txt")
+	// Explicit outside reads ask first: no prompter denies, like git push.
+	if err := gateShell(context.Background(), "cat "+other, false); err == nil {
+		t.Fatal("outside read should need approval")
+	}
+	// Same folder approval as the file tools covers shell too.
+	defer stubPrompter("Allow", nil)()
+	if err := gateShell(context.Background(), "cat "+other, false); err != nil {
+		t.Fatalf("approved folder should pass the gate: %v", err)
 	}
 }
 
@@ -156,6 +163,63 @@ func TestWritableRootsContents(t *testing.T) {
 			t.Fatalf("too broad: %q", p)
 		}
 	}
+	// Shared /tmp is not writable by default: explicit use must ask first.
+	// (On Linux os.TempDir is /tmp itself, kept writable for t.TempDir/go builds.)
+	if tmp := real("/tmp"); tmp != real(os.TempDir()) && contains(got, tmp) {
+		t.Fatalf("/tmp should not be writable by default: %v", got)
+	}
+}
+
+func TestShellOutsidePaths(t *testing.T) {
+	useTempRoot(t)
+	home, _ := os.UserHomeDir()
+	for cmd, want := range map[string]int{
+		"go test -run 'Test' . 2>&1": 0,
+		"go test ./...":              0,
+		"gofmt -l .":                 0,
+		"go vet ./...":               0,
+		"ls":                         0,
+		"cat /etc/passwd":            1,
+		"echo hi > /tmp/x":           1,
+		"ls /dev/null":               0,
+		"ls /usr/bin":                0,
+	} {
+		if got := len(shellOutsidePaths(cmd)); got != want {
+			t.Errorf("%q -> %d outside paths, want %d (%q)", cmd, got, want, shellOutsidePaths(cmd))
+		}
+	}
+	if home != "" {
+		if len(shellOutsidePaths("ls ~")) == 0 {
+			t.Error("ls ~ should ask")
+		}
+		if len(shellOutsidePaths("cat "+filepath.Join(home, ".zshrc"))) == 0 {
+			t.Error("home dotfile should ask")
+		}
+	}
+}
+
+func TestGateShellOutsideAsksOncePerFolder(t *testing.T) {
+	useTempRoot(t)
+	target := filepath.Join(string(filepath.Separator)+"tmp", "valen-gate-test-x.txt")
+	asked := 0
+	old := askPrompter
+	askPrompter = func(context.Context, []AskQuestion) ([]string, error) { asked++; return []string{"Allow"}, nil }
+	defer func() { askPrompter = old }()
+	ctx := context.Background()
+	if err := gateShell(ctx, "echo hi > "+target, false); err != nil {
+		t.Fatal(err)
+	}
+	if asked != 1 {
+		t.Fatalf("outside folder asked %d times, want 1", asked)
+	}
+	// Second use of the same folder is remembered, like file tools.
+	if err := gateShell(ctx, "cat "+target, false); err != nil || asked != 1 {
+		t.Fatalf("approved folder should not re-ask: err=%v asked=%d", err, asked)
+	}
+	// Safe builds never ask, even with an ask-counting prompter.
+	if err := gateShell(ctx, "go test -run 'Test' . 2>&1", false); err != nil || asked != 1 {
+		t.Fatalf("go test must not ask: err=%v asked=%d", err, asked)
+	}
 }
 
 func contains(l []string, s string) bool {
@@ -205,6 +269,12 @@ func TestSecretFilesHiddenFromFileTools(t *testing.T) {
 	}
 	if _, err := ReadTool().Fn(context.Background(), `{"path":".env"}`); err == nil || !strings.Contains(err.Error(), "secrets") {
 		t.Fatalf("read .env err=%v", err)
+	}
+	if _, err := WriteTool().Fn(context.Background(), `{"path":".env","content":"x"}`); err == nil || !strings.Contains(err.Error(), "secrets") {
+		t.Fatalf("write .env err=%v", err)
+	}
+	if _, err := EditTool().Fn(context.Background(), `{"path":".env.local","oldString":"a","newString":"b"}`); err == nil || !strings.Contains(strings.ToLower(err.Error()), "secret") {
+		t.Fatalf("edit .env err=%v", err)
 	}
 	out, _ := GrepTool().Fn(context.Background(), `{"pattern":"needle"}`)
 	if strings.Contains(out, "needle") {

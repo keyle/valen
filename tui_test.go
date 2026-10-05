@@ -967,11 +967,13 @@ func TestThinkDurShowsSubSecond(t *testing.T) {
 
 // TestPendingThinkingHeaderBeforeText: the live thinking header (with
 // elapsed) renders from turn start, before any thinking delta arrives, so a
-// long tool-only stretch never hides the elapsed. A blank line follows the
-// header even with no body yet.
+// long tool-only stretch never hides the elapsed. The scrollback carries no
+// duplicate status line — live state lives once in the spinner row above the
+// chatbox, with the cancel hint pinned to its right edge.
 func TestPendingThinkingHeaderBeforeText(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	m.viewport.Width = 80
+	m.width = 200
 	m.busy = true
 	m.pendingPrompt = "do the thing"
 	m.pendingSince = time.Now().Add(-63 * time.Second)
@@ -979,16 +981,21 @@ func TestPendingThinkingHeaderBeforeText(t *testing.T) {
 	if !strings.Contains(out, "✦ thinking (1m3s)") {
 		t.Fatalf("live header must show elapsed before thinking text:\n%s", out)
 	}
-	head := strings.Index(out, "✦ thinking (1m3s)")
-	tool := strings.Index(out, "Working…")
-	if head < 0 || tool < 0 || head > tool {
-		t.Fatalf("header/tool order wrong:\n%s", out)
+	if strings.Contains(out, "Working…") || strings.Contains(out, "esc esc") {
+		t.Fatalf("scrollback must not repeat the live status or cancel hint:\n%s", out)
 	}
-	// Line return after the thinking state: header and status line must not
-	// share one visual line.
+	status := m.statusView()
+	if !strings.Contains(status, "Working…") {
+		t.Fatalf("spinner row must carry the live status:\n%s", status)
+	}
+	if !strings.Contains(status, "esc esc to stop") {
+		t.Fatalf("cancel hint must sit in the spinner row:\n%s", status)
+	}
+	// Line return after the thinking state: header must not share a visual
+	// line with body text.
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "✦ thinking") && strings.Contains(line, "Working…") {
-			t.Fatalf("thinking header glued to status line:\n%s", out)
+		if strings.Contains(line, "✦ thinking") && len(strings.TrimSpace(line)) > len("✦ thinking (1m3s)")+4 && strings.Contains(line, "do the thing") {
+			t.Fatalf("thinking header glued to body text:\n%s", out)
 		}
 	}
 }
@@ -1259,6 +1266,29 @@ func TestTUIModelPickerListsAndSelects(t *testing.T) {
 	m.openSelected() // cursor 0 → glm-5.3
 	if m.cfg.Model != "glm-5.3" || m.mode != viewChat {
 		t.Fatalf("model=%q mode=%v notice=%q", m.cfg.Model, m.mode, m.notice)
+	}
+}
+
+func TestTUIModelPickerSearchBoxKeepsFullWidth(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.width = 200
+	m.modelChoices = []modelChoice{{id: "alpha"}, {id: "beta"}}
+	boxWidth := func() int {
+		out := m.renderModelsList()
+		line, _, _ := strings.Cut(out, "\n")
+		return lipgloss.Width(line)
+	}
+	m.modelSearch.SetValue("")
+	empty := boxWidth()
+	m.modelSearch.SetValue("anthropic/claude")
+	typed := boxWidth()
+	if empty != typed {
+		t.Fatalf("search box resized while typing: empty=%d typed=%d", empty, typed)
+	}
+	// Pinned to the content width (plus the two border cells), like the
+	// chatbox, rather than shrinking to the query.
+	if want := m.contentWidth(); empty != want && empty != want+2 {
+		t.Fatalf("search box width=%d, want content width %d (or +2 border)", empty, want)
 	}
 }
 

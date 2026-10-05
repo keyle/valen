@@ -93,6 +93,9 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   turns stay cached.
 - Thinking renders dim/italic with a left rule, shown by default; ctrl+y or
   `/think` collapses to `✦ thinking (N chars)`.
+- Live busy state renders once, in the spinner row above the chatbox, with
+  `esc esc to stop` pinned to its right edge; the pending scrollback block
+  carries no duplicate tool/status line.
 - Tool calls render one compact cyan line plus a dim first-line preview;
   full args/output live in the Tools view. Headers use plain English, not
   raw JSON (`⏺ read foo.go`, `⏺ grep "pat" in src`, `⏺ edit foo.go`).
@@ -111,6 +114,9 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   the footer hint line, refreshed at startup, every minute, and after each
   turn; yellow past 80%, pink at 100% or rate-limited, with a `↻` reset hint
   on hot windows. Hidden when `{base_url}/usage` is unavailable (non-Go keys).
+  On `openrouter/…` models the Go quota stays hidden and the footer shows the
+  OpenRouter balance (`OR $X.XX left`) once the credits fetch lands; plain API
+  keys 403 on `/credits`, so the footer shows only the hint until then.
 - Autoscroll follows new turns while pinned to the bottom; PgUp/PgDn or the
   mouse wheel scrolls the transcript, which pauses autoscroll until scrolled
   back to the bottom (a new submit or committed turn re-pins). Mouse reporting
@@ -167,7 +173,9 @@ Rules:
   turns are cached append-only (keyed on turn count, width, thinking display,
   model), so per-delta cost is the live pending block, not history depth.
 - Go plan quota refreshes share one in-flight fetch: the minute tick and the
-  post-turn refresh never overlap on slow networks.
+  post-turn refresh never overlap on slow networks. The refresh dispatches by
+  provider (`fetchQuotaCmd`): the OpenRouter balance on `openrouter/…` models,
+  the Go quota otherwise — the hidden provider never refreshes.
 
 ## Architecture
 
@@ -204,7 +212,9 @@ transport converters unchanged. Slash commands
 (`/clear` `/think` `/save` `/help` `/history` `/sessions` `/tools` `/errors` `/model`
 `/effort` `/quit`) resolve inside `submit`/`handleCommand`; `/model` fetches
 the catalog asynchronously via `modelsLoadedMsg`. The footer quota refreshes
-via `usageMsg` from `Init`, a one-minute `usageTickMsg`, and each `turnDoneMsg`.
+via `orCreditsMsg`/`usageMsg` from `fetchQuotaCmd` at `Init`, on each
+one-minute `usageTickMsg`, after each `turnDoneMsg`, and on every model
+switch.
 
 Entry point: `main()` keeps flag parsing; if `stdin`/`stdout` are TTYs and
 `-p` was not given, it builds config/registry/MCP once and runs the Bubble
@@ -264,7 +274,9 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
 - `/model` (ctrl+p, or ctrl+m where the terminal sends disambiguated ctrl+m)
   fetches the live catalogs — OpenCode Go (`GET {base_url}/models`) plus
   OpenRouter (`GET https://openrouter.ai/api/v1/models`) — and opens
-  a picker: ↑↓ move, Enter switches, Esc backs out. Both providers list even
+  a picker: ↑↓ move, Enter switches, Esc backs out. The picker search box is
+  pinned to the full content width (like the chatbox) so typing never resizes
+  it. Both providers list even
   without keys (curated fallbacks when offline/unkeyed); picking or sending
   with a model whose key is missing reports "OpenCode Go API key not found"
   or "OpenRouter key not found" naming the env var, instead of failing boot.
@@ -359,7 +371,9 @@ retries the round unary.
   reasoning), config persist round-trip,
   `thinking` validation in `loadConfig`.
 - `usage_test.go`: `/usage` parsing + identity headers, 404 hides the footer,
-  severity thresholds, footer text/reset hints, refresh command wiring.
+  severity thresholds, footer text/reset hints, refresh command wiring;
+  `/credits` parsing, 403 hides the footer, balance flooring + footer text,
+  OpenRouter footer hiding Go usage, per-provider refresh dispatch.
 - Fake completions server drives the real `runTurn` through `submit`.
 - `stream_test.go`: per-transport SSE rounds, stream-rejection fallback, and
   the pending tool/text timeline accumulation.

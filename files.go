@@ -290,6 +290,9 @@ func WriteTool() Tool {
 			if err := checkFileAccess(ctx, "write", abs); err != nil {
 				return "", err
 			}
+			if isSecretFile(abs) {
+				return "", fmt.Errorf("denied: %s holds secrets and is not writable; ask the user for the values you need", abs)
+			}
 			if err := ctx.Err(); err != nil {
 				return "", err
 			}
@@ -338,6 +341,9 @@ func EditTool() Tool {
 			}
 			if err := checkFileAccess(ctx, "edit", abs); err != nil {
 				return "", err
+			}
+			if isSecretFile(abs) {
+				return "", fmt.Errorf("denied: %s holds secrets and is not editable; ask the user for the values you need", abs)
 			}
 			raw, err := os.ReadFile(abs)
 			if err != nil {

@@ -257,6 +257,12 @@ type usageMsg struct {
 	err   error
 }
 
+// orCreditsMsg carries the OpenRouter credit snapshot into the UI thread.
+type orCreditsMsg struct {
+	credits ORCredits
+	err     error
+}
+
 // usageTickMsg triggers a periodic quota refresh.
 type usageTickMsg struct{}
 
@@ -288,6 +294,7 @@ type tuiModel struct {
 	apiKey     string
 	httpClient *http.Client
 	goUsage    *GoUsage
+	orCredits  *ORCredits
 
 	viewport viewport.Model
 	input    textarea.Model
@@ -325,8 +332,10 @@ type tuiModel struct {
 	// usageInflight dedupes quota refreshes: the minute tick and the
 	// post-turn refresh share it, so slow networks never stack fetches.
 	usageInflight bool
-	notice        string
-	noticeErr     bool
+	// orCreditsInflight does the same for the OpenRouter balance fetch.
+	orCreditsInflight bool
+	notice            string
+	noticeErr         bool
 	// escArmedAt is when the first esc of a two-press cancel landed while
 	// busy; zero when disarmed. A second esc within escConfirmWindow cancels.
 	escArmedAt time.Time
@@ -445,9 +454,10 @@ func (m *tuiModel) Init() tea.Cmd {
 		cmds = append(cmds, textarea.Blink)
 	}
 	cmds = append(cmds, m.spinner.Tick)
-	if c := m.fetchUsageCmd(); c != nil {
-		cmds = append(cmds, c, usageTick())
+	if c := m.fetchQuotaCmd(); c != nil {
+		cmds = append(cmds, c)
 	}
+	cmds = append(cmds, usageTick())
 	return tea.Batch(cmds...)
 }
 
@@ -731,6 +741,42 @@ func (m *tuiModel) fetchUsageCmd() tea.Cmd {
 		u, err := fetchGoUsage(ctx, hc, url, key)
 		return usageMsg{usage: u, err: err}
 	}
+}
+
+// fetchORCreditsCmd reloads the OpenRouter balance off the UI thread. Like
+// fetchUsageCmd it is a no-op (nil) without a client/key or while a fetch is
+// already in flight. Non-management keys 403 and the footer stays hidden.
+func (m *tuiModel) fetchORCreditsCmd() tea.Cmd {
+	if m.httpClient == nil || m.orCreditsInflight {
+		return nil
+	}
+	key := effectiveOpenRouterKey(m.cfg)
+	if key == "" {
+		return nil
+	}
+	m.orCreditsInflight = true
+	base := m.ctx
+	if base == nil {
+		base = context.Background()
+	}
+	hc, url := m.httpClient, openRouterBaseURL
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(base, 10*time.Second)
+		defer cancel()
+		c, err := fetchOpenRouterCredits(ctx, hc, url, key)
+		return orCreditsMsg{credits: c, err: err}
+	}
+}
+
+// fetchQuotaCmd reloads whichever quota the footer shows for the current
+// model: the OpenRouter balance on openrouter/… models, the Go plan quota
+// otherwise. Callers (init, tick, post-turn, model switch) stay on this so
+// the hidden provider never refreshes while selected.
+func (m *tuiModel) fetchQuotaCmd() tea.Cmd {
+	if modelProvider(m.cfg.Model) == ProviderOpenRouter {
+		return m.fetchORCreditsCmd()
+	}
+	return m.fetchUsageCmd()
 }
 
 func usageTick() tea.Cmd {
@@ -1111,7 +1157,7 @@ func (m *tuiModel) handleCommand(text string) tea.Cmd {
 		arg := fields[1]
 		if knownGoModel(arg) {
 			m.applyModelSwitch(matchGoModel(fallbackGoModels, arg)[0])
-			return nil
+			return m.fetchQuotaCmd()
 		}
 		return m.openModelPicker(arg)
 	case "/effort", "/thinking":
@@ -1589,6 +1635,14 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case orCreditsMsg:
+		m.orCreditsInflight = false
+		if msg.err == nil {
+			c := msg.credits
+			m.orCredits = &c
+		}
+		return m, nil
+
 	case escExpireMsg:
 		if m.escArmedAt.Equal(msg.at) {
 			m.escArmedAt = time.Time{}
@@ -1599,7 +1653,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case usageTickMsg:
-		return m, tea.Batch(m.fetchUsageCmd(), usageTick())
+		return m, tea.Batch(m.fetchQuotaCmd(), usageTick())
 
 	case modelsLoadedMsg:
 		if msg.filter != m.modelLoadFilter {
@@ -1634,7 +1688,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case 1:
 				m.applyModelSwitch(matched[0])
-				return m, nil
+				return m, m.fetchQuotaCmd()
 			}
 		}
 		sort.Strings(ids)
@@ -1718,7 +1772,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.input.Focus()
 		m.pinBottom()
-		return m, m.fetchUsageCmd()
+		return m, m.fetchQuotaCmd()
 
 	case compactDoneMsg:
 		m.busy = false
@@ -2260,8 +2314,7 @@ func (m *tuiModel) handleOverlayKey(msg tea.KeyMsg, s string) (tea.Model, tea.Cm
 			}
 			return m, nil
 		case "enter":
-			m.openSelected()
-			return m, nil
+			return m, m.openSelected()
 		case "pgup", "pgdown":
 			if s == "pgup" {
 				m.viewport.PageUp()
@@ -2299,8 +2352,7 @@ func (m *tuiModel) handleOverlayKey(msg tea.KeyMsg, s string) (tea.Model, tea.Cm
 		m.ensureCursorVisible()
 		return m, nil
 	case "enter", " ":
-		m.openSelected()
-		return m, nil
+		return m, m.openSelected()
 	case "pgup", "pgdown", "ctrl+d":
 		// Paging scrolls the viewport; cursor moves with the arrow keys or j/k.
 		if s == "pgup" || s == "ctrl+u" {
@@ -2315,22 +2367,23 @@ func (m *tuiModel) handleOverlayKey(msg tea.KeyMsg, s string) (tea.Model, tea.Cm
 	}
 }
 
-func (m *tuiModel) openSelected() {
+func (m *tuiModel) openSelected() tea.Cmd {
 	switch m.mode {
 	case viewModels:
 		if m.cursor < 0 || m.cursor >= len(m.modelChoices) {
-			return
+			return nil
 		}
 		m.applyModelSwitch(m.modelChoices[m.cursor].id)
+		return m.fetchQuotaCmd()
 	case viewEffort:
 		if m.cursor < 0 || m.cursor >= len(m.effortLevels) {
-			return
+			return nil
 		}
 		m.applyThinkingSwitch(m.effortLevels[m.cursor])
 	case viewHistory:
 		items := m.historyItems()
 		if m.cursor < 0 || m.cursor >= len(items) {
-			return
+			return nil
 		}
 		it := items[m.cursor]
 		if it.isFile {
@@ -2345,7 +2398,7 @@ func (m *tuiModel) openSelected() {
 	case viewTools:
 		items := m.toolItems()
 		if m.cursor < 0 || m.cursor >= len(items) {
-			return
+			return nil
 		}
 		r := items[m.cursor].record
 		m.detailTitle = "Tool " + r.Name
@@ -2354,13 +2407,13 @@ func (m *tuiModel) openSelected() {
 	case viewSessions:
 		items := m.sessionItems()
 		if m.cursor < 0 || m.cursor >= len(items) {
-			return
+			return nil
 		}
 		m.resumeSessionPath(items[m.cursor].path)
 	case viewErrors:
 		idx := m.errorTurnIdx()
 		if m.cursor < 0 || m.cursor >= len(idx) {
-			return
+			return nil
 		}
 		t := m.session.Turns[idx[m.cursor]]
 		m.detailTitle = "Error · " + t.At.Format("15:04:05")
@@ -2369,6 +2422,7 @@ func (m *tuiModel) openSelected() {
 		}
 		m.show(viewDetail)
 	}
+	return nil
 }
 
 // View renders header / viewport / status / input / footer.
@@ -2390,7 +2444,7 @@ func (m *tuiModel) View() string {
 }
 
 func (m *tuiModel) headerView() string {
-	title := headerTitleStyle.Render("✦ valen")
+	title := headerTitleStyle.Render(" ✦ valen")
 	model := m.cfg.Model
 	if m.cfg.Thinking != "" {
 		model += " · " + m.cfg.Thinking
@@ -2464,6 +2518,24 @@ func (m *tuiModel) statusView() string {
 	if m.showMeta {
 		right = metaStyle.Render(fmt.Sprintf("  ·  %s %s", m.cfg.Model, m.cfg.BaseURL))
 	}
+	if m.busy {
+		// Cancel hint lives here, pinned to the right edge directly above
+		// the chatbox. The scrollback no longer repeats the status line,
+		// so the spinner row above is the single source of live state.
+		esc := metaStyle.Render("esc esc to stop")
+		if m.width > 0 {
+			avail := m.columnWidth() - 4
+			used := lipgloss.Width(left) + lipgloss.Width(mid) + lipgloss.Width(right) + lipgloss.Width(esc)
+			if used+2 <= avail {
+				esc = strings.Repeat(" ", avail-used) + esc
+			} else {
+				esc = "  " + esc
+			}
+		} else {
+			esc = "  " + esc
+		}
+		right += esc
+	}
 	return lipgloss.NewStyle().Padding(0, 2).Render(left + mid + right)
 }
 
@@ -2483,6 +2555,30 @@ func (m *tuiModel) inputView() string {
 
 func (m *tuiModel) footerView() string {
 	hint := "/help for keys and commands"
+	// The Go plan quota only applies to Go models: on openrouter/… models it
+	// stays hidden and the footer shows the OpenRouter balance instead (when
+	// the credits fetch has landed — plain API keys 403, so the footer stays
+	// clean rather than erroring).
+	if modelProvider(m.cfg.Model) == ProviderOpenRouter {
+		if m.orCredits == nil {
+			return footerStyle.Padding(0, 2).Render(hint)
+		}
+		text := m.orCredits.footerText()
+		avail := 0
+		if m.width > 0 {
+			avail = m.columnWidth() - 4
+			if lipgloss.Width(hint)+lipgloss.Width(text)+5 > avail {
+				return footerStyle.Padding(0, 2).Render(hint)
+			}
+		}
+		line := hint
+		if avail > 0 {
+			line += strings.Repeat(" ", avail-lipgloss.Width(hint)-lipgloss.Width(text)) + footerStyle.Render(text)
+		} else {
+			line += "  " + footerStyle.Render(text)
+		}
+		return footerStyle.Padding(0, 2).Render(line)
+	}
 	if m.goUsage == nil {
 		return footerStyle.Padding(0, 2).Render(hint)
 	}
@@ -3109,12 +3205,9 @@ func (m *tuiModel) renderPending(w int) string {
 		parts = append(parts, "")
 	}
 
-	tool := m.toolStatus
-	if tool == "" {
-		tool = "Working…"
-	}
-	status := statusBusyStyle.Render(tool) + "  " + metaStyle.Render("esc esc cancels")
-	parts = append(parts, status)
+	// No trailing status line here: the spinner row above the chatbox already
+	// carries the live tool/reasoning state, and the cancel hint sits at its
+	// right edge. Repeating either in the scrollback doubles every update.
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
@@ -3480,15 +3573,23 @@ func (m *tuiModel) renderErrorsList() string {
 
 func (m *tuiModel) renderModelsList() string {
 	cw := m.contentWidth()
-	searchWidth := cw - 8
-	if searchWidth < 12 {
-		searchWidth = 12
+	// Fixed full-width search box: the outer border is pinned to the content
+	// width so typing never resizes it. textinput.View() renders one cell
+	// wider once non-empty (the cursor), so the input width leaves one cell
+	// of slack for the typed state; lipgloss pads the rest.
+	boxW := cw - 2
+	if boxW < 14 {
+		boxW = 14
 	}
-	m.modelSearch.Width = searchWidth
-	searchBox := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(mkBorder).Padding(0, 1).Render(m.modelSearch.View())
+	tiW := boxW - 3
+	if tiW < 12 {
+		tiW = 12
+	}
+	m.modelSearch.Width = tiW
+	searchBox := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(mkBorder).Padding(0, 1).Width(boxW).Render(m.modelSearch.View())
 
 	var b strings.Builder
-	b.WriteString(lipgloss.NewStyle().Width(cw).Align(lipgloss.Center).Render(searchBox) + "\n\n")
+	b.WriteString(searchBox + "\n\n")
 	b.WriteString(metaStyle.Render("Models — ↑/↓ select · enter switches · esc clears search / back") + "\n\n")
 	if len(m.modelChoices) == 0 {
 		query := strings.TrimSpace(m.modelFilter)

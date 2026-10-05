@@ -106,3 +106,53 @@ func shortReset(d time.Duration) string {
 	}
 	return fmt.Sprintf("%ds", int(d.Seconds()))
 }
+
+// ORCredits is the OpenRouter credit snapshot from GET {base}/credits.
+// Remaining credit is total purchased minus total used.
+type ORCredits struct {
+	TotalCredits float64 `json:"total_credits"`
+	TotalUsage   float64 `json:"total_usage"`
+}
+
+type orCreditsResponse struct {
+	Data ORCredits `json:"data"`
+}
+
+// fetchOpenRouterCredits reads the OpenRouter credits endpoint. Regular API
+// keys (non-management) get a 403 and the footer stays hidden — same as any
+// other error, so browsing with a plain key never shows a scary message.
+func fetchOpenRouterCredits(ctx context.Context, hc *http.Client, baseURL, apiKey string) (ORCredits, error) {
+	var c ORCredits
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/credits", nil)
+	if err != nil {
+		return c, err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, err := hc.Do(req)
+	if err != nil {
+		return c, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return c, fmt.Errorf("credits: %s", resp.Status)
+	}
+	var body orCreditsResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
+		return c, err
+	}
+	return body.Data, nil
+}
+
+// Remaining is the spendable balance, floored at zero so a rounding wobble
+// past the cap never prints a negative dollar amount.
+func (c ORCredits) Remaining() float64 {
+	if r := c.TotalCredits - c.TotalUsage; r > 0 {
+		return r
+	}
+	return 0
+}
+
+// footerText renders the compact balance, e.g. "OR $12.34 left".
+func (c ORCredits) footerText() string {
+	return fmt.Sprintf("OR $%.2f left", c.Remaining())
+}

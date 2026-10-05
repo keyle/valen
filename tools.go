@@ -174,7 +174,7 @@ func (b *shellOutput) String() string {
 func ShellTool() Tool {
 	return Tool{
 		Name:        "shell",
-		Description: "Run a shell command and return its combined stdout and stderr. Runs in an OS sandbox: writes only in the workdir, sibling worktrees, approved folders and temp/cache dirs; network off unless network=true. For file operations use the dedicated tools instead (read not cat/head/tail/ls/find, edit not sed/awk, write not heredocs); reserve shell for builds, tests, and system commands. 60s timeout; output capped at 16k.",
+		Description: "Run a shell command and return its combined stdout and stderr. Runs in an OS sandbox: writes only in the workdir, sibling worktrees, approved folders, the private temp dir and tool caches (shared /tmp and $HOME ask first); network off unless network=true. For file operations use the dedicated tools instead (read not cat/head/tail/ls/find, edit not sed/awk, write not heredocs); reserve shell for builds, tests, and system commands. 60s timeout; output capped at 16k.",
 		Schema:      json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"shell command to run"},"network":{"type":"boolean","description":"set true only if the command needs the network (downloads, git fetch/push, curl); off by default, the user is asked once per session"}},"required":["command"]}`),
 		Fn: func(ctx context.Context, args string) (string, error) {
 			if prompts.IsPlanMode(ctx) {
