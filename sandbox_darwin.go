@@ -27,17 +27,38 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 		fmt.Fprintf(&prof, "(deny file-read* file-write* (subpath (param \"H%d\")))\n", i)
 		defs = append(defs, "-D", fmt.Sprintf("H%d=%s", i, h))
 	}
+	// System paths (e.g. /etc) ask first via gateShell and stay blocked until
+	// approved: without this, obfuscated constructions (`S=$(printf '\057')`)
+	// bypass the string-matching gate while the default-allow reads let them
+	// through. Deny reads here; an approved folder is re-allowed below via
+	// writableRoots (later rules win). Writes stay denied by the rule after
+	// the writable allow.
+	for i, s := range p.SystemHidden {
+		fmt.Fprintf(&prof, "(deny file-read* (subpath (param \"S%d\")))\n", i)
+		defs = append(defs, "-D", fmt.Sprintf("S%d=%s", i, s))
+	}
 	prof.WriteString("(allow file-write* (subpath \"/dev\")")
 	for i, w := range p.Writable {
 		fmt.Fprintf(&prof, " (subpath (param \"W%d\"))", i)
 		defs = append(defs, "-D", fmt.Sprintf("W%d=%s", i, w))
 	}
 	prof.WriteString(")\n")
+	// /etc stays read-only even when approved for reads (approved writes to
+	// system paths must not succeed).
+	for i := range p.SystemHidden {
+		fmt.Fprintf(&prof, "(deny file-write* (subpath (param \"S%d\")))\n", i)
+	}
 	prof.WriteString("(allow file-read*")
 	for i := range p.Writable {
 		fmt.Fprintf(&prof, " (subpath (param \"W%d\"))", i)
 	}
 	prof.WriteString(")\n")
+	// Git stats its configs on every run; re-allow reads only (writes stay
+	// denied) after the $HOME deny so `git status` works under the sandbox.
+	for i := range p.ReadOnly {
+		fmt.Fprintf(&prof, "(allow file-read* (literal (param \"R%d\")))\n", i)
+		defs = append(defs, "-D", fmt.Sprintf("R%d=%s", i, p.ReadOnly[i]))
+	}
 	// Tools like git and go lstat every parent of the workdir (/Users/n, ...).
 	// Denying $HOME above also denied that metadata, which made
 	// `git worktree add` fail with "Invalid path '/Users/n'". Allow metadata

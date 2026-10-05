@@ -136,27 +136,84 @@ func accessFolder(abs string) string {
 	return filepath.Dir(abs)
 }
 
+// canonicalAccessPath resolves symlinks for access checks: the exact path
+// when it exists (follows link files), else the resolved parent joined with
+// the base name (covers writes through a symlinked dir and new files).
+// Falls back to abs when nothing exists yet.
+func canonicalAccessPath(abs string) string {
+	if r, err := filepath.EvalSymlinks(abs); err == nil {
+		return r
+	}
+	dir := filepath.Dir(abs)
+	if rd, err := filepath.EvalSymlinks(dir); err == nil {
+		return filepath.Join(rd, filepath.Base(abs))
+	}
+	return abs
+}
+
+// allowedWithoutPrompt reports whether abs is inside the root, an approved
+// folder, or a sibling worktree — the no-ask cases. Both the lexical path
+// and its symlink-resolved canonical must pass; callers check both.
+// Comparisons try the stored root and its resolved form (macOS /var ->
+// /private/var): temp roots like t.TempDir() are lexical /var/... while
+// canonicalAccessPath returns /private/..., which must still match.
+func allowedWithoutPrompt(root, abs string) bool {
+	roots := []string{root}
+	if rr := real(root); rr != "" && rr != root {
+		roots = append(roots, rr)
+	}
+	for _, r := range roots {
+		if withinRoot(r, abs) {
+			return true
+		}
+	}
+	approvedMu.Lock()
+	dirs := make([]string, 0, len(approvedOutside))
+	for dir := range approvedOutside {
+		dirs = append(dirs, dir)
+	}
+	approvedMu.Unlock()
+	for _, dir := range dirs {
+		if withinRoot(dir, abs) {
+			return true
+		}
+		if rd := real(dir); rd != "" && rd != dir && withinRoot(rd, abs) {
+			return true
+		}
+	}
+	return inSiblingWorktree(root, abs)
+}
+
+// blocksSecret reports whether reading/writing abs would touch a secret
+// .env file, following symlinks: link-env -> .env.probe-test must deny even
+// though the link name looks innocent.
+func blocksSecret(abs string) bool {
+	if isSecretFile(abs) {
+		return true
+	}
+	if c := canonicalAccessPath(abs); c != abs && isSecretFile(c) {
+		return true
+	}
+	return false
+}
+
 // checkFileAccess allows paths inside the root, inside a sibling worktree of
 // the same repo, or inside a previously approved folder; anything else asks
 // the user (per folder) via the active AskUserQuestion prompter. Without an
 // interactive frontend there is nobody to ask, so the access is denied.
 func checkFileAccess(ctx context.Context, op, abs string) error {
 	root := getFileRoot()
-	if withinRoot(root, abs) {
+	canon := canonicalAccessPath(abs)
+	if allowedWithoutPrompt(root, abs) && allowedWithoutPrompt(root, canon) {
 		return nil
 	}
-	approvedMu.Lock()
-	for dir := range approvedOutside {
-		if withinRoot(dir, abs) {
-			approvedMu.Unlock()
-			return nil
-		}
+	// Prompt for the resolved target when the link escapes: approving the
+	// link name alone must not grant the outside folder.
+	outside := abs
+	if !allowedWithoutPrompt(root, canon) {
+		outside = canon
 	}
-	approvedMu.Unlock()
-	if inSiblingWorktree(root, abs) {
-		return nil
-	}
-	folder := accessFolder(abs)
+	folder := accessFolder(outside)
 	if askPrompter == nil {
 		return fmt.Errorf("denied: %s is outside workdir %s (no interactive prompter to approve it)", abs, root)
 	}
@@ -210,7 +267,7 @@ func ReadTool() Tool {
 			if err := checkFileAccess(ctx, "read", abs); err != nil {
 				return "", err
 			}
-			if isSecretFile(abs) {
+			if blocksSecret(abs) {
 				return "", fmt.Errorf("denied: %s holds secrets and is not readable; ask the user for the values you need", abs)
 			}
 			raw, err := os.ReadFile(abs)
@@ -290,7 +347,7 @@ func WriteTool() Tool {
 			if err := checkFileAccess(ctx, "write", abs); err != nil {
 				return "", err
 			}
-			if isSecretFile(abs) {
+			if blocksSecret(abs) {
 				return "", fmt.Errorf("denied: %s holds secrets and is not writable; ask the user for the values you need", abs)
 			}
 			if err := ctx.Err(); err != nil {
@@ -342,7 +399,7 @@ func EditTool() Tool {
 			if err := checkFileAccess(ctx, "edit", abs); err != nil {
 				return "", err
 			}
-			if isSecretFile(abs) {
+			if blocksSecret(abs) {
 				return "", fmt.Errorf("denied: %s holds secrets and is not editable; ask the user for the values you need", abs)
 			}
 			raw, err := os.ReadFile(abs)
@@ -553,15 +610,21 @@ func GrepTool() Tool {
 					if d.IsDir() {
 						return nil
 					}
+					// Symlink files resolve before reading: link-env ->
+					// .env.probe-test must skip like the target, and links
+					// escaping the root/approved/worktrees must not leak.
+					if blocksSecret(p) {
+						return nil
+					}
+					if canon := canonicalAccessPath(p); !allowedWithoutPrompt(getFileRoot(), canon) {
+						return nil
+					}
 					rel, err := filepath.Rel(getFileRoot(), p)
 					if err != nil {
 						return nil
 					}
 					slash := filepath.ToSlash(rel)
 					if a.Include != "" && !matchGlob(filepath.ToSlash(a.Include), slash) && !matchGlob(filepath.ToSlash(a.Include), path.Base(slash)) {
-						return nil
-					}
-					if isSecretFile(p) {
 						return nil
 					}
 					if fi, err := d.Info(); err == nil && fi.Size() > maxGrepFileBytes {

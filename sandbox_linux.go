@@ -30,6 +30,16 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 			args = append(args, maskArgs(r)...)
 		}
 	}
+	// SystemHidden files (not dirs: masking /etc wholesale would empty
+	// hosts/resolv and break the toolchain) are masked before the writable
+	// binds so an approved folder re-exposes them. Darwin denies the dir via
+	// SBPL instead; Linux keeps world-readable system files readable (low
+	// risk) and relies on the gate prompt for direct paths.
+	for _, s := range p.SystemHidden {
+		if fi, err := os.Stat(s); err == nil && !fi.IsDir() {
+			args = append(args, maskArgs(s)...)
+		}
+	}
 	for _, w := range p.Writable {
 		args = append(args, "--bind", w, w)
 	}
@@ -38,6 +48,11 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 			continue
 		}
 		args = append(args, maskArgs(h)...)
+	}
+	// Git configs live under the masked $HOME tmpfs; re-expose them read-only
+	// after all masks so `git status` works. Writes stay blocked (ro-bind).
+	for _, r := range p.ReadOnly {
+		args = append(args, "--ro-bind", r, r)
 	}
 	// bwrap has no patterns: mask the .env files that exist right now.
 	for _, f := range findEnvFiles(p.Root) {

@@ -414,3 +414,124 @@ func TestGateShellDeniesWithoutPrompterOrOnDeny(t *testing.T) {
 		t.Fatalf("harmless: %v", err)
 	}
 }
+
+func TestScrubShellEnvDropsSecrets(t *testing.T) {
+	t.Setenv("VALEN_TEST_SECRET_KEY", "s3cr3t")
+	t.Setenv("VALEN_TEST_API_TOKEN", "tok")
+	t.Setenv("VALEN_TEST_PASSWORD", "pw")
+	t.Setenv("VALEN_TEST_PLAIN", "keep")
+	got := map[string]string{}
+	for _, kv := range scrubShellEnv() {
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			got[kv[:i]] = kv[i+1:]
+		}
+	}
+	for _, k := range []string{"VALEN_TEST_SECRET_KEY", "VALEN_TEST_API_TOKEN", "VALEN_TEST_PASSWORD"} {
+		if _, ok := got[k]; ok {
+			t.Errorf("%s leaked into shell env", k)
+		}
+	}
+	if got["VALEN_TEST_PLAIN"] != "keep" {
+		t.Error("non-secret env must pass through")
+	}
+	if _, ok := got["PATH"]; !ok {
+		t.Error("PATH must pass through")
+	}
+}
+
+func TestCheckFileAccessBlocksSymlinkEscape(t *testing.T) {
+	root := useTempRoot(t) // prompter nil: outside denies
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(secret, []byte("s"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link-out")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkFileAccess(context.Background(), "read", link); err == nil {
+		t.Fatal("symlink to outside file must deny without approval")
+	}
+	dirLink := filepath.Join(root, "link-dir")
+	if err := os.Symlink(outside, dirLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkFileAccess(context.Background(), "read", filepath.Join(dirLink, "secret.txt")); err == nil {
+		t.Fatal("symlinked dir escape must deny without approval")
+	}
+}
+
+func TestBlocksSecretFollowsSymlink(t *testing.T) {
+	// The sandboxed test runner cannot create fresh .env files (the Seatbelt
+	// profile denies them), so reuse the repo's existing probe file as the
+	// secret target: only the link itself is created here (allowed name).
+	target := filepath.Join(getFileRoot(), ".env.probe-test")
+	if _, err := os.Lstat(target); err != nil {
+		cwd, _ := os.Getwd()
+		target = filepath.Join(cwd, ".env.probe-test")
+		if _, err := os.Lstat(target); err != nil {
+			t.Skip("no .env probe file to link against")
+		}
+	}
+	link := filepath.Join(t.TempDir(), "link-env")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if !blocksSecret(link) {
+		t.Fatal("link to .env file must count as secret")
+	}
+}
+
+func TestShellObfuscatedPathFlagsBypass(t *testing.T) {
+	useTempRoot(t)
+	bypass := `S=$(printf '\057'); E=etc; P=${S}${E}; cat ${P}/passwd`
+	if !shellObfuscatedPath(bypass) {
+		t.Fatal("printf/${ bypass must flag")
+	}
+	if got := shellOutsidePaths(bypass); len(got) == 0 {
+		t.Fatal("obfuscated command must produce an outside path (prompt)")
+	}
+	for _, safe := range []string{"go test -run 'Test' . 2>&1", "go test $(go list ./... | grep -v /vendor/)", "gofmt -l ."} {
+		if shellObfuscatedPath(safe) {
+			t.Errorf("%q must not flag as obfuscated", safe)
+		}
+	}
+	if got := len(shellOutsidePaths("go test $(go list ./... | grep -v /vendor/)")); got != 0 {
+		t.Errorf("safe go list subst must stay prompt-free, got %d", got)
+	}
+}
+
+func TestSandboxArgvReallowsGitConfig(t *testing.T) {
+	// Use a synthetic read-only file: the real ~/.gitconfig is unstat-able
+	// when tests run under the sandbox (HOME hidden), so gitReadOnlyPaths()
+	// is empty here. The profile wiring is what matters.
+	f := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, args, err := sandboxArgv("true", sandboxPolicy{Writable: []string{"/tmp"}, ReadOnly: []string{f}})
+	if err != nil {
+		t.Skipf("backend unavailable: %v", err)
+	}
+	if !strings.Contains(strings.Join(args, " "), f) {
+		t.Errorf("read-only %s missing from sandbox argv", f)
+	}
+}
+
+func TestSandboxArgvDeniesSystemHidden(t *testing.T) {
+	paths := systemHiddenPaths()
+	if len(paths) == 0 {
+		t.Skip("no system hidden paths here")
+	}
+	_, args, err := sandboxArgv("true", sandboxPolicy{Writable: []string{"/tmp"}, SystemHidden: paths})
+	if err != nil {
+		t.Skipf("backend unavailable: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	for _, p := range paths {
+		if !strings.Contains(joined, p) {
+			t.Errorf("system hidden %s missing from sandbox argv", p)
+		}
+	}
+}

@@ -31,10 +31,12 @@ const sharedTmp = "/tmp"
 
 // sandboxPolicy is what one command may do. Root is the workdir.
 type sandboxPolicy struct {
-	Root     string
-	Writable []string // existing dirs shell may write to
-	Hidden   []string // existing files/dirs shell cannot read or write
-	Network  bool
+	Root         string
+	Writable     []string // existing dirs shell may write to
+	ReadOnly     []string // existing files shell may read but not write (git configs)
+	Hidden       []string // existing files/dirs shell cannot read or write
+	SystemHidden []string // system paths shell cannot read (approvable via folder approval)
+	Network      bool
 }
 
 // isSecretFile reports whether name is a .env file that holds secrets.
@@ -81,12 +83,45 @@ func looksNetworkDenied(out string) bool {
 // the policy as it stands now (approvals made mid-session are picked up).
 func sandboxCommand(ctx context.Context, command string, network bool) (*exec.Cmd, error) {
 	name, args, err := sandboxArgv(command, sandboxPolicy{
-		Root: getFileRoot(), Writable: writableRoots(), Hidden: hiddenPaths(), Network: network,
+		Root: getFileRoot(), Writable: writableRoots(), ReadOnly: gitReadOnlyPaths(),
+		Hidden: hiddenPaths(), SystemHidden: systemHiddenPaths(), Network: network,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return exec.CommandContext(ctx, name, args...), nil
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = scrubShellEnv()
+	return cmd, nil
+}
+
+// sensitiveEnvSubstrings marks env vars that never reach shell commands.
+// The value itself is the secret (API keys, tokens), not the fact a tool
+// needs them: valen's own HTTP calls keep using the process env, only the
+// sandboxed `sh -c` child gets the scrubbed copy, so `printenv`/`env` can't
+// leak them even via `$VAR`/obfuscated construction that gateShell can't see.
+func sensitiveEnvKey(key string) bool {
+	u := strings.ToUpper(key)
+	for _, sub := range []string{"KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIALS"} {
+		if strings.Contains(u, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// scrubShellEnv drops secret-bearing vars from the env inherited by shell.
+// Non-secret vars (PATH, HOME, TMPDIR, LANG, ...) pass through: HOME must
+// stay so git/go resolve the workdir parents, and its contents stay hidden
+// by the kernel profile, not by env removal.
+func scrubShellEnv() []string {
+	out := make([]string, 0, len(os.Environ()))
+	for _, kv := range os.Environ() {
+		if i := strings.IndexByte(kv, '='); i > 0 && sensitiveEnvKey(kv[:i]) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // writableRoots lists the existing, symlink-resolved directories shell may
@@ -153,6 +188,40 @@ func hiddenPaths() []string {
 		c = append(c, filepath.Join(home, d))
 	}
 	return existing(c, false)
+}
+
+// gitReadOnlyPaths lists git config files the sandbox re-allows for reads
+// only. Git stats these on every invocation (even `git status` in the
+// workdir), and hiding $HOME made git fail with "unable to access
+// '/Users/n/.gitconfig': Operation not permitted". Later SBPL rules win, so
+// a literal file-read allow after the HOME deny restores `git` without
+// opening $HOME for writes or listing; on Linux the file is ro-bound over
+// the HOME tmpfs. Credential dirs (~/.ssh) stay hidden.
+func gitReadOnlyPaths() []string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return nil
+	}
+	c := []string{
+		filepath.Join(home, ".gitconfig"),
+		filepath.Join(home, ".gitignore"),
+		filepath.Join(home, ".gitattributes"),
+		filepath.Join(home, ".config", "git", "config"),
+		filepath.Join(home, ".config", "git", "ignore"),
+	}
+	return existing(c, false)
+}
+
+// systemHiddenPaths lists system paths whose reads ask first via gateShell
+// and are blocked by the kernel until approved. The profile defaults to
+// allow reads (so the toolchain never prompts), which let obfuscated
+// constructions (`S=$(printf '\057'); cat ${S}etc/passwd`) bypass the
+// string-matching gate and read /etc with no prompt. Denying /etc here
+// fails closed: direct `cat /etc/passwd` still asks, obfuscated reads now
+// hit "Operation not permitted", and an approved /etc folder is re-allowed
+// via writableRoots (later rules win on Darwin; bind after mask on Linux).
+func systemHiddenPaths() []string {
+	return existing([]string{"/etc", real("/etc")}, true)
 }
 
 // existingDirs keeps directories that exist, resolving symlinks.

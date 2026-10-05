@@ -114,8 +114,22 @@ func approveShell(ctx context.Context, label, command string) error {
 // outsidePathRe finds candidate absolute paths and ~-home references in a
 // shell command. Best-effort like destructiveLabels: quoted paths match,
 // obfuscated paths (built via $vars, command substitution) do not — the OS
-// sandbox still blocks unapproved HOME and shared-/tmp writes, and hides
-// credential files, so a bypass fails closed instead of leaking.
+// sandbox still blocks unapproved HOME writes, credential files, .env secrets
+// and (Darwin) /etc reads, so a bypass fails closed instead of leaking.
+// shellObfuscatedPath reports dynamic absolute-path construction the regex
+// above cannot see (`S=$(printf '\057'); cat ${S}etc/passwd`). Safe builds
+// (`go test $(go list ./...)`) use plain `$(go ...)` without these markers
+// and stay unflagged; the markers below (printenv/printf/eval/backtick/${)
+// force a prompt for /etc so silent exfiltration asks first.
+func shellObfuscatedPath(command string) bool {
+	for _, m := range []string{"printenv", "printf", "eval ", "`", "${", "\\057", "\\x2f", "$'"} {
+		if strings.Contains(command, m) {
+			return true
+		}
+	}
+	return false
+}
+
 var outsidePathRe = regexp.MustCompile("~(?:/[^\\s'\"`;|&()<>$\\\\]*)?|/(?:[^/\\s'\"`;|&()<>$\\\\][^\\s'\"`;|&()<>$\\\\]*)?")
 
 // shellSafePrefixes are absolute prefixes that never trigger an outside
@@ -239,6 +253,12 @@ func shellOutsidePaths(command string) []string {
 			}
 			add(filepath.Clean("/tmp"))
 		}
+	}
+	// Dynamic path construction asks for /etc: the literal scan above misses
+	// `$vars`/`$(...)`-built absolutes, and the kernel now blocks /etc reads
+	// until approved, so force the prompt here instead of silent success.
+	if shellObfuscatedPath(command) {
+		add(filepath.Clean("/etc"))
 	}
 	return out
 }
