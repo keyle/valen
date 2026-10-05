@@ -2527,7 +2527,7 @@ func (m *tuiModel) statusView() string {
 		}
 		prog := ""
 		if m.roundCur > 0 && m.roundMax > 0 {
-			prog = fmt.Sprintf(" · rd %d/%d", m.roundCur, m.roundMax)
+			prog = fmt.Sprintf(" · round %d/%d", m.roundCur, m.roundMax)
 		}
 		left = statusBusyStyle.Render(fmt.Sprintf("%s working  %s%s  %s", m.spinner.View(), tool, prog, elapsed))
 	} else {
@@ -2541,7 +2541,7 @@ func (m *tuiModel) statusView() string {
 			mid = "  " + noticeStyle.Render(m.notice)
 		}
 	} else if m.session != nil {
-		mid = "  " + metaStyle.Render(fmt.Sprintf("%d turns · win %s/%s · ↑%s ↓%s",
+		mid = "  " + metaStyle.Render(fmt.Sprintf("%d turns · %s/%s · ↑%s ↓%s",
 			len(m.session.Turns), fk(estimateTokens(m.history)), fk(contextBudget(m.cfg)),
 			fk(m.session.TotalUsage.Prompt), fk(m.session.TotalUsage.Completion)))
 	}

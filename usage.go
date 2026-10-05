@@ -152,7 +152,7 @@ func (c ORCredits) Remaining() float64 {
 	return 0
 }
 
-// footerText renders the compact balance, e.g. "OR $12.34 left".
+// footerText renders the compact balance, e.g. "openrouter $12.34 left".
 func (c ORCredits) footerText() string {
-	return fmt.Sprintf("OR $%.2f left", c.Remaining())
+	return fmt.Sprintf("openrouter $%.2f left", c.Remaining())
 }

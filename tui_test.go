@@ -2053,7 +2053,7 @@ func TestStatusRowShowsWindowInK(t *testing.T) {
 	m.pendingSince = time.Now()
 	m.spinner = spinner.Model{}
 	got := m.statusView()
-	if !strings.Contains(got, "rd 3/300") {
+	if !strings.Contains(got, "round 3/300") {
 		t.Fatalf("status missing round progress: %q", got)
 	}
 	if !strings.Contains(got, "256k") {
