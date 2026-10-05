@@ -1360,10 +1360,10 @@ func TestTUIModelPickerFavouritesFloatAndToggle(t *testing.T) {
 		t.Fatalf("favourite must render a star:\n%s", text)
 	}
 
-	// Space on the highlighted favourite unstars it and persists.
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeySpace})
+	// Ctrl+F on the highlighted favourite unstars it and persists.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlF})
 	if m.isFavourite("gpt-5.6-luna") {
-		t.Fatal("space must unstar the highlighted model")
+		t.Fatal("ctrl+f must unstar the highlighted model")
 	}
 	if m.modelChoices[m.cursor].id != "gpt-5.6-luna" {
 		t.Fatalf("cursor should stay on the toggled model: cursor=%d choices=%v", m.cursor, m.modelChoices)
@@ -1372,16 +1372,16 @@ func TestTUIModelPickerFavouritesFloatAndToggle(t *testing.T) {
 		t.Fatalf("unstar must persist: %q", raw)
 	}
 
-	// Space on a plain row stars it, floats it to the top and writes the file.
+	// Ctrl+F on a plain row stars it, floats it to the top and writes the file.
 	m.cursor = 0
 	for i, c := range m.modelChoices {
 		if c.id == "glm-5.3" {
 			m.cursor = i
 		}
 	}
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeySpace})
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlF})
 	if !m.isFavourite("glm-5.3") {
-		t.Fatal("space must star glm-5.3")
+		t.Fatal("ctrl+f must star glm-5.3")
 	}
 	if m.modelChoices[0].id != "glm-5.3" {
 		t.Fatalf("new favourite must float to top: %v", m.modelChoices)

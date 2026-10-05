@@ -75,8 +75,11 @@ var (
 	// state is obvious at a glance.
 	confirmHintStyle = lipgloss.NewStyle().Foreground(mkGreen).Bold(true)
 	// Favourite marker in the model picker: warm yellow, like a lit star.
-	favStyle   = lipgloss.NewStyle().Foreground(mkYellow).Bold(true)
-	emptyStyle = lipgloss.NewStyle().Foreground(mkComment).Padding(1, 2)
+	favStyle = lipgloss.NewStyle().Foreground(mkYellow).Bold(true)
+	// Model name in picker rows: bright and bold so it reads first while the
+	// provider prefix stays dim.
+	modelNameStyle = lipgloss.NewStyle().Foreground(mkFg).Bold(true)
+	emptyStyle     = lipgloss.NewStyle().Foreground(mkComment).Padding(1, 2)
 )
 
 // monokaiGlamour is a glamour JSON style approximating Monokai Pro.
@@ -690,14 +693,14 @@ func (m *tuiModel) renderAsk() string {
 		}
 		row = breakLongWords(row, cw-2)
 		if j == a.cursor {
-			b.WriteString(selectedStyle.Width(cw).Render(row) + "\n")
+			b.WriteString(selectedStyle.Width(cw).Render(" "+row) + "\n")
 		} else {
 			b.WriteString(m.wrapPlain("  "+row) + "\n")
 		}
 	}
 	ownRow := breakLongWords(fmt.Sprintf("%d. Type your own answer", len(q.Options)+1), cw-2)
 	if a.cursor == len(q.Options) {
-		b.WriteString(selectedStyle.Width(cw).Render(ownRow) + "\n")
+		b.WriteString(selectedStyle.Width(cw).Render(" "+ownRow) + "\n")
 	} else {
 		b.WriteString(m.wrapPlain("  "+ownRow) + "\n")
 	}
@@ -1383,7 +1386,7 @@ func (m *tuiModel) isFavourite(id string) bool {
 }
 
 // toggleFavourite stars or unstars the highlighted model, persists the set
-// and re-sorts the list, keeping the cursor on the same model. Space drives
+// and re-sorts the list, keeping the cursor on the same model. Ctrl+F drives
 // it; Enter stays selection.
 func (m *tuiModel) toggleFavourite() {
 	if m.cursor < 0 || m.cursor >= len(m.modelChoices) {
@@ -2441,8 +2444,10 @@ func (m *tuiModel) handleOverlayKey(msg tea.KeyMsg, s string) (tea.Model, tea.Cm
 			return m, nil
 		case "enter":
 			return m, m.openSelected()
-		case " ":
-			// Space stars the highlighted model; Enter keeps selecting.
+		case "ctrl+f":
+			// Ctrl+F stars the highlighted model; Enter keeps selecting.
+			// A printable key would be swallowed before the search box sees
+			// it, so the toggle needs a modifier.
 			m.toggleFavourite()
 			return m, nil
 		case "pgup", "pgdown":
@@ -3884,7 +3889,7 @@ func (m *tuiModel) renderModelsList() string {
 
 	var b strings.Builder
 	b.WriteString(searchBox + "\n\n")
-	b.WriteString(metaStyle.Render("Models — ↑/↓ select · enter switches · space favourites · esc clears search / back") + "\n\n")
+	b.WriteString(metaStyle.Render("Models — ↑/↓ select · enter switches · ctrl+f favourites · esc clears search / back") + "\n\n")
 	if len(m.modelChoices) == 0 {
 		query := strings.TrimSpace(m.modelFilter)
 		if query == "" {
@@ -3916,13 +3921,37 @@ func (m *tuiModel) renderModelsList() string {
 		}
 		line = truncateRunes(line, cw-6)
 		if i == m.cursor {
-			b.WriteString(selectedStyle.Width(cw).Render(fmt.Sprintf("%2d %s %s", i+1, star, line)) + "\n")
+			b.WriteString(selectedStyle.Width(cw).Render(fmt.Sprintf(" %2d %s %s", i+1, star, line)) + "\n")
 		} else {
-			b.WriteString(fmt.Sprintf("  %2d %s %s\n", i+1, starCell, line))
+			b.WriteString(fmt.Sprintf("  %2d %s %s\n", i+1, starCell, boldModelName(c.id, line)))
 		}
 	}
 	b.WriteString("\n" + metaStyle.Render("★ favourites stay on top. Transports are marked: /chat, /responses and /messages all converse."))
 	return b.String()
+}
+
+// boldModelName renders the model name inside a picker row bright and bold,
+// leaving the provider prefix and trailing markers (● current, transport) in
+// the terminal default. line must already be truncated: truncateRunes counts
+// ANSI escapes, so the style is applied after the fact.
+func boldModelName(id, line string) string {
+	full := displayModelID(id)
+	prefix := ""
+	if i := strings.LastIndex(full, "/"); i >= 0 {
+		prefix = full[:i+1]
+	}
+	if !strings.HasPrefix(line, prefix) {
+		return line
+	}
+	rest := line[len(prefix):]
+	end := strings.Index(rest, "  ")
+	if end < 0 {
+		end = len(rest)
+	}
+	if end == 0 {
+		return line
+	}
+	return prefix + modelNameStyle.Render(rest[:end]) + rest[end:]
 }
 
 func effortLabel(level string) string {
@@ -3951,7 +3980,7 @@ func (m *tuiModel) renderEffortList() string {
 			line += "  ● current"
 		}
 		if i == m.cursor {
-			b.WriteString(selectedStyle.Width(cw).Render(fmt.Sprintf("%2d  %s", i+1, line)) + "\n")
+			b.WriteString(selectedStyle.Width(cw).Render(fmt.Sprintf(" %2d  %s", i+1, line)) + "\n")
 		} else {
 			b.WriteString(fmt.Sprintf("  %2d  %s\n", i+1, line))
 		}
@@ -3969,7 +3998,7 @@ Keys
   ctrl+g help · ctrl+r history · ctrl+l sessions · ctrl+u tools · ctrl+x errors · ctrl+y thinking display
   ctrl+o details · ctrl+p/ctrl+m model · ctrl+n new session · ctrl+t thinking level (cycles low→high, wraps) · ctrl+s save · ctrl+q quit · ctrl+c/ctrl+d cancel · clear input · quit
   in lists: ↑↓ move · enter open · esc back
-  /model picker: type to filter · ↑↓ select · enter switches · space stars/unstars favourites (kept on top) · esc clears search, then backs
+  /model picker: type to filter · ↑↓ select · enter switches · ctrl+f stars/unstars favourites (kept on top) · esc clears search, then backs
 
 Commands
    /help /history /sessions (/resume) /tools /errors /think /save /clear /new /plan /quit (or :q)
@@ -3985,7 +4014,7 @@ minute and after every turn: dim normally, yellow past 80%, pink at the cap.
 
 Models persist to ~/.config/valen/state.json, so the last switch sticks across runs.
 Favourites live beside it in ~/.config/valen/favourites.yaml (a plain list) and
-show with a ★ at the top of the picker; space toggles them there.
+show with a ★ at the top of the picker; ctrl+f toggles them there.
 Thinking levels depend on the model (see /effort picker): muse-spark takes
 minimal/low/medium/high/xhigh, gpt/grok take low…max, glm/deepseek take
 low/high/max or high/max, kimi-k3 is max-only, toggle models take none/high.

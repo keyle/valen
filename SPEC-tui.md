@@ -309,7 +309,7 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
   `openrouter/…` prefix) at
   `~/.config/valen/favourites.yaml` (`$XDG_CONFIG_HOME/valen/`). Starred
   models sort to the top of the picker with a ★, alphabetically within each
-  group, and the cursor stays on the toggled row. Space writes the file;
+  group, and the cursor stays on the toggled row. Ctrl+F writes the file;
   without a state path (tests, `-config <file>`) favourites are session-only.
 - `/model <filter>` switches directly on an exact or unique-substring match,
   otherwise opens the filtered picker. `/model <known-id>` works offline.
