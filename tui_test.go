@@ -1262,6 +1262,44 @@ func TestTUIModelPickerListsAndSelects(t *testing.T) {
 	}
 }
 
+func TestTUIModelPickerSearchAndEscape(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	_, _ = m.Update(modelsLoadedMsg{ids: []string{"alpha", "j-model", "k-model"}})
+	if m.mode != viewModels {
+		t.Fatalf("mode=%v", m.mode)
+	}
+	if text := m.renderViewportContent(); !strings.Contains(text, "Search...") {
+		t.Fatalf("picker should render its search box:\n%s", text)
+	}
+
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if m.modelSearch.Value() != "j" || len(m.modelChoices) != 1 || m.modelChoices[0].id != "j-model" {
+		t.Fatalf("j should filter instead of moving the cursor: query=%q choices=%v cursor=%d", m.modelSearch.Value(), m.modelChoices, m.cursor)
+	}
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.cursor != 0 || m.modelSearch.Value() != "j" {
+		t.Fatalf("arrow navigation changed the query or moved past the only result: cursor=%d query=%q", m.cursor, m.modelSearch.Value())
+	}
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyBackspace})
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	if m.modelSearch.Value() != "k" || len(m.modelChoices) != 1 || m.modelChoices[0].id != "k-model" {
+		t.Fatalf("k should filter instead of moving the cursor: query=%q choices=%v cursor=%d", m.modelSearch.Value(), m.modelChoices, m.cursor)
+	}
+
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mode != viewModels || m.modelSearch.Value() != "" || len(m.modelChoices) != 3 {
+		t.Fatalf("first esc should clear search only: mode=%v query=%q choices=%v", m.mode, m.modelSearch.Value(), m.modelChoices)
+	}
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.cursor != 1 {
+		t.Fatalf("down arrow should move the selection: cursor=%d", m.cursor)
+	}
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mode != viewChat {
+		t.Fatalf("esc on empty search should close the picker: mode=%v", m.mode)
+	}
+}
+
 // TestTUICtrlMCSIParses: the disambiguated ctrl+m letter sequences open the
 // model picker; the bare mod-less form must keep typing (it is a plain "m").
 func TestTUICtrlMCSIParses(t *testing.T) {
@@ -1318,19 +1356,19 @@ func TestTUIOverlayCursorScrollsViewport(t *testing.T) {
 	m.viewport.Height = 8
 	m.pinBottom() // cursor 0 is at top; re-pin to top for the downward run
 	m.viewport.GotoTop()
-	down := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}
+	down := tea.KeyMsg{Type: tea.KeyDown}
 	for i := 0; i < 20; i++ {
 		mm, _ := m.Update(down)
 		m = mm.(*tuiModel)
 	}
 	visible := func() bool {
-		line := m.cursor + 2
+		line := m.cursor + 4
 		return line >= m.viewport.YOffset && line < m.viewport.YOffset+m.viewport.Height
 	}
 	if m.cursor != 20 || !visible() {
 		t.Fatalf("cursor lost after paging down: cursor=%d yoff=%d h=%d", m.cursor, m.viewport.YOffset, m.viewport.Height)
 	}
-	up := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")}
+	up := tea.KeyMsg{Type: tea.KeyUp}
 	for i := 0; i < 20; i++ {
 		mm, _ := m.Update(up)
 		m = mm.(*tuiModel)

@@ -20,6 +20,7 @@ import (
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
@@ -343,10 +344,13 @@ type tuiModel struct {
 	detailTitle string
 	detailBody  string
 
-	modelChoices []modelChoice
-	modelFilter  string
-	effortLevels []string
-	ask          *askState
+	modelCatalog    []modelChoice
+	modelChoices    []modelChoice
+	modelFilter     string
+	modelLoadFilter string
+	modelSearch     textinput.Model
+	effortLevels    []string
+	ask             *askState
 
 	// mouseHold buffers ambiguous SGR mouse-report fragments (split wheel
 	// reports arrive as KeyRunes, indistinguishable from typing on
@@ -395,6 +399,15 @@ func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session 
 	}
 	ta.Focus()
 
+	search := textinput.New()
+	search.Placeholder = "Search..."
+	search.Prompt = ""
+	search.CharLimit = 0
+	search.Width = 52
+	search.PlaceholderStyle = metaStyle
+	search.TextStyle = lipgloss.NewStyle().Foreground(mkFg)
+	search.Cursor.SetMode(cursor.CursorStatic)
+
 	vp := viewport.New(80, 20)
 	vp.MouseWheelEnabled = true
 
@@ -402,13 +415,14 @@ func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session 
 
 	m := &tuiModel{
 		cfg: cfg, client: client, registry: registry, session: session,
-		history:   seedHistory(cfg),
-		viewport:  vp,
-		input:     ta,
-		spinner:   sp,
-		showThink: true,
-		follow:    true,
-		mode:      viewChat,
+		history:     seedHistory(cfg),
+		viewport:    vp,
+		input:       ta,
+		spinner:     sp,
+		modelSearch: search,
+		showThink:   true,
+		follow:      true,
+		mode:        viewChat,
 	}
 	m.refreshViewport()
 	return m
@@ -884,8 +898,14 @@ func (m *tuiModel) show(mode viewMode) {
 	m.cursor = 0
 	if mode == viewChat {
 		m.input.Focus()
+		m.modelSearch.Blur()
 	} else {
 		m.input.Blur()
+		if mode == viewModels {
+			m.modelSearch.Focus()
+		} else {
+			m.modelSearch.Blur()
+		}
 	}
 	m.refreshViewport()
 	if mode == viewChat {
@@ -1209,6 +1229,8 @@ func (m *tuiModel) openModelPicker(filter string) tea.Cmd {
 	m.notice = "Loading models…"
 	m.noticeErr = false
 	m.modelFilter = filter
+	m.modelLoadFilter = filter
+	m.modelSearch.SetValue(filter)
 	cfg := m.cfg
 	goKey := effectiveGoKey(cfg, m.apiKey)
 	orKey := effectiveOpenRouterKey(cfg)
@@ -1235,6 +1257,23 @@ func (m *tuiModel) openModelPicker(filter string) tea.Cmd {
 		}
 		ids = append(ids, orIDs...)
 		return modelsLoadedMsg{ids: ids, err: err, filter: filter}
+	}
+}
+
+// filterModelChoices rebuilds the visible model rows from the full catalog and
+// the current search text. Keeping the catalog intact lets clearing a query
+// reveal models hidden by earlier filtering.
+func (m *tuiModel) filterModelChoices() {
+	ids := make([]string, 0, len(m.modelCatalog))
+	byID := make(map[string]modelChoice, len(m.modelCatalog))
+	for _, choice := range m.modelCatalog {
+		ids = append(ids, choice.id)
+		byID[choice.id] = choice
+	}
+	matched := matchGoModel(ids, m.modelFilter)
+	m.modelChoices = m.modelChoices[:0]
+	for _, id := range matched {
+		m.modelChoices = append(m.modelChoices, byID[id])
 	}
 }
 
@@ -1563,7 +1602,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.fetchUsageCmd(), usageTick())
 
 	case modelsLoadedMsg:
-		if msg.filter != m.modelFilter {
+		if msg.filter != m.modelLoadFilter {
 			return m, nil // stale fetch; a newer picker request is in flight
 		}
 		ids := msg.ids
@@ -1596,15 +1635,16 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case 1:
 				m.applyModelSwitch(matched[0])
 				return m, nil
-			default:
-				ids = matched
 			}
 		}
 		sort.Strings(ids)
-		m.modelChoices = m.modelChoices[:0]
+		m.modelCatalog = m.modelCatalog[:0]
 		for _, id := range ids {
-			m.modelChoices = append(m.modelChoices, modelChoice{id: id, current: id == m.cfg.Model, transport: modelTransport(id)})
+			m.modelCatalog = append(m.modelCatalog, modelChoice{id: id, current: id == m.cfg.Model, transport: modelTransport(id)})
 		}
+		m.modelSearch.SetValue(msg.filter)
+		m.modelFilter = msg.filter
+		m.filterModelChoices()
 		m.show(viewModels)
 		for i, c := range m.modelChoices {
 			if c.current {
@@ -1739,6 +1779,12 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input, icmd = m.input.Update(msg)
 		if icmd != nil {
 			cmds = append(cmds, icmd)
+		}
+	} else if m.mode == viewModels {
+		var scmd tea.Cmd
+		m.modelSearch, scmd = m.modelSearch.Update(msg)
+		if scmd != nil {
+			cmds = append(cmds, scmd)
 		}
 	} else {
 		var vcmd tea.Cmd
@@ -2022,6 +2068,19 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.ask != nil {
 			return m.handleAskKey(s)
 		}
+		if m.mode == viewModels {
+			if strings.TrimSpace(m.modelSearch.Value()) != "" {
+				m.modelSearch.SetValue("")
+				m.modelFilter = ""
+				m.filterModelChoices()
+				m.cursor = 0
+				m.refreshViewport()
+				m.viewport.GotoTop()
+				return m, nil
+			}
+			m.show(viewChat)
+			return m, nil
+		}
 		if m.busy {
 			now := time.Now()
 			if !m.escArmedAt.IsZero() && now.Sub(m.escArmedAt) <= escConfirmWindow {
@@ -2112,7 +2171,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleAskKey(s)
 	}
 	if m.mode != viewChat {
-		return m.handleOverlayKey(s)
+		return m.handleOverlayKey(msg, s)
 	}
 
 	switch s {
@@ -2169,11 +2228,13 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // ensureCursorVisible scrolls the overlay viewport just enough to keep the
-// cursor row on screen. Every cursor list renders a two-line header
-// ("title\n\n") above one logical line per row (rows truncate, never wrap),
-// so the cursor sits on content line cursor+2.
+// cursor row on screen. Regular lists put a two-line title above their rows;
+// the model picker adds its search box and uses cursor+4 instead.
 func (m *tuiModel) ensureCursorVisible() {
 	line := m.cursor + 2
+	if m.mode == viewModels {
+		line = m.cursor + 4
+	}
 	if line < m.viewport.YOffset {
 		m.viewport.SetYOffset(line)
 	} else if bottom := m.viewport.YOffset + m.viewport.Height - 1; line > bottom {
@@ -2181,7 +2242,46 @@ func (m *tuiModel) ensureCursorVisible() {
 	}
 }
 
-func (m *tuiModel) handleOverlayKey(s string) (tea.Model, tea.Cmd) {
+func (m *tuiModel) handleOverlayKey(msg tea.KeyMsg, s string) (tea.Model, tea.Cmd) {
+	if m.mode == viewModels {
+		switch s {
+		case "up":
+			if m.cursor > 0 {
+				m.cursor--
+				m.refreshViewport()
+				m.ensureCursorVisible()
+			}
+			return m, nil
+		case "down":
+			if m.cursor < len(m.modelChoices)-1 {
+				m.cursor++
+				m.refreshViewport()
+				m.ensureCursorVisible()
+			}
+			return m, nil
+		case "enter":
+			m.openSelected()
+			return m, nil
+		case "pgup", "pgdown":
+			if s == "pgup" {
+				m.viewport.PageUp()
+			} else {
+				m.viewport.PageDown()
+			}
+			return m, nil
+		}
+		old := m.modelSearch.Value()
+		var cmd tea.Cmd
+		m.modelSearch, cmd = m.modelSearch.Update(msg)
+		if next := m.modelSearch.Value(); next != old {
+			m.modelFilter = next
+			m.filterModelChoices()
+			m.cursor = 0
+			m.refreshViewport()
+			m.viewport.GotoTop()
+		}
+		return m, cmd
+	}
 	switch s {
 	case "q":
 		m.show(viewChat)
@@ -2202,7 +2302,7 @@ func (m *tuiModel) handleOverlayKey(s string) (tea.Model, tea.Cmd) {
 		m.openSelected()
 		return m, nil
 	case "pgup", "pgdown", "ctrl+d":
-		// Paging scrolls the viewport; cursor moves with j/k.
+		// Paging scrolls the viewport; cursor moves with the arrow keys or j/k.
 		if s == "pgup" || s == "ctrl+u" {
 			m.viewport.PageUp()
 		} else {
@@ -3379,8 +3479,25 @@ func (m *tuiModel) renderErrorsList() string {
 }
 
 func (m *tuiModel) renderModelsList() string {
+	cw := m.contentWidth()
+	searchWidth := cw - 8
+	if searchWidth < 12 {
+		searchWidth = 12
+	}
+	m.modelSearch.Width = searchWidth
+	searchBox := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(mkBorder).Padding(0, 1).Render(m.modelSearch.View())
+
+	var b strings.Builder
+	b.WriteString(lipgloss.NewStyle().Width(cw).Align(lipgloss.Center).Render(searchBox) + "\n\n")
+	b.WriteString(metaStyle.Render("Models — ↑/↓ select · enter switches · esc clears search / back") + "\n\n")
 	if len(m.modelChoices) == 0 {
-		return emptyStyle.Render("No models to show.")
+		query := strings.TrimSpace(m.modelFilter)
+		if query == "" {
+			b.WriteString(emptyStyle.Render("No models to show."))
+		} else {
+			b.WriteString(emptyStyle.Render(fmt.Sprintf("No models match %q.", query)))
+		}
+		return b.String()
 	}
 	if m.cursor < 0 {
 		m.cursor = 0
@@ -3388,13 +3505,6 @@ func (m *tuiModel) renderModelsList() string {
 	if m.cursor >= len(m.modelChoices) {
 		m.cursor = len(m.modelChoices) - 1
 	}
-	var b strings.Builder
-	title := "Models — enter switches · esc back"
-	if strings.TrimSpace(m.modelFilter) != "" {
-		title = fmt.Sprintf("Models matching %q — enter switches · esc back", m.modelFilter)
-	}
-	b.WriteString(metaStyle.Render(title) + "\n\n")
-	cw := m.contentWidth()
 	for i, c := range m.modelChoices {
 		line := displayModelID(c.id)
 		if c.current {
@@ -3458,6 +3568,7 @@ Keys
   ctrl+g help · ctrl+r history · ctrl+l sessions · ctrl+u tools · ctrl+x errors · ctrl+y thinking display
   ctrl+o details · ctrl+p/ctrl+m model · ctrl+n new session · ctrl+t thinking level (cycles low→high, wraps) · ctrl+s save · ctrl+q quit · ctrl+c/ctrl+d cancel · clear input · quit
   in lists: ↑↓ move · enter open · esc back
+  /model picker: type to filter · ↑↓ select · esc clears search, then backs
 
 Commands
    /help /history /sessions (/resume) /tools /errors /think /save /clear /new /plan /quit (or :q)
