@@ -133,15 +133,14 @@ func (s *Session) ensureMeta(model, effort string) {
 	if s == nil {
 		return
 	}
-	if len(s.Turns) > 0 && s.Title != "" {
-		return
-	}
-	prompt := ""
-	if len(s.Turns) > 0 {
-		prompt = s.Turns[len(s.Turns)-1].Prompt
-	}
-	if s.Title == "" && prompt != "" {
-		s.Title = sessionTitle(prompt)
+	if s.Title == "" {
+		prompt := ""
+		if len(s.Turns) > 0 {
+			prompt = s.Turns[len(s.Turns)-1].Prompt
+		}
+		if prompt != "" {
+			s.Title = sessionTitle(prompt)
+		}
 	}
 	if s.Model == "" {
 		s.Model = model
@@ -149,6 +148,21 @@ func (s *Session) ensureMeta(model, effort string) {
 	if s.Effort == "" {
 		s.Effort = effort
 	}
+	_ = saveSessionMeta(metaPath(s.Path), SessionMeta{Title: s.Title, Model: s.Model, Effort: s.Effort})
+}
+
+// nameSession titles an unnamed session from its first submitted prompt so the
+// header and Sessions view show a real name while the first turn is still
+// running. It never overwrites an existing title.
+func (s *Session) nameSession(prompt string) {
+	if s == nil || strings.TrimSpace(s.Title) != "" {
+		return
+	}
+	title := sessionTitle(prompt)
+	if title == "" {
+		return
+	}
+	s.Title = title
 	_ = saveSessionMeta(metaPath(s.Path), SessionMeta{Title: s.Title, Model: s.Model, Effort: s.Effort})
 }
 

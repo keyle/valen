@@ -171,6 +171,37 @@ func TestTUIHeaderShowsTitleAndMouseHint(t *testing.T) {
 	}
 }
 
+func TestTUIHeaderHidesUnnamedSessionID(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	if m.session.Title != "" {
+		t.Fatalf("precondition: fresh session should be unnamed, got %q", m.session.Title)
+	}
+	header := ansi.Strip(m.headerView())
+	if strings.Contains(header, "ses-") {
+		t.Fatalf("header must hide the ses- id until the session is named:\n%s", header)
+	}
+	if strings.Contains(header, "  ·  alt+m select  ·") || strings.HasSuffix(header, "·") {
+		t.Fatalf("header must not leave a dangling separator:\n%s", header)
+	}
+}
+
+func TestTUINamesSessionOnSubmit(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	if m.submit("  fix the login redirect bug on retry\nsecond line  ") == nil {
+		t.Fatal("submit returned nil cmd")
+	}
+	if want := "fix the login redirect bug on retry"; m.session.Title != want {
+		t.Fatalf("session should be named on submit: got %q want %q", m.session.Title, want)
+	}
+	header := ansi.Strip(m.headerView())
+	if !strings.Contains(header, "fix the login redirect bug on retry") {
+		t.Fatalf("header must show the title while the first turn runs:\n%s", header)
+	}
+	if strings.Contains(header, "ses-") {
+		t.Fatalf("header must not fall back to the ses- id:\n%s", header)
+	}
+}
+
 func TestTUIEscInSessionsBacksWithoutArmingCancel(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	cancelled := 0

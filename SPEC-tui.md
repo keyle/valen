@@ -73,7 +73,11 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 
 - Header: ` ✦ valen  ·  <model>  ·  <session title>  ·  alt+m select` — the
   session title is the same English name shown in the Sessions view (first
-  prompt, 60 runes; falls back to the `ses-…` id before the first turn), the
+  prompt, 60 runes), set the moment that prompt is submitted so the header
+  names the session while the first turn is still running. Only an untouched
+  session (no prompt yet) omits the title segment entirely rather than falling
+  back to the `ses-…` id, so the header reads
+  ` ✦ valen  ·  <model>  ·  alt+m select`. The
   tools count is not shown, and `alt+m select` names the plain-drag selection
   toggle.
 - Transcript is padded conversation blocks separated by blank lines; no role

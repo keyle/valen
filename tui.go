@@ -1079,6 +1079,7 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	m.cancel = cancel
 	m.busy = true
 	m.pendingPrompt = trimmed
+	m.session.nameSession(trimmed)
 	m.pendingSince = time.Now()
 	m.askSince = time.Time{}
 	m.toolStatus = "Sending…"
@@ -2609,11 +2610,16 @@ func (m *tuiModel) headerView() string {
 		model += " · " + m.cfg.Thinking
 	}
 	label := sessionLabel(m.session)
-	if m.width > 0 {
-		reserved := lipgloss.Width(" ✦ valen") + lipgloss.Width(fmt.Sprintf("  ·  %s  ·  ", model)) + lipgloss.Width("  ·  alt+m select")
-		label = truncateRunes(label, m.columnWidth()-reserved)
+	var meta string
+	if label != "" {
+		if m.width > 0 {
+			reserved := lipgloss.Width(" ✦ valen") + lipgloss.Width(fmt.Sprintf("  ·  %s  ·  ", model)) + lipgloss.Width("  ·  alt+m select")
+			label = truncateRunes(label, m.columnWidth()-reserved)
+		}
+		meta = headerDimStyle.Render(fmt.Sprintf("  ·  %s  ·  %s  ·  alt+m select", model, label))
+	} else {
+		meta = headerDimStyle.Render(fmt.Sprintf("  ·  %s  ·  alt+m select", model))
 	}
-	meta := headerDimStyle.Render(fmt.Sprintf("  ·  %s  ·  %s  ·  alt+m select", model, label))
 	if m.cfg.Plan {
 		meta += headerDimStyle.Render("  ·  plan")
 	}
@@ -2647,23 +2653,9 @@ func (m *tuiModel) headerView() string {
 
 func sessionLabel(s *Session) string {
 	if s == nil {
-		return "no-session"
+		return ""
 	}
-	if t := strings.TrimSpace(s.Title); t != "" {
-		return t
-	}
-	return shortSession(s)
-}
-
-func shortSession(s *Session) string {
-	if s == nil {
-		return "no-session"
-	}
-	id := s.ID
-	if len(id) > 14 {
-		return id[:14] + "…"
-	}
-	return id
+	return strings.TrimSpace(s.Title)
 }
 
 // fk renders token counts in thousands for the status row: 999 stays raw,
