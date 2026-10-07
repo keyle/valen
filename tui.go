@@ -419,7 +419,7 @@ type tuiModel struct {
 
 func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session *Session) *tuiModel {
 	ta := textarea.New()
-	ta.Placeholder = "Type a message…  (help)"
+	ta.Placeholder = "Type a message…  (/help)"
 	ta.ShowLineNumbers = false
 	// No white thick bar: the textarea default Prompt is
 	// lipgloss.ThickBorder().Left + " " (a white ▌ on every line).
