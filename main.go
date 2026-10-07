@@ -51,7 +51,7 @@ var userAgent = "valen/" + version + " (opencode-compatible agent harness)"
 const browserUserAgent = "Mozilla/5.0 (iPad; CPU OS 18_7_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1"
 
 // effectiveSystem returns the configured system prompt, or the harness
-// prompt files (plus plan overlay) when none is set.
+// prompt files (plus plan overlay and the user's AGENTS.md) when none is set.
 func effectiveSystem(cfg Config) string {
 	if strings.TrimSpace(cfg.System) != "" {
 		return cfg.System
@@ -62,7 +62,7 @@ func effectiveSystem(cfg Config) string {
 			cwd = wd
 		}
 	}
-	return prompts.SystemPrompt(cfg.Model, cfg.Plan, cwd)
+	return prompts.SystemPrompt(cfg.Model, cfg.Plan, cwd) + userAgentsSection()
 }
 
 // seedHistory builds the initial history for a turn.
@@ -116,14 +116,17 @@ type CompactionConfig struct {
 	Thinking   string `toml:"thinking"`
 }
 
-// TUIConfig mirrors the [tui] table: transcript rendering (TUI only).
+// TUIConfig mirrors the [tui] table: transcript rendering and the
+// attention bell (TUI only). Sound nil means on: ring the terminal bell
+// when a question appears or a turn finishes.
 // MaxLines nil means the 1000-line default; 0 or less disables trimming.
 // When the rendered committed transcript exceeds the cap, older turns
 // collapse their reasoning/reply bodies (user prompts and tool lines stay)
 // and, if needed, the oldest turns drop from scrollback. History on disk
 // stays lossless and the recall views still expand everything.
 type TUIConfig struct {
-	MaxLines *int `toml:"max_lines"`
+	MaxLines *int  `toml:"max_lines"`
+	Sound    *bool `toml:"sound"`
 }
 
 // defaultTUIMaxLines bounds the rendered committed transcript so the
@@ -138,6 +141,11 @@ func tuiMaxLines(cfg Config) int {
 		return defaultTUIMaxLines
 	}
 	return *cfg.TUI.MaxLines
+}
+
+// tuiSound reports whether the attention bell is on, default on.
+func tuiSound(cfg Config) bool {
+	return cfg.TUI.Sound == nil || *cfg.TUI.Sound
 }
 
 // InputConfig mirrors the [input] table: chatbox chrome (TUI only).

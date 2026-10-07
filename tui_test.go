@@ -1174,7 +1174,7 @@ func TestTUITodoChecklistInScrollback(t *testing.T) {
 	args := `{"todos":[{"content":"Slice it","status":"completed","priority":"high"},{"content":"Wire UI","status":"in_progress","priority":"medium"}]}`
 	_, _ = m.Update(toolEventMsg{kind: "tool_start", text: "todowrite", args: args})
 	live := m.renderPending(80)
-	for _, want := range []string{"todowrite", "now:", "☑ Slice it", "◐ Wire UI"} {
+	for _, want := range []string{"TODO", "[x] Slice it", "[.] Wire UI"} {
 		if !strings.Contains(live, want) {
 			t.Fatalf("live todowrite must checklist %q:\n%s", want, live)
 		}
@@ -1186,14 +1186,14 @@ func TestTUITodoChecklistInScrollback(t *testing.T) {
 	out := `[{"content":"Slice it","status":"completed","priority":"high"},{"content":"Wire UI","status":"in_progress","priority":"medium"}]`
 	_, _ = m.Update(toolEventMsg{kind: "tool_result", text: "todowrite", output: out})
 	done := m.renderPending(80)
-	for _, want := range []string{"☑ Slice it", "◐ Wire UI"} {
+	for _, want := range []string{"[x] Slice it", "[.] Wire UI"} {
 		if !strings.Contains(done, want) {
 			t.Fatalf("finished todowrite must checklist %q:\n%s", want, done)
 		}
 	}
 
 	row := m.renderToolLine(ToolRecord{Name: "todowrite", Args: args, Output: out})
-	for _, want := range []string{"todowrite", "☑ Slice it", "◐ Wire UI"} {
+	for _, want := range []string{"TODO", "[x] Slice it", "[.] Wire UI"} {
 		if !strings.Contains(row, want) {
 			t.Fatalf("committed todowrite must checklist %q:\n%s", want, row)
 		}
@@ -2250,5 +2250,96 @@ func TestStatusRowShowsWindowInK(t *testing.T) {
 	}
 	if !strings.Contains(got, "1 turns") {
 		t.Fatalf("status missing turn count: %q", got)
+	}
+}
+
+// TestTUIUpRecallsLastPromptAndRewinds: up on an empty chatbox loads the
+// previous prompt; sending it replaces that turn instead of stacking.
+func TestTUIUpRecallsLastPromptAndRewinds(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	if _, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp}); m.input.Value() != "" {
+		t.Fatal("no turns: up must leave the box empty")
+	}
+	m.history = append(seedHistory(m.cfg),
+		openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: "first"},
+		openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: "ok"})
+	m.session.Turns = []Turn{{Prompt: "first", Reply: "ok", Usage: Usage{Total: 5}}}
+	m.session.TotalUsage = Usage{Total: 5}
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.input.Value() != "first" || !m.retrying {
+		t.Fatalf("up must recall the last prompt: %q retrying=%v", m.input.Value(), m.retrying)
+	}
+	// Up with text present is plain cursor movement, not a second recall.
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.input.Value() != "first" {
+		t.Fatalf("value changed: %q", m.input.Value())
+	}
+	m.rewindLastTurn()
+	if len(m.history) != 1 || len(m.session.Turns) != 0 || m.session.TotalUsage.Total != 0 {
+		t.Fatalf("rewind must drop the turn: hist=%d turns=%d usage=%+v", len(m.history), len(m.session.Turns), m.session.TotalUsage)
+	}
+	// Emptying the box cancels the retry.
+	m.history = append(seedHistory(m.cfg), openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: "first"})
+	m.session.Turns = []Turn{{Prompt: "first"}}
+	m.input.SetValue("")
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.input.SetValue("x")
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	if m.retrying {
+		t.Fatal("empty box must clear retry")
+	}
+}
+
+// TestTUIReadyShowsLastTurnDuration: the elapsed time stays visible once
+// the turn finishes, and the bell only rings when [tui] sound is on.
+func TestTUIReadyShowsLastTurnDuration(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.lastTurnDur = 63 * time.Second
+	if got := m.statusView(); !strings.Contains(got, "ready · 1m3s") {
+		t.Fatalf("ready row must show the last turn time: %q", got)
+	}
+	if m.dingCmd() == nil {
+		t.Fatal("sound defaults on")
+	}
+	off := false
+	m.cfg.TUI.Sound = &off
+	if m.dingCmd() != nil {
+		t.Fatal("sound=false must not ring")
+	}
+}
+
+// TestTUIAskStaysVisibleOnShortTerminal: the overlay hides the chatbox so
+// the question gets the whole height, starts at its heading, and follows
+// the cursor past the fold.
+func TestTUIAskStaysVisibleOnShortTerminal(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 14})
+	var many []string
+	for i := 0; i < 40; i++ {
+		many = append(many, "line")
+	}
+	m.session.Turns = []Turn{{Prompt: "p", Reply: strings.Join(many, "\n\n")}}
+	m.refreshViewport()
+	m.viewport.GotoBottom()
+	var opts []AskOption
+	for i := 0; i < 20; i++ {
+		opts = append(opts, AskOption{Label: fmt.Sprintf("opt%d", i)})
+	}
+	_, _ = m.Update(questionMsg{qs: []AskQuestion{{Question: "Which one?", Options: opts}}, reply: make(chan askReply, 1)})
+	if m.viewport.Height != 12 || m.viewport.YOffset != 0 {
+		t.Fatalf("ask must use full height from the top: h=%d off=%d", m.viewport.Height, m.viewport.YOffset)
+	}
+	if !strings.Contains(m.View(), "Which one?") {
+		t.Fatal("question heading hidden")
+	}
+	for i := 0; i < 18; i++ {
+		_, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if v := m.View(); !strings.Contains(v, "opt17") {
+		t.Fatalf("selected option scrolled out of view:\n%s", v)
+	}
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mode != viewChat || m.viewport.Height != m.viewportHeight() || m.isPickerMode() {
+		t.Fatalf("dismiss must restore chat: mode=%v h=%d", m.mode, m.viewport.Height)
 	}
 }

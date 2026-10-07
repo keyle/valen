@@ -118,13 +118,13 @@ func normalizeTodos(in []Todo) ([]Todo, error) {
 func todoGlyph(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "completed":
-		return "☑"
+		return "[x]"
 	case "in_progress":
-		return "◐"
+		return "[.]"
 	case "cancelled":
-		return "✕"
+		return "[-]"
 	default:
-		return "☐"
+		return "[ ]"
 	}
 }
 
@@ -150,27 +150,20 @@ func parseTodoPayload(text string) (list []Todo, ok bool) {
 	return nil, false
 }
 
-// maxTodoScrollbackLines caps the checklist so one plan update never floods
-// the transcript; the tail counts the remainder.
-const maxTodoScrollbackLines = 6
-
-// formatTodoChecklist renders a todowrite/todoread payload as compact
-// scrollback lines with per-item status glyphs. Empty plans render as one
-// line; longer plans cut at maxTodoScrollbackLines with a "+N more" tail.
+// formatTodoChecklist renders a todowrite/todoread payload as the lines
+// under the "TODO" header: a blank line, then one "[x] item" per todo (the
+// user sees the whole plan). Empty plans render one "empty plan" line.
 func formatTodoChecklist(text string) (lines []string, ok bool) {
 	list, ok := parseTodoPayload(text)
 	if !ok {
 		return nil, false
 	}
 	if len(list) == 0 {
-		return []string{"→ empty plan"}, true
+		return []string{"", "empty plan"}, true
 	}
-	for i, td := range list {
-		if i >= maxTodoScrollbackLines {
-			lines = append(lines, fmt.Sprintf("→ … +%d more", len(list)-maxTodoScrollbackLines))
-			break
-		}
-		lines = append(lines, fmt.Sprintf("→ %s %s", todoGlyph(td.Status), truncateRunes(strings.TrimSpace(td.Content), 100)))
+	lines = []string{""}
+	for _, td := range list {
+		lines = append(lines, fmt.Sprintf("%s %s", todoGlyph(td.Status), truncateRunes(strings.TrimSpace(td.Content), 100)))
 	}
 	return lines, true
 }

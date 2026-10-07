@@ -26,7 +26,7 @@ in force. Everything below is additive to it.
 ## Non-goals
 
 - Server/client process split, multi-agent orchestration.
-- Full editing of history (recall is read-only; `/clear` resets).
+- Full editing of history (recall is read-only; `/clear` resets). The one exception: ↑ on an empty chatbox reloads the last prompt, and sending it replaces that turn.
 - Changes to the provider/tool/MCP contracts in `SPEC.md`.
 
 ## Library choice
@@ -64,7 +64,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
    Go 1.27 shipped with … (rendered markdown)
 
  ─────────────────────────────────────
- ● ready  1 turn · win 2k/200k · ↑412 ↓89
+ ● ready · 8s  1 turn · win 2k/200k · ↑412 ↓89
  ╭───────────────────────────────────╮
  │ Type a message…                   │
  ╰───────────────────────────────────╯
@@ -111,9 +111,9 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   at 16 lines — 8 del + 8 add — with a `+N more` tail), live from the call args while running
   and committed on the stored args; `write` rows preview added `+` lines
   the same way. `todowrite`/`todoread` rows render
-  the session plan as a glyph checklist instead of raw JSON (`☑` completed,
-  `◐` in progress, `☐` pending, `✕` cancelled; capped at 6 with a `+N more`
-  tail), live from the call args while running and from the stored result on
+  the session plan as a `TODO` header, a blank line, then one `[x]` completed /
+  `[.]` in progress / `[ ]` pending / `[-]` cancelled line per item instead of
+  raw JSON (every item is listed, no cap), live from the call args while running and from the stored result on
   commit — so todo progress reads in the scrollback next to thinking.
 - Replies render as markdown via glamour (Monokai style, wrapped to viewport).
 - The committed scrollback is bounded by `[tui] max_lines` (default `1000`;
@@ -343,7 +343,15 @@ user → …                                    = turn 2, appended to the same h
 ```
 
 End of response: reply appended to `history`, tokens shown, state back to
-ready, input focused. `/clear` resets intentionally.
+ready (the status row keeps the turn's working time: `● ready · 1m3s`), input focused. `/clear` resets intentionally. A bell rings when a turn finishes (not on cancel) or a question appears (`[tui] sound`).
+
+With an empty chatbox, ↑ reloads the previous prompt for editing; sending it
+rewinds that turn (history and scrollback) and continues from before it. The
+disk log stays append-only; the retry's checkpoint supersedes the dropped
+turn on resume. Emptying the box or a `/command` cancels the retry.
+
+The question overlay hides the chatbox and footer (like the pickers) so it gets
+the full height, starts at its heading and scrolls to follow the selected option.
 
 ## Keybindings
 
@@ -365,7 +373,7 @@ ready, input focused. `/clear` resets intentionally.
 | Ctrl+P / Ctrl+M | model picker | model picker |
 | Ctrl+S | save transcript | save transcript |
 | Ctrl+Q | quit | quit |
-| ↑↓ / j/k | textarea cursor (PgUp scrolls) | move selection (view scrolls to follow) |
+| ↑↓ / j/k | textarea cursor (PgUp scrolls); ↑ on an empty box recalls the last prompt | move selection (view scrolls to follow) |
 | Space / Enter / Esc | — | question overlay: toggle / select+confirm / dismiss |
 
 Function keys are gone; the footer only points at `/help`, which lists every

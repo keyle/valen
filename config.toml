@@ -34,6 +34,9 @@ openrouter_key = ""
 # default — opencode-adapted, valen-tuned). Set `system = "..."` only to
 # override them entirely.
 # system = "..."                    # full override when set; empty uses prompt files.
+# ~/.config/valen/AGENTS.md (beside this file), when present, is appended to the
+# prompt files as silent standing instructions (capped at 32 KiB; not applied
+# when `system` is set).
 # plan = false                      # plan mode: read-only investigation, the
                                     # reply is the plan (write/edit/shell
                                     # blocked, task explore-only). TUI /plan
@@ -82,6 +85,8 @@ thinking = "high"
                                 # turns). Disk history stays lossless and
                                 # ctrl+h/recall views still expand everything.
                                 # 0 (or less) disables trimming.
+# sound = true                  # ring the terminal bell when a question appears or a
+                                # turn finishes (not on cancel); false mutes it.
 
 # NOTE: [input] must stay the last table in this file. In TOML every key
 # after a [table] header belongs to that table, so top-level keys placed

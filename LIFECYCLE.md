@@ -243,7 +243,7 @@ opencode ships **both**, and so do we — they do different jobs:
   (opencode schema: content/status/priority) that tells the model *and you*
   what the steps are and which one is `in_progress`. It costs almost nothing
   (one small JSON result), breaks chunky work into verifiable steps, and
-  renders as a glyph checklist (`☑ ◐ ☐ ✕`) in the scrollback next to
+  renders as a `TODO` checklist (`[x] [.] [ ] [-]`) in the scrollback next to
   thinking — that rendering is why opencode "shows a todo list within a
   job". Rule: exactly one `in_progress`, mark `completed` only after
   verification, update after every step. Resets on `/clear`/`/new`,

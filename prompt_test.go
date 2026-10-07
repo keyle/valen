@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -169,5 +171,30 @@ func TestApplyPlanModeToggles(t *testing.T) {
 	}
 	if !strings.Contains(m.headerView(), "✦ valen") {
 		t.Fatalf("header=%q", m.headerView())
+	}
+}
+
+// The user's AGENTS.md is appended after the model's prompt files, not to
+// an explicit `system` override.
+func TestEffectiveSystemSideloadsUserAgents(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	cfg := Config{Model: "muse-spark-1.3-contributor"}
+	if strings.Contains(effectiveSystem(cfg), "User Instructions") {
+		t.Fatal("no AGENTS.md: no section")
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "valen"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "valen", "AGENTS.md"), []byte("always say hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := effectiveSystem(cfg)
+	if !strings.HasSuffix(got, "always say hi") || !strings.Contains(got, "never mention") {
+		t.Fatalf("AGENTS.md not sideloaded: %q", got[len(got)-300:])
+	}
+	cfg.System = "custom override"
+	if got := effectiveSystem(cfg); got != "custom override" {
+		t.Fatalf("override must stay pure: %q", got)
 	}
 }

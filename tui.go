@@ -184,6 +184,9 @@ type askState struct {
 	picks   []map[int]bool // per-question selected option indexes (multi-select)
 	ownText []string       // per-question free text when "type your own" chosen
 	reply   chan askReply
+	// rowTop/rowBottom are the selected option's line span in the last
+	// render, so key handling can scroll it into view on short terminals.
+	rowTop, rowBottom int
 }
 
 // toolEventMsg streams tool progress from the background turn into the UI.
@@ -325,8 +328,12 @@ type tuiModel struct {
 	busy          bool
 	pendingPrompt string
 	pendingSince  time.Time
-	askSince      time.Time // set while a question overlay pauses the timer
-	toolStatus    string
+	lastTurnDur   time.Duration // working time of the last finished turn, shown beside "ready"
+	// retrying marks that the chatbox holds the recalled last prompt: the
+	// next send rewinds that turn first. Cleared whenever the box empties.
+	retrying   bool
+	askSince   time.Time // set while a question overlay pauses the timer
+	toolStatus string
 	// roundCur/roundMax track loop progress for the status row (parsed from
 	// round_start events); reset on submit and turnDone.
 	roundCur, roundMax int
@@ -485,6 +492,64 @@ func (m *tuiModel) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+func (m *tuiModel) clearInput() {
+	m.input.SetValue("")
+	m.retrying = false
+}
+
+// recallLastPrompt loads the previous prompt into the empty chatbox so it
+// can be edited and sent again. It reports whether there was one.
+func (m *tuiModel) recallLastPrompt() bool {
+	if m.session == nil || len(m.session.Turns) == 0 {
+		return false
+	}
+	m.input.SetValue(m.session.Turns[len(m.session.Turns)-1].Prompt)
+	m.input.CursorEnd()
+	m.retrying = true
+	m.notice = "Editing previous prompt — enter resends from there, esc clears."
+	m.noticeErr = false
+	return true
+}
+
+// rewindLastTurn drops the last turn from memory and scrollback so a
+// retried prompt continues from before it. The disk log stays append-only:
+// the retry's checkpoint supersedes the dropped turn on resume. It does
+// nothing unless the turn's prompt is still the last user message.
+func (m *tuiModel) rewindLastTurn() {
+	if m.session == nil || len(m.session.Turns) == 0 {
+		return
+	}
+	last := m.session.Turns[len(m.session.Turns)-1]
+	for i := len(m.history) - 1; i >= 0; i-- {
+		if m.history[i].Role != openai.ChatMessageRoleUser {
+			continue
+		}
+		if m.history[i].Content != last.Prompt {
+			return
+		}
+		m.history = m.history[:i:i]
+		m.session.Turns = m.session.Turns[:len(m.session.Turns)-1]
+		m.session.TotalUsage.Prompt -= last.Usage.Prompt
+		m.session.TotalUsage.Completion -= last.Usage.Completion
+		m.session.TotalUsage.Total -= last.Usage.Total
+		m.chatCache, m.chatCacheTurns = nil, 0
+		return
+	}
+}
+
+// dingCmd rings the terminal bell (BEL) when [tui] sound is on. It writes
+// straight to the tty: bubbletea v1 has no raw-output command, and a
+// one-byte write cannot split a renderer frame.
+func (m *tuiModel) dingCmd() tea.Cmd {
+	if !tuiSound(m.cfg) {
+		return nil
+	}
+	return func() tea.Msg {
+		_, _ = os.Stdout.WriteString("\a")
+		return nil
+	}
+}
+
 // turnElapsed is the working time of the current turn; time spent waiting
 // on a question overlay does not count.
 func (m *tuiModel) turnElapsed() time.Duration {
@@ -531,7 +596,7 @@ func (m *tuiModel) dismissAsk(err error) {
 	m.ask = nil
 	m.resumeTimer()
 	if m.mode == viewAsk {
-		m.mode = viewChat
+		m.show(viewChat) // restores the chat viewport height and chatbox
 	}
 	select {
 	case try <- askReply{err: err}:
@@ -633,14 +698,31 @@ func (m *tuiModel) handleAskKey(s string) (tea.Model, tea.Cmd) {
 			a.reply <- askReply{answers: m.askAnswers()}
 			m.ask = nil
 			m.resumeTimer()
-			m.mode = viewChat
-			m.input.Focus()
+			m.show(viewChat)
 		case "esc", "n":
 			m.dismissAsk(errors.New("user dismissed the questions"))
 		}
 	}
 	m.refreshViewport()
+	if m.ask != nil {
+		m.scrollAskRowIntoView()
+	}
 	return m, nil
+}
+
+// scrollAskRowIntoView keeps the selected option on screen; a new question
+// or phase starts from the top so its heading is never scrolled away.
+func (m *tuiModel) scrollAskRowIntoView() {
+	a := m.ask
+	if a.phase != "pick" {
+		m.viewport.GotoTop()
+		return
+	}
+	if a.rowTop < m.viewport.YOffset {
+		m.viewport.SetYOffset(a.rowTop)
+	} else if bottom := m.viewport.YOffset + m.viewport.Height - 1; a.rowBottom > bottom {
+		m.viewport.SetYOffset(a.rowBottom - m.viewport.Height + 1)
+	}
 }
 
 // advanceAsk moves to the next question, or to the confirmation stage.
@@ -694,14 +776,20 @@ func (m *tuiModel) renderAsk() string {
 		}
 		row = breakLongWords(row, cw-2)
 		if j == a.cursor {
-			b.WriteString(selectedStyle.Width(cw).Render(" "+row) + "\n")
+			rendered := selectedStyle.Width(cw).Render(" " + row)
+			a.rowTop = strings.Count(b.String(), "\n")
+			a.rowBottom = a.rowTop + strings.Count(rendered, "\n")
+			b.WriteString(rendered + "\n")
 		} else {
 			b.WriteString(m.wrapPlain("  "+row) + "\n")
 		}
 	}
 	ownRow := breakLongWords(fmt.Sprintf("%d. Type your own answer", len(q.Options)+1), cw-2)
 	if a.cursor == len(q.Options) {
-		b.WriteString(selectedStyle.Width(cw).Render(" "+ownRow) + "\n")
+		rendered := selectedStyle.Width(cw).Render(" " + ownRow)
+		a.rowTop = strings.Count(b.String(), "\n")
+		a.rowBottom = a.rowTop + strings.Count(rendered, "\n")
+		b.WriteString(rendered + "\n")
 	} else {
 		b.WriteString(m.wrapPlain("  "+ownRow) + "\n")
 	}
@@ -843,10 +931,11 @@ func (m *tuiModel) columnWidth() int {
 	return m.width
 }
 
-// isPickerMode reports whether the active view is a list picker that hides
-// the chatbox and footer.
+// isPickerMode reports whether the active view is a list picker (or the
+// question overlay) that hides the chatbox and footer, leaving the whole
+// height to the list so a question stays readable on short terminals.
 func (m *tuiModel) isPickerMode() bool {
-	return m.mode == viewSessions || m.mode == viewModels
+	return m.mode == viewSessions || m.mode == viewModels || m.mode == viewAsk
 }
 
 // viewportHeight is the scrollback height for the current mode and terminal
@@ -1069,6 +1158,9 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 		m.refreshViewport()
 		return nil
 	}
+	if m.retrying {
+		m.rewindLastTurn()
+	}
 	hist := append(append([]openai.ChatCompletionMessage(nil), m.history...), openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: trimmed})
 
 	base := m.ctx
@@ -1184,6 +1276,7 @@ func (m *tuiModel) handleCommand(text string) tea.Cmd {
 	case "/clear":
 		m.history = seedHistory(m.cfg)
 		resetTodos()
+		m.lastTurnDur = 0
 		if m.session != nil {
 			m.session.Turns = nil
 			m.session.TotalUsage = Usage{}
@@ -1285,6 +1378,7 @@ func (m *tuiModel) startFreshSession() {
 	m.cfg.OpenRouterKey = effectiveOpenRouterKey(m.cfg)
 	m.client = newClient(m.cfg, m.apiKey)
 	m.pendingPrompt = ""
+	m.lastTurnDur = 0
 	m.pendingTools = nil
 	m.pendingText = ""
 	m.pendingThinking = ""
@@ -1292,7 +1386,7 @@ func (m *tuiModel) startFreshSession() {
 	m.toolStatus = ""
 	m.cancel = nil
 	m.chatCache, m.chatCacheTurns = nil, 0
-	m.input.SetValue("")
+	m.clearInput()
 	m.notice = "New session " + m.session.ID + " — blank."
 	m.noticeErr = false
 	m.show(viewChat)
@@ -1698,7 +1792,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input.SetWidth(vpW - 2)
 		m.glam = nil
 		m.refreshViewport()
-		if m.follow {
+		if m.follow && m.mode != viewAsk {
 			m.viewport.GotoBottom()
 		}
 		return m, nil
@@ -1858,8 +1952,10 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.askSince = time.Now()
 		}
 		m.input.Blur()
+		m.viewport.Height = m.viewportHeight() // overlay hides the chatbox
 		m.refreshViewport()
-		return m, nil
+		m.viewport.GotoTop()
+		return m, m.dingCmd()
 
 	case turnDoneMsg:
 		turn := Turn{
@@ -1873,6 +1969,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if turn.DurMs < 1 {
 				turn.DurMs = 1
 			}
+			m.lastTurnDur = time.Duration(turn.DurMs) * time.Millisecond
 		}
 		if msg.err != nil {
 			fe := friendlyError(msg.err)
@@ -1916,7 +2013,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.input.Focus()
 		m.pinBottom()
-		return m, m.fetchQuotaCmd()
+		if msg.err != nil && isCancel(msg.err) {
+			// The user stopped it themselves: no bell.
+			return m, m.fetchQuotaCmd()
+		}
+		return m, tea.Batch(m.fetchQuotaCmd(), m.dingCmd())
 
 	case compactDoneMsg:
 		m.busy = false
@@ -2258,7 +2359,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// Idle: first press clears a non-empty chatbox, next one quits.
 		if m.input.Value() != "" {
-			m.input.SetValue("")
+			m.clearInput()
 			return m, nil
 		}
 		return m, tea.Quit
@@ -2303,7 +2404,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.input.Value() != "" {
-			m.input.SetValue("")
+			m.clearInput()
 			return m, nil
 		}
 		return m, nil
@@ -2389,7 +2490,8 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.input.SetValue("")
-		cmd := m.submit(text)
+		cmd := m.submit(text) // consumes m.retrying
+		m.retrying = false
 		if cmd == nil {
 			return m, nil
 		}
@@ -2411,6 +2513,9 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Let the textarea move first; viewport scrolls with pgup/pgdn.
 		// On the first/last visual row there is nowhere to go, so jump to
 		// the start/end of the text instead (shell-style).
+		if s == "up" && m.input.Value() == "" && !m.busy && m.recallLastPrompt() {
+			return m, nil
+		}
 		li := m.input.LineInfo()
 		if s == "up" && m.input.Line() == 0 && li.RowOffset == 0 {
 			m.input.SetCursor(0)
@@ -2426,6 +2531,9 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		var icmd tea.Cmd
 		m.input, icmd = m.input.Update(msg)
+		if m.input.Value() == "" {
+			m.retrying = false
+		}
 		return m, icmd
 	}
 }
@@ -2689,7 +2797,11 @@ func (m *tuiModel) statusView() string {
 		}
 		left = statusBusyStyle.Render(fmt.Sprintf("%s working  %s%s  %s", m.spinner.View(), tool, prog, elapsed))
 	} else {
-		left = statusIdleStyle.Render("● ready")
+		left = "● ready"
+		if m.lastTurnDur > 0 {
+			left += " · " + formatThinkDur(m.lastTurnDur)
+		}
+		left = statusIdleStyle.Render(left)
 	}
 	var mid string
 	if m.notice != "" {
@@ -3366,7 +3478,7 @@ func (m *tuiModel) renderToolLine(tr ToolRecord) string {
 	// and committed. Anything unparseable falls through to the default row.
 	if tr.Name == "todowrite" || tr.Name == "todoread" {
 		if lines, ok := todoChecklistLines(tr); ok {
-			out := toolLineStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("%s%s", tr.Name, toolDurSuffix(tr.DurMs)), cw-2))
+			out := toolLineStyle.Width(cw).Render(breakLongWords("TODO", cw-2))
 			for _, ln := range lines {
 				out += "\n" + toolDimStyle.Width(cw).Render(breakLongWords(ln, cw-2))
 			}
@@ -3427,7 +3539,7 @@ func (m *tuiModel) renderPendingTool(t pendingTool) string {
 	// planned list — show the checklist under the running header.
 	if t.name == "todowrite" || t.name == "todoread" {
 		if lines, ok := formatTodoChecklist(t.args); ok {
-			out := toolRunStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("now: %s", t.name), cw-2))
+			out := toolRunStyle.Width(cw).Render(breakLongWords("TODO", cw-2))
 			for _, ln := range lines {
 				out += "\n" + toolDimStyle.Width(cw).Render(breakLongWords(ln, cw-2))
 			}
@@ -4014,6 +4126,7 @@ Keys
    shift+drag (opt+drag in iTerm/Terminal) selects + copies natively · alt+m toggles plain-drag selection (wheel paused while off)
   ctrl+g help · ctrl+r history · ctrl+l sessions · ctrl+u tools · ctrl+x errors · ctrl+y thinking display
   ctrl+o details · ctrl+p/ctrl+m model · ctrl+n new session · ctrl+t thinking level (cycles low→high, wraps) · ctrl+s save · ctrl+q quit · ctrl+c/ctrl+d cancel · clear input · quit
+  ↑ on an empty chatbox reloads your last prompt: edit it and enter resends from there
   in lists: ↑↓ move · enter open · esc back
   /model picker: type to filter · ↑↓ select · enter switches · ctrl+f stars/unstars favourites (kept on top) · esc clears search, then backs
 

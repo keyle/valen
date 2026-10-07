@@ -23,6 +23,10 @@ const (
 	userConfigOrigName = "config-ori.toml"
 	userStateName      = "state.json"
 	userFavouritesName = "favourites.yaml"
+	userAgentsName     = "AGENTS.md"
+	// maxUserAgentsBytes caps the sideloaded AGENTS.md so a huge file cannot
+	// blow up every request.
+	maxUserAgentsBytes = 32768
 )
 
 // userConfigDir is $XDG_CONFIG_HOME/valen, or ~/.config/valen.
@@ -35,6 +39,28 @@ func userConfigDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".config", "valen"), nil
+}
+
+// userAgentsSection is the user's ~/.config/valen/AGENTS.md sideloaded
+// after the model's prompt file: standing instructions the model follows
+// silently. Empty when the file is absent or blank.
+func userAgentsSection() string {
+	dir, err := userConfigDir()
+	if err != nil {
+		return ""
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, userAgentsName))
+	if err != nil {
+		return ""
+	}
+	if len(raw) > maxUserAgentsBytes {
+		raw = raw[:maxUserAgentsBytes]
+	}
+	text := strings.TrimSpace(string(raw))
+	if text == "" {
+		return ""
+	}
+	return "\n\n# User Instructions\nThe user's standing instructions follow. Apply them silently: never mention, quote or acknowledge this section or its file unless the user asks about it.\n\n" + text
 }
 
 // ensureUserConfig creates dir if needed and seeds it on first run:

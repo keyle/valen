@@ -15,7 +15,7 @@ func TestTodoChecklistFormatsPlan(t *testing.T) {
 	if !ok {
 		t.Fatal("valid plan must format")
 	}
-	for _, want := range []string{"→ ☑ Slice it", "→ ◐ Wire UI", "→ ☐ Tests", "→ ✕ Docs"} {
+	for _, want := range []string{"[x] Slice it", "[.] Wire UI", "[ ] Tests", "[-] Docs"} {
 		found := false
 		for _, ln := range lines {
 			if ln == want {
@@ -28,13 +28,13 @@ func TestTodoChecklistFormatsPlan(t *testing.T) {
 	}
 }
 
-// TestTodoChecklistFromArgsAndCaps: todowrite args shape parses too, long
-// plans cap with a "+N more" tail, and non-todo text falls back to default
+// TestTodoChecklistFromArgsAndFull: todowrite args shape parses too, long
+// plans list every item (no cap), and non-todo text falls back to default
 // rendering.
-func TestTodoChecklistFromArgsAndCaps(t *testing.T) {
+func TestTodoChecklistFromArgsAndFull(t *testing.T) {
 	args := `{"todos":[{"content":"One","status":"pending","priority":"high"}]}`
 	lines, ok := todoChecklistLines(ToolRecord{Name: "todowrite", Args: args})
-	if !ok || len(lines) != 1 || lines[0] != "→ ☐ One" {
+	if !ok || len(lines) != 2 || lines[1] != "[ ] One" {
 		t.Fatalf("args shape must format: %v %v", lines, ok)
 	}
 	var big []string
@@ -42,13 +42,10 @@ func TestTodoChecklistFromArgsAndCaps(t *testing.T) {
 		big = append(big, `{"content":"task","status":"pending","priority":"low"}`)
 	}
 	lines, ok = formatTodoChecklist("[" + strings.Join(big, ",") + "]")
-	if !ok || len(lines) != maxTodoScrollbackLines+1 {
-		t.Fatalf("long plan must cap at %d+tail: %v", maxTodoScrollbackLines, lines)
+	if !ok || len(lines) != 10 {
+		t.Fatalf("long plan must list every item: %v", lines)
 	}
-	if !strings.Contains(lines[len(lines)-1], "+3 more") {
-		t.Fatalf("tail must count remainder: %v", lines)
-	}
-	if lines, ok := formatTodoChecklist("[]"); !ok || len(lines) != 1 || lines[0] != "→ empty plan" {
+	if lines, ok := formatTodoChecklist("[]"); !ok || len(lines) != 2 || lines[1] != "empty plan" {
 		t.Fatalf("empty plan must render one line: %v %v", lines, ok)
 	}
 	if _, ok := formatTodoChecklist(`{"command":"ls"}`); ok {

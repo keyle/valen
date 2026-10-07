@@ -19,6 +19,7 @@ Single-binary Go agent harness. No server/client split, everything in-process in
   text/thinking tails, exact delta concatenation, ~60ms render throttle,
   committed-scrollback line budget `[tui] max_lines` default `1000` (trims
   reasoning then old turns, keeps prompts/tools; `0` disables),
+  `32768`-byte cap on the sideloaded `~/.config/valen/AGENTS.md`,
   `100` grep matches, `1MiB/512KiB` search/fetch caps, `8000` fetch runes,
   `16384` output tokens default on all three transports (positive explicit
   overrides honored, no floor). Keep compaction caps: `15k` soft whole-turn
