@@ -1262,10 +1262,14 @@ func (m *tuiModel) applyPlanMode(on bool) {
 	} else {
 		m.notice = strings.TrimSpace(prompts.BuildSwitch())
 		if m.notice == "" {
-			m.notice = "Plan mode off — build mode."
+			m.notice = "Plan mode off — work mode."
 		}
 	}
 	m.noticeErr = false
+	if m.busy {
+		// The running turn already captured its config and gates.
+		m.notice += " Applies from your next message."
+	}
 	m.refreshViewport()
 }
 
@@ -2497,6 +2501,11 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// Keep the spinner ticking while the turn runs.
 		return m, tea.Batch(cmd, m.spinner.Tick)
+	case "tab":
+		// Tab swaps work and plan mode, same as /plan. The textarea has no
+		// use for it (no tab character in prompts).
+		m.applyPlanMode(!m.cfg.Plan)
+		return m, nil
 	case "shift+enter", "alt+enter", "ctrl+j":
 		// "shift+enter" only arrives from terminals that report it as a
 		// distinct key; most send plain enter unless Kitty enhancement is
@@ -2840,14 +2849,23 @@ func (m *tuiModel) statusView() string {
 	return lipgloss.NewStyle().Padding(0, 2).Render(left + mid + right)
 }
 
-func (m *tuiModel) inputView() string {
-	border := mkBorder
-	if m.mode == viewChat && !m.busy {
-		border = mkGreen
-	} else if m.busy {
-		border = mkOrange
+// inputBorderColor: orange while working, green when ready (cyan in plan
+// mode), dim outside the chat view.
+func (m *tuiModel) inputBorderColor() lipgloss.Color {
+	switch {
+	case m.busy:
+		return mkOrange
+	case m.mode != viewChat:
+		return mkBorder
+	case m.cfg.Plan:
+		return mkCyan
+	default:
+		return mkGreen
 	}
-	style := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(border).Padding(0, 1)
+}
+
+func (m *tuiModel) inputView() string {
+	style := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.inputBorderColor()).Padding(0, 1)
 	if m.width > 0 {
 		style = style.Width(m.columnWidth() - 2)
 	}
@@ -4121,7 +4139,7 @@ func (m *tuiModel) renderHelp() string {
 	return emptyStyle.Width(m.contentWidth()).Render(`Conversation first: your message shows instantly, the reply streams into the same thread.
 
 Keys
-  enter send · shift+enter/alt+enter/ctrl+j newline · esc cancel/back · pgup/pgdn/wheel scroll
+  enter send · tab swaps work/plan mode (cyan box = plan) · shift+enter/alt+enter/ctrl+j newline · esc cancel/back · pgup/pgdn/wheel scroll
   wheel/pgup pauses autoscroll until you reach the bottom again
    shift+drag (opt+drag in iTerm/Terminal) selects + copies natively · alt+m toggles plain-drag selection (wheel paused while off)
   ctrl+g help · ctrl+r history · ctrl+l sessions · ctrl+u tools · ctrl+x errors · ctrl+y thinking display
@@ -4133,7 +4151,7 @@ Keys
 Commands
    /help /history /sessions (/resume) /tools /errors /think /save /clear /new /plan /quit (or :q)
    /compact (/summarize) — prune + summarize older history with the cheap model; disk log untouched
-   /plan — toggle plan mode: read-only investigation, the reply is the plan (write/edit/shell blocked, task explore-only)
+   /plan (or tab) — toggle plan mode: read-only investigation, the reply is the plan (write/edit/shell/MCP blocked, task explore-only)
    /model [filter] — list models with provider prefixes (go/…, openrouter/…) and switch (ctrl+p/ctrl+m does the same); missing keys report on pick/send, never block boot
   /effort [level] — thinking level for the current model (/thinking is an alias)
 

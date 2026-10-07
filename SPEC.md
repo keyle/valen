@@ -67,7 +67,7 @@ and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
 | `openrouter_key` | string | empty | OpenRouter API key itself. Empty falls back to the `OPENROUTER_API_KEY` env var. Second provider: `/model` always lists OpenRouter models (`openrouter/<vendor>/<model>`, fallback when offline) served via OpenRouter's OpenAI-compatible chat endpoint. Picking or sending with an `openrouter/…` model and no key says "OpenRouter key not found" |
 | `session_id` | string | `ses-<unixnano>` | Stable per conversation; sent as `x-opencode-session` |
 | `system` | string | prompt files (per model family) | Agent guidelines; empty uses the harness prompt files (opencode-adapted, valen-tuned: muse→meta, claude→anthropic, old reasoning→beast, gpt-6→astra, gpt/grok→gpt, codex/copilot/gemini/kimi/trinity→their file, else default) plus a small `<env>` header (model, workdir, platform, date), then `~/.config/valen/AGENTS.md` when present (sideloaded silently as standing user instructions, capped at 32768 bytes; new sessions and every refreshed system message get it). Set to override entirely (AGENTS.md is then not added) |
-| `plan` | bool | `false` | Plan mode: read-only investigation — the plan overlay joins the system prompt, `write`/`edit`/`shell` refuse with guidance, `task` is explore-only. TUI `/plan` toggles at runtime; `-plan` sets it headless |
+| `plan` | bool | `false` | Plan mode: read-only investigation — the plan overlay joins the system prompt, `write`/`edit`/`shell` and every MCP tool refuse with guidance, `task` is explore-only. TUI `/plan` or Tab in the chatbox toggles at runtime; `-plan` sets it headless |
 | `max_rounds` | int | `300` | Per-turn round backstop; on exhaustion the turn compacts send-side and gets exactly one more window, then stops ("across 2 compacted windows") |
 | `max_stagnant_rounds` | int | `25` | Maximum consecutive identical ordered tool batches allowed; changed tool names/normalized arguments/order reset the count. Not a limit on read-only research; the single-call third-repeat guard may stop earlier |
 | `max_context_tokens` | int | `0` (auto) | Fail-fast budget per round (est. runes/4): `0` resolves the model's own input window when known (gemini 1M, claude 500k, gpt 400k, grok/qwen/kimi 256k, glm/minimax 200k, deepseek 128k, else 300k); explicit values override and survive `/model`. Over-budget history aborts the turn with guidance instead of a doomed send |
@@ -238,9 +238,10 @@ backstop stays terminal there.
   single call; `max_stagnant_rounds` bounds consecutive identical ordered
   batches, with normalized JSON arguments. Read-only progress is not
   stagnation. Limits return explicit errors and retain completed work.
-- Plan mode (`plan`, `/plan`, `-plan`) adds the read-only overlay and gates
-  tools centrally: `write`/`edit`/`shell` refuse with guidance and `task`
-  accepts only `explore`; the reply is the plan.
+- Plan mode (`plan`, `/plan`, `-plan`, Tab in the TUI chatbox) adds the
+  read-only overlay and gates tools centrally via ctx: `write`/`edit`/`shell`
+  and all MCP tools (opaque, so never assumed read-only) refuse with guidance
+  and `task` accepts only `explore`; the reply is the plan.
 - With auto-compaction enabled, `maybeAutoCompact` prunes before each turn
   and summarizes older whole turns past min(budget minus buffer,
   `keep_tokens` times 3), using the independent compaction effort and no

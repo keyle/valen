@@ -2343,3 +2343,25 @@ func TestTUIAskStaysVisibleOnShortTerminal(t *testing.T) {
 		t.Fatalf("dismiss must restore chat: mode=%v h=%d", m.mode, m.viewport.Height)
 	}
 }
+
+// TestTUITabTogglesPlanMode: Tab in the chatbox swaps work and plan mode and
+// the ready chatbox border turns cyan in plan mode.
+func TestTUITabTogglesPlanMode(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	if m.inputBorderColor() != mkGreen {
+		t.Fatal("work mode ready border must be green")
+	}
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if !m.cfg.Plan || !strings.Contains(m.history[0].Content, "Plan Mode") || m.inputBorderColor() != mkCyan {
+		t.Fatalf("tab must enter plan mode, reseed the overlay and turn the border cyan: plan=%v", m.cfg.Plan)
+	}
+	m.busy = true
+	if m.inputBorderColor() != mkOrange {
+		t.Fatal("busy border stays orange in plan mode")
+	}
+	m.busy = false
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if m.cfg.Plan || strings.Contains(m.history[0].Content, "Plan Mode") || m.inputBorderColor() != mkGreen {
+		t.Fatal("second tab must return to work mode")
+	}
+}

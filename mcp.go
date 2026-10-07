@@ -13,6 +13,7 @@ import (
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
+	"valen/internal/prompts"
 )
 
 const (
@@ -154,6 +155,11 @@ func mcpTool(server string, c *client.Client, t mcp.Tool) Tool {
 		Description: t.Description,
 		Schema:      schema,
 		Fn: func(ctx context.Context, args string) (string, error) {
+			// MCP tools are opaque (valen cannot tell a read from a write), so
+			// plan mode refuses them all rather than risk a mutation.
+			if prompts.IsPlanMode(ctx) {
+				return "", fmt.Errorf("%s", prompts.Refusal(name))
+			}
 			var params map[string]any
 			if err := json.Unmarshal([]byte(args), &params); err != nil {
 				return "", fmt.Errorf("bad arguments: %w", err)

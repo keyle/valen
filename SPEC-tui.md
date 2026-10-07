@@ -367,6 +367,7 @@ the full height, starts at its heading and scrolls to follow the selected option
 | Ctrl+G | help | help |
 | Ctrl+R / Ctrl+L / Ctrl+U / Ctrl+X | history / sessions / tools / errors | same |
 | Ctrl+Y | toggle thinking display | toggle thinking display |
+| Tab | swap work ↔ plan mode (chatbox border cyan in plan mode, green in work mode; header shows `· plan`) | — |
 | Ctrl+N | new blank session (fresh id + file; blocked while busy) | same |
 | Ctrl+T | thinking level cycle low→high, wraps to low | same |
 | Ctrl+O | toggle status details | toggle status details |

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mark3labs/mcp-go/mcp"
 	"valen/internal/prompts"
 )
 
@@ -196,5 +197,26 @@ func TestEffectiveSystemSideloadsUserAgents(t *testing.T) {
 	cfg.System = "custom override"
 	if got := effectiveSystem(cfg); got != "custom override" {
 		t.Fatalf("override must stay pure: %q", got)
+	}
+}
+
+// TestPlanModeRefusesMutatingTools: the read-only guarantee is enforced at
+// the tool layer, not just asked for in the prompt. MCP tools are opaque,
+// so they are refused too.
+func TestPlanModeRefusesMutatingTools(t *testing.T) {
+	useTempRoot(t)
+	ctx := prompts.WithPlanMode(context.Background())
+	tools := map[string]Tool{
+		"write": WriteTool(), "edit": EditTool(), "shell": ShellTool(),
+		"mcp": mcpTool("srv", nil, mcp.Tool{Name: "delete_all"}),
+	}
+	for name, tool := range tools {
+		_, err := tool.Fn(ctx, `{"path":"x.txt","content":"x","oldString":"a","newString":"b","command":"touch x.txt"}`)
+		if err == nil || !strings.Contains(err.Error(), "plan mode is read-only") {
+			t.Fatalf("%s must refuse in plan mode, err=%v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(getFileRoot(), "x.txt")); err == nil {
+		t.Fatal("plan mode wrote a file")
 	}
 }
