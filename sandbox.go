@@ -20,6 +20,7 @@ package main
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,6 +58,67 @@ func isSecretFile(name string) bool {
 		}
 	}
 	return true
+}
+
+// maxEnvScan bounds the .env search under the workdir.
+const maxEnvScan = 20000
+
+// findSecretFiles lists the secret .env files under root (skipping vendored
+// dirs) plus every other name for the same file: a hardlink such as
+// notes.txt has no .env in its path, so the name-based Seatbelt regex cannot
+// see it and bubblewrap has nothing to mask. Both backends deny or mask the
+// returned paths literally. Symlinks need no entry: the kernel resolves them
+// to the denied target.
+func findSecretFiles(root string) []string {
+	var secrets []string
+	var infos []os.FileInfo
+	walk := func(visit func(path string, d fs.DirEntry)) {
+		n := 0
+		_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if n++; n > maxEnvScan {
+				return filepath.SkipAll
+			}
+			if d.IsDir() {
+				if skippedDir(d.Name()) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			visit(p, d)
+			return nil
+		})
+	}
+	walk(func(p string, d fs.DirEntry) {
+		if !isSecretFile(p) {
+			return
+		}
+		secrets = append(secrets, real(p))
+		if info, err := d.Info(); err == nil {
+			infos = append(infos, info)
+		}
+	})
+	if len(infos) == 0 {
+		return secrets // common case: no .env, so no second pass or lstat
+	}
+	walk(func(p string, d fs.DirEntry) {
+		if isSecretFile(p) || !d.Type().IsRegular() {
+			return
+		}
+		info, err := d.Info()
+		if err != nil {
+			return
+		}
+		for _, s := range infos {
+			if os.SameFile(info, s) {
+				secrets = append(secrets, real(p))
+				return
+			}
+		}
+	})
+	return secrets
 }
 
 // sandboxHint is appended to a failed command's output when it looks like a

@@ -109,6 +109,12 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 	// clobbered through shell redirection.
 	prof.WriteString(`(deny file-read* file-write* (regex #"/\.env$" #"/\.env\.[^/]*$"))` + "\n")
 	prof.WriteString(`(allow file-read* file-write* (regex #"/\.env\.[^/]*\.(example|sample|template)$" #"/\.env\.(example|sample|template)$"))` + "\n")
+	// Other names (hardlinks) for those files: the regex above cannot see
+	// them, so deny each literally, after the template allow so it wins.
+	for i, f := range findSecretFiles(p.Root) {
+		fmt.Fprintf(&prof, "(deny file-read* file-write* (literal (param \"E%d\")))\n", i)
+		defs = append(defs, "-D", fmt.Sprintf("E%d=%s", i, f))
+	}
 	args := append([]string{"-p", prof.String()}, defs...)
 	return sandboxExec, append(args, "sh", "-c", command), nil
 }

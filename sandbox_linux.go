@@ -4,14 +4,9 @@ package main
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
-	"path/filepath"
 )
-
-// maxEnvScan bounds the .env search under the workdir.
-const maxEnvScan = 20000
 
 // sandboxArgv wraps command in bubblewrap: the whole filesystem read-only,
 // $HOME masked (reads/writes ask first), writable binds re-expose the safe
@@ -60,7 +55,7 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 		args = append(args, "--ro-bind", r, r)
 	}
 	// bwrap has no patterns: mask the .env files that exist right now.
-	for _, f := range findEnvFiles(p.Root) {
+	for _, f := range findSecretFiles(p.Root) {
 		args = append(args, maskArgs(f)...)
 	}
 	if !p.Network {
@@ -76,29 +71,4 @@ func maskArgs(path string) []string {
 		return []string{"--tmpfs", path}
 	}
 	return []string{"--ro-bind", "/dev/null", path}
-}
-
-// findEnvFiles lists secret .env files under root (skipping vendored dirs).
-func findEnvFiles(root string) []string {
-	var out []string
-	n := 0
-	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if n++; n > maxEnvScan {
-			return filepath.SkipAll
-		}
-		if d.IsDir() {
-			if skippedDir(d.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if isSecretFile(p) {
-			out = append(out, real(p))
-		}
-		return nil
-	})
-	return out
 }
