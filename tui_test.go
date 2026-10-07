@@ -701,8 +701,8 @@ func TestTUIDefaultSystemHintsAgents(t *testing.T) {
 	if strings.Contains(got, "AGENTS.md") || strings.Contains(got, "Ask anything") {
 		t.Fatalf("empty chat should be a simple label, got:\n%s", got)
 	}
-	if !strings.Contains(got, "No turns yet.") {
-		t.Fatalf("empty chat should show the simple label, got:\n%s", got)
+	if !strings.Contains(got, "valen "+version) {
+		t.Fatalf("empty chat should show the version label, got:\n%s", got)
 	}
 }
 

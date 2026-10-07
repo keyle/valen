@@ -2944,7 +2944,7 @@ func (m *tuiModel) renderChat() string {
 	if m.session == nil || len(m.session.Turns) == 0 {
 		m.chatCache, m.chatCacheTurns = nil, 0
 		if m.pendingPrompt == "" {
-			return emptyStyle.Render("No turns yet.")
+			return emptyStyle.Render("valen " + version)
 		}
 	}
 	committed := m.committedTurns(w)

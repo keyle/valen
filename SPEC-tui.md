@@ -83,7 +83,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 - Transcript is padded conversation blocks separated by blank lines; no role
   prefixes. `You` (orange) and ` ✦ <model>` (green, leading space so it lines
   up with ` ✦ valen`) head each block.
-  A blank session shows only a `No turns yet.` label; the AGENTS.md-first
+  A blank session shows only a `valen <version>` label (the `-X main.version` stamp, `dev` unstamped); the AGENTS.md-first
   behaviour lives in the default system prompt (`config.toml`), not as
   intro text in the transcript.
 - Pending user message + working status render immediately on Enter, before
