@@ -9,3 +9,7 @@ prod:
 	@mkdir -p bin/
 	@go build -ldflags='-s -w -X "main.version=1.0.1"' -o bin/valen .
 
+install: prod
+	@mkdir -p /usr/local/bin
+	@install -m755 bin/valen /usr/local/bin/.
+
