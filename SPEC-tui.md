@@ -128,7 +128,9 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 - Session totals render once, in the status row above the chatbox, in
   thousands (`N turns · win W/B · ↑P ↓C`, e.g. `3 turns · win 45k/300k ·
   ↑276k ↓3k`); per-turn scrollback tallies are gone. While busy the spinner
-  row also carries loop progress (`· rd 12/300`).
+  row also carries loop progress (`· rd 12/300`). Informational notices
+  (e.g. the mouse toggle) are transient: the next chatbox edit clears them
+  and restores the totals row; errors stay until resolved.
 - Go plan usage (`5h` rolling / `7d` / `30d` percent) sits dim at the right of
   the footer hint line, refreshed at startup, every minute, and after each
   turn; yellow past 80%, pink at 100% or rate-limited, with a `↻` reset hint

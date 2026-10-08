@@ -498,6 +498,15 @@ func (m *tuiModel) clearInput() {
 	m.retrying = false
 }
 
+// dismissTransientNotice restores the turns/token status row after an
+// informational (yellow) notice: any chatbox edit clears it so the useful
+// metadata returns. Errors stay sticky until resolved.
+func (m *tuiModel) dismissTransientNotice() {
+	if m.notice != "" && !m.noticeErr {
+		m.notice = ""
+	}
+}
+
 // recallLastPrompt loads the previous prompt into the empty chatbox so it
 // can be edited and sent again. It reports whether there was one.
 func (m *tuiModel) recallLastPrompt() bool {
@@ -2223,6 +2232,7 @@ func isCancel(err error) bool {
 // modifier-newline keys (shift+enter / alt+enter / ctrl+j).
 func (m *tuiModel) insertInputNewline() {
 	m.input.InsertRune('\n')
+	m.dismissTransientNotice()
 }
 
 // parseEnterCSI matches the byte sequences terminals send for modifier+enter
@@ -2409,8 +2419,12 @@ func (m *tuiModel) flushMouseHold() {
 		return
 	}
 	if m.mode == viewChat && m.ask == nil {
+		before := m.input.Value()
 		for _, h := range held {
 			m.input, _ = m.input.Update(h)
+		}
+		if m.input.Value() != before {
+			m.dismissTransientNotice()
 		}
 	}
 }
@@ -2643,11 +2657,19 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		var icmd tea.Cmd
+		before := m.input.Value()
 		m.input, icmd = m.input.Update(msg)
+		if m.input.Value() != before {
+			m.dismissTransientNotice()
+		}
 		return m, icmd
 	default:
 		var icmd tea.Cmd
+		before := m.input.Value()
 		m.input, icmd = m.input.Update(msg)
+		if m.input.Value() != before {
+			m.dismissTransientNotice()
+		}
 		if m.input.Value() == "" {
 			m.retrying = false
 		}

@@ -2019,6 +2019,35 @@ func TestTUIMouseToggleSelection(t *testing.T) {
 	}
 }
 
+// TestTUITransientNoticeClearsOnTyping: informational (yellow) status
+// notices restore the turns/token row on the next chatbox edit, while
+// errors stay sticky.
+func TestTUITransientNoticeClearsOnTyping(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	altM := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m"), Alt: true}
+	mm, _ := m.Update(altM)
+	m = mm.(*tuiModel)
+	if m.notice == "" || m.noticeErr {
+		t.Fatalf("mouse toggle must set an informational notice, got %q err=%v", m.notice, m.noticeErr)
+	}
+	mm, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	m = mm.(*tuiModel)
+	if m.notice != "" {
+		t.Fatalf("typing must clear the informational notice, got %q", m.notice)
+	}
+	if got := m.statusView(); !strings.Contains(got, "turns") {
+		t.Fatalf("status must restore totals after typing: %q", got)
+	}
+
+	m.notice = "boom"
+	m.noticeErr = true
+	mm, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	m = mm.(*tuiModel)
+	if m.notice != "boom" {
+		t.Fatalf("error notice must stay after typing, got %q", m.notice)
+	}
+}
+
 func TestTUIEscTwiceCancels(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	cancelled := 0
