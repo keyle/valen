@@ -93,7 +93,9 @@ func TestModelTransport(t *testing.T) {
 		"muse-spark-1.3-contributor": "responses", "muse-spark-1.2-contributor": "responses",
 		"minimax-m3": "messages", "minimax-m2.7": "messages",
 		"qwen3.8-max": "messages", "qwen3.8-flash": "messages",
-		"qwen3.7-plus": "messages",
+		"qwen3.7-plus":     "messages",
+		"claude-haiku-5-5": "messages", "claude-sonnet-5-5": "messages",
+		"openrouter/anthropic/claude-haiku-5.5": "chat",
 	}
 	for id, want := range cases {
 		if got := modelTransport(id); got != want {

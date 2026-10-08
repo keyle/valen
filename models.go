@@ -159,7 +159,7 @@ func modelTransport(id string) string {
 	switch {
 	case strings.HasPrefix(l, "grok-"), strings.HasPrefix(l, "gpt-"), strings.HasPrefix(l, "muse-spark-"):
 		return "responses"
-	case strings.HasPrefix(l, "minimax-"), strings.HasPrefix(l, "qwen"):
+	case strings.HasPrefix(l, "minimax-"), strings.HasPrefix(l, "qwen"), strings.HasPrefix(l, "claude-"):
 		return "messages"
 	default:
 		return "chat"
