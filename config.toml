@@ -15,28 +15,18 @@ model = "openrouter/anthropic/claude-sonnet-5.5"
                                # (overrides model/thinking here; delete it to reset).
 thinking = "high"
 tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "grep"]
-base_url = "https://opencode.ai/zen/go/v1"
 # API keys: empty by default, falling back to the env vars
 # OPENCODE_API_KEY / OPENROUTER_API_KEY. Set a value here to override.
 opencode_key = ""
 openrouter_key = ""
-# Second provider (no boot crash when unset):
-#   /model always lists OpenRouter models as openrouter/<vendor>/<model>
-#   (recent flagships in the fallback when offline/unkeyed), served via
-#   OpenRouter's OpenAI-compatible chat endpoint with reasoning_effort for
-#   thinking and no Go session header. Picking or sending with one and no
-#   key reports "OpenRouter key not found" (Go models report "OpenCode Go
-#   API key not found" the same way).
+# Second provider, OpenRouter: /model lists openrouter/<vendor>/<model>
+# (recent flagships while offline). A send without a key reports
+# "OpenRouter key not found" instead of failing boot.
 # session_id = "ses-stable-id"   # optional, generated per run when omitted
 
-# system prompt: omit to use the harness prompt files (per model family —
-# meta/anthropic/beast/codex/copilot/gemini/gpt/gpt_astra/kimi/trinity/
-# default — opencode-adapted, valen-tuned). Set `system = "..."` only to
-# override them entirely.
-# system = "..."                    # full override when set; empty uses prompt files.
-# ~/.config/valen/AGENTS.md (beside this file), when present, is appended to the
-# prompt files as silent standing instructions (capped at 32 KiB; not applied
-# when `system` is set).
+# Prompt files are built in per model family. Add your own standing
+# instructions in ~/.config/valen/AGENTS.md; the project's ./AGENTS.md is
+# appended too (both capped at 32 KiB, never mentioned).
 # plan = false                      # plan mode: read-only investigation, the
                                     # reply is the plan (write/edit/shell
                                     # blocked, task explore-only). TUI /plan

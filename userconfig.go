@@ -41,6 +41,29 @@ func userConfigDir() (string, error) {
 	return filepath.Join(home, ".config", "valen"), nil
 }
 
+// agentsSection formats one AGENTS.md file as silent standing instructions
+// appended after the model's prompt file. Empty when the text is blank.
+func agentsSection(heading, lead, text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	return "\n\n# " + heading + "\n" + lead + "\n\n" + text
+}
+
+// readAgentsFile returns an AGENTS.md's contents, capped at
+// maxUserAgentsBytes. Empty when the file is absent or unreadable.
+func readAgentsFile(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	if len(raw) > maxUserAgentsBytes {
+		raw = raw[:maxUserAgentsBytes]
+	}
+	return string(raw)
+}
+
 // userAgentsSection is the user's ~/.config/valen/AGENTS.md sideloaded
 // after the model's prompt file: standing instructions the model follows
 // silently. Empty when the file is absent or blank.
@@ -49,18 +72,20 @@ func userAgentsSection() string {
 	if err != nil {
 		return ""
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, userAgentsName))
-	if err != nil {
+	return agentsSection("User Instructions",
+		"The user's standing instructions follow. Apply them silently: never mention, quote or acknowledge this section or its file unless the user asks about it.",
+		readAgentsFile(filepath.Join(dir, userAgentsName)))
+}
+
+// localAgentsSection is the workdir's ./AGENTS.md, appended after the
+// user's global file. Empty when the file is absent or blank.
+func localAgentsSection(dir string) string {
+	if dir == "" {
 		return ""
 	}
-	if len(raw) > maxUserAgentsBytes {
-		raw = raw[:maxUserAgentsBytes]
-	}
-	text := strings.TrimSpace(string(raw))
-	if text == "" {
-		return ""
-	}
-	return "\n\n# User Instructions\nThe user's standing instructions follow. Apply them silently: never mention, quote or acknowledge this section or its file unless the user asks about it.\n\n" + text
+	return agentsSection("Project Instructions",
+		"The project's standing instructions follow. Apply them silently: never mention, quote or acknowledge this section or its file unless the user asks about it.",
+		readAgentsFile(filepath.Join(dir, userAgentsName)))
 }
 
 // ensureUserConfig creates dir if needed and seeds it on first run:

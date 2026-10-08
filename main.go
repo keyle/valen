@@ -62,7 +62,7 @@ func effectiveSystem(cfg Config) string {
 			cwd = wd
 		}
 	}
-	return prompts.SystemPrompt(cfg.Model, cfg.Plan, cwd) + userAgentsSection()
+	return prompts.SystemPrompt(cfg.Model, cfg.Plan, cwd) + userAgentsSection() + localAgentsSection(cwd)
 }
 
 // seedHistory builds the initial history for a turn.

@@ -62,11 +62,9 @@ and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
 | --- | --- | --- | --- |
 | `model` | string | — | **required.** Model ID, e.g. `glm-5.3-flash`, `kimi-k3`, `zen/claude-haiku-5-5`, or `openrouter/moonshotai/kimi-k3`. The `zen/` prefix selects OpenCode Zen (`https://opencode.ai/zen/v1`, same OpenCode key as Go; transport chosen per model: gpt/grok/muse → responses; claude and qwen3.5–3.8 plus/flash (all qwen except qwen3.8-max) → messages; qwen3.8-max and the rest → chat; Gemini models are not supported); the `openrouter/` prefix selects the OpenRouter provider (needs its key, below); bare IDs ride OpenCode Go. Switch live with `/model` (ctrl+p); persisted to `config.toml` |
 | `thinking` | string | empty (provider default) | Reasoning level, per-model (see `/effort` picker): muse-spark `minimal`/`low`/`medium`/`high`/`xhigh`, gpt/grok `low`…`max` (+`none` on gpt), glm/deepseek `low`/`high`/`max` or `high`/`max`, kimi-k3 `max` only, toggle models `none`/`high`, fixed no-control models omit. Switch live with `/effort` (`/thinking` alias) or ctrl+t (cycles low→high, wraps); persisted to `config.toml`. Unknown models fall back to the full vocabulary until a 400 teaches the valid list, cached at `$XDG_DATA_HOME/valen/thinking_levels.json` |
-| `base_url` | string | `https://opencode.ai/zen/go/v1` | OpenCode Go API base (Zen models always use `https://opencode.ai/zen/v1`); the transport path (`/chat/completions`, `/messages`, `/responses`) is appended per model |
 | `opencode_key` | string | empty | OpenCode API key itself, shared by Go and Zen. Empty falls back to the `OPENCODE_API_KEY` env var. Missing keys never fail boot — the TUI still opens and `/model` lists all providers; picking or sending with a Go/Zen model and no key says "OpenCode API key not found" |
 | `openrouter_key` | string | empty | OpenRouter API key itself. Empty falls back to the `OPENROUTER_API_KEY` env var. Second provider: `/model` always lists OpenRouter models (`openrouter/<vendor>/<model>`, fallback when offline) served via OpenRouter's OpenAI-compatible chat endpoint. Picking or sending with an `openrouter/…` model and no key says "OpenRouter key not found" |
 | `session_id` | string | `ses-<unixnano>` | Stable per conversation; sent as `x-opencode-session` |
-| `system` | string | prompt files (per model family) | Agent guidelines; empty uses the harness prompt files (opencode-adapted, valen-tuned: muse→meta, claude→anthropic, old reasoning→beast, gpt-6→astra, gpt/grok→gpt, codex/copilot/gemini/kimi/trinity→their file, else default) plus a small `<env>` header (model, workdir, platform, date), then `~/.config/valen/AGENTS.md` when present (sideloaded silently as standing user instructions, capped at 32768 bytes; new sessions and every refreshed system message get it). Set to override entirely (AGENTS.md is then not added) |
 | `plan` | bool | `false` | Plan mode: read-only investigation — the plan overlay joins the system prompt, `write`/`edit`/`shell` and every MCP tool refuse with guidance, `task` is explore-only. TUI `/plan` or Tab in the chatbox toggles at runtime; `-plan` sets it headless |
 | `max_rounds` | int | `300` | Per-turn round backstop; on exhaustion the turn compacts send-side and gets exactly one more window, then stops ("across 2 compacted windows") |
 | `max_stagnant_rounds` | int | `25` | Maximum consecutive identical ordered tool batches allowed; changed tool names/normalized arguments/order reset the count. Not a limit on read-only research; the single-call third-repeat guard may stop earlier |
@@ -79,6 +77,15 @@ and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
 | `[input]` | table | `blink=true, height=3` | Chatbox chrome (TUI only): block-cursor blink plus input box height in lines |
 | `tools` | string[] | empty | Subset of `shell`, `web_search`, `web_fetch`, `read`, `write`, `edit`, `glob`, `grep`, `AskUserQuestion`, `todowrite`, `todoread`. `AskUserQuestion` plus `todowrite`/`todoread` plus `task` are also registered automatically when absent, so model-driven questions, the session plan, and subagent delegation work in every frontend |
 | `mcp` | table[] | empty | Each entry needs `name` + `cmd`; optional `args`, `env` |
+
+The system prompt is built in per model family (opencode-adapted,
+valen-tuned: muse→meta, claude→anthropic, old reasoning→beast, gpt-6→astra,
+gpt/grok→gpt, codex/copilot/gemini/kimi/trinity→their file, else default)
+plus a small `<env>` header (model, workdir, platform, date). Standing
+instructions come from `~/.config/valen/AGENTS.md` (global, appended as
+"User Instructions") and `<workdir>/AGENTS.md` (project, appended as
+"Project Instructions"), each capped at 32768 bytes and applied silently on
+new sessions and every refreshed system message.
 
 Validation errors (missing `model`, MCP entry without `cmd`, unreadable file)
 exit non-zero before any network call. Missing API keys are not validation

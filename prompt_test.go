@@ -175,24 +175,31 @@ func TestApplyPlanModeToggles(t *testing.T) {
 	}
 }
 
-// The user's AGENTS.md is appended after the model's prompt files, not to
-// an explicit `system` override.
-func TestEffectiveSystemSideloadsUserAgents(t *testing.T) {
+// The user's and the project's AGENTS.md are appended after the model's
+// prompt files, not to an explicit `system` override.
+func TestEffectiveSystemSideloadsAgents(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	root := useTempRoot(t)
+
 	cfg := Config{Model: "muse-spark-1.3-contributor"}
-	if strings.Contains(effectiveSystem(cfg), "User Instructions") {
+	if strings.Contains(effectiveSystem(cfg), "Instructions") {
 		t.Fatal("no AGENTS.md: no section")
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "valen"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "valen", "AGENTS.md"), []byte("always say hi\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "valen", "AGENTS.md"), []byte("user rule\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("project rule\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got := effectiveSystem(cfg)
-	if !strings.HasSuffix(got, "always say hi") || !strings.Contains(got, "never mention") {
-		t.Fatalf("AGENTS.md not sideloaded: %q", got[len(got)-300:])
+	for _, want := range []string{"# User Instructions", "user rule", "# Project Instructions", "project rule", "never mention"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("AGENTS.md missing %q: %q", want, got)
+		}
 	}
 	cfg.System = "custom override"
 	if got := effectiveSystem(cfg); got != "custom override" {
