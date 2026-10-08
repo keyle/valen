@@ -15,6 +15,19 @@ prod:
 test:
 	go test ./...
 
+tag:
+	@current=$$(git describe --tags --abbrev=0 2>/dev/null || echo 0.0.0); \
+	next=$$(echo $$current | awk -F. 'BEGIN { OFS = "." } { $$NF = $$NF + 1; print }'); \
+	echo "current tag: $$current"; \
+	echo "next tag:    $$next"; \
+	echo "building..."; \
+	go build ./... || { echo "build failed"; exit 1; }; \
+	echo "testing..."; \
+	go test ./... || { echo "tests failed"; exit 1; }; \
+	git tag $$next || exit 1; \
+	git push origin $$next || exit 1; \
+	echo "tagged and pushed $$next"
+
 install: prod
 	@mkdir -p /usr/local/bin
 	install -m755 bin/valen /usr/local/bin/.
