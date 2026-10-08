@@ -2365,3 +2365,52 @@ func TestTUITabTogglesPlanMode(t *testing.T) {
 		t.Fatal("second tab must return to work mode")
 	}
 }
+
+// TestTUIChatboxGrowsWithContent: newlines and soft-wrapped paste grow the
+// chatbox up to 10 rows, shrink the scrollback to match, and the frame never
+// exceeds the terminal height.
+func TestTUIChatboxGrowsWithContent(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	base, vp := m.input.Height(), m.viewport.Height
+	for i := 0; i < 14; i++ {
+		_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+		_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	}
+	if m.input.Height() != maxInputHeight {
+		t.Fatalf("height=%d want cap %d", m.input.Height(), maxInputHeight)
+	}
+	if m.viewport.Height != vp-(maxInputHeight-base) || lipgloss.Height(m.View()) != 29 {
+		t.Fatalf("viewport=%d frame=%d", m.viewport.Height, lipgloss.Height(m.View()))
+	}
+	m.clearInput()
+	_, _ = m.Update(nil)
+	if m.input.Height() != base || m.viewport.Height != vp {
+		t.Fatalf("clearing must restore: input=%d vp=%d", m.input.Height(), m.viewport.Height)
+	}
+	m.input.SetValue(strings.Repeat("word ", 100))
+	_, _ = m.Update(nil)
+	if h := m.input.Height(); h <= base || h > maxInputHeight {
+		t.Fatalf("soft-wrapped paste must grow the box, got %d", h)
+	}
+}
+
+// TestTUIHeaderStatusNeverWrap: a long session title in plan mode and a long
+// notice must clip to one row, otherwise the frame overflows the terminal and
+// the chatbox lands one row off the bottom.
+func TestTUIHeaderStatusNeverWrap(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
+	m.session.Title = strings.Repeat("a long title ", 10)
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m.notice = strings.Repeat("long notice ", 20)
+	if h := lipgloss.Height(m.headerView()); h != 1 {
+		t.Fatalf("header rows=%d", h)
+	}
+	if h := lipgloss.Height(m.statusView()); h != 1 {
+		t.Fatalf("status rows=%d", h)
+	}
+	if h := lipgloss.Height(m.View()); h > 30 {
+		t.Fatalf("frame rows=%d exceeds terminal", h)
+	}
+}

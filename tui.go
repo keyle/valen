@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"valen/internal/prompts"
 
@@ -938,6 +939,92 @@ func (m *tuiModel) isPickerMode() bool {
 	return m.mode == viewSessions || m.mode == viewModels || m.mode == viewAsk
 }
 
+// maxInputHeight caps how far the chatbox grows with its content.
+const maxInputHeight = 10
+
+// inputRows counts the visual rows the chatbox text occupies at the current
+// textarea width, soft wraps included (minimum 1).
+func (m *tuiModel) inputRows() int {
+	w := m.input.Width()
+	if w <= 0 {
+		return 1
+	}
+	rows := 0
+	for _, ln := range strings.Split(m.input.Value(), "\n") {
+		rows += len(wrapInputLine([]rune(ln), w))
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	return rows
+}
+
+// wrapInputLine mirrors the bubbles textarea word wrap so the chatbox can
+// size itself to the rows the textarea will actually draw.
+func wrapInputLine(runes []rune, width int) [][]rune {
+	var (
+		lines  = [][]rune{{}}
+		word   []rune
+		row    int
+		spaces int
+	)
+	strw := func(r []rune) int { return lipgloss.Width(string(r)) }
+	for _, r := range runes {
+		if unicode.IsSpace(r) {
+			spaces++
+		} else {
+			word = append(word, r)
+		}
+		if spaces > 0 {
+			if strw(lines[row])+strw(word)+spaces > width {
+				row++
+				lines = append(lines, []rune{})
+			}
+			lines[row] = append(lines[row], word...)
+			lines[row] = append(lines[row], []rune(strings.Repeat(" ", spaces))...)
+			spaces = 0
+			word = nil
+		} else if strw(word)+lipgloss.Width(string(word[len(word)-1])) > width {
+			if len(lines[row]) > 0 {
+				row++
+				lines = append(lines, []rune{})
+			}
+			lines[row] = append(lines[row], word...)
+			word = nil
+		}
+	}
+	if strw(lines[row])+strw(word)+spaces >= width {
+		lines = append(lines, append(append([]rune{}, word...), []rune(strings.Repeat(" ", spaces+1))...))
+	}
+	return lines
+}
+
+// syncInputHeight grows the chatbox with its content, from the configured
+// height up to maxInputHeight, and resizes the scrollback to match.
+func (m *tuiModel) syncInputHeight() {
+	h := m.inputRows()
+	if h > maxInputHeight {
+		h = maxInputHeight
+	}
+	if base := inputHeight(m.cfg); h < base {
+		h = base
+	}
+	if h == m.input.Height() {
+		return
+	}
+	m.input.SetHeight(h)
+	// The textarea only re-clamps its internal scroll on Update; a nil
+	// message keeps the cursor row visible after the resize.
+	m.input, _ = m.input.Update(nil)
+	if m.height == 0 {
+		return
+	}
+	m.viewport.Height = m.viewportHeight()
+	if m.follow && m.mode == viewChat {
+		m.viewport.GotoBottom()
+	}
+}
+
 // viewportHeight is the scrollback height for the current mode and terminal
 // size. Chat reserves room for the chatbox, status and footer; pickers drop
 // the chatbox and footer, so the viewport grows to keep the status row pinned
@@ -946,7 +1033,7 @@ func (m *tuiModel) viewportHeight() int {
 	if m.height == 0 {
 		return m.viewport.Height
 	}
-	h := m.height - 6 - inputHeight(m.cfg)
+	h := m.height - 6 - m.input.Height()
 	if m.isPickerMode() {
 		h = m.height - 2 // header + status
 	}
@@ -1737,6 +1824,12 @@ func (m *tuiModel) exportTranscript() (string, bool) {
 
 // Update drives the Bubble Tea loop. Single in-process runtime, no server.
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	mdl, cmd := m.update(msg)
+	m.syncInputHeight()
+	return mdl, cmd
+}
+
+func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	// Disambiguated ctrl+m (the letter form terminals send once a
@@ -2713,6 +2806,13 @@ func (m *tuiModel) View() string {
 		parts = append(parts, m.inputView(), m.footerView())
 	}
 	block := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	// Never exceed the terminal height: an extra row scrolls the whole
+	// screen up and shifts the status/chatbox off the bottom edge.
+	if m.height > 0 {
+		if lines := strings.Split(block, "\n"); len(lines) > m.height {
+			block = strings.Join(lines[len(lines)-m.height:], "\n")
+		}
+	}
 	// Center the capped column on wide terminals.
 	if pad := (m.width - m.columnWidth()) / 2; pad > 0 {
 		block = lipgloss.NewStyle().PaddingLeft(pad).Render(block)
@@ -2726,44 +2826,50 @@ func (m *tuiModel) headerView() string {
 	if m.cfg.Thinking != "" {
 		model += " · " + m.cfg.Thinking
 	}
+	// Suffixes after the session label: plan marker and the overlay name.
+	// They are reserved when truncating the label so the header never wraps
+	// onto a second row (which pushes the whole screen down one line).
+	var tail string
+	if m.cfg.Plan {
+		tail += "  ·  plan"
+	}
+	switch m.mode {
+	case viewHistory:
+		tail += "  ·  history"
+	case viewSessions:
+		tail += "  ·  sessions"
+	case viewTools:
+		tail += "  ·  tools"
+	case viewErrors:
+		tail += "  ·  errors"
+	case viewHelp:
+		tail += "  ·  help"
+	case viewModels:
+		tail += "  ·  models"
+	case viewEffort:
+		tail += "  ·  thinking"
+	case viewDetail:
+		tail += "  ·  " + m.detailTitle
+	case viewAsk:
+		tail += "  ·  question"
+	}
 	label := sessionLabel(m.session)
 	var meta string
 	if label != "" {
 		if m.width > 0 {
-			reserved := lipgloss.Width(" ✦ valen") + lipgloss.Width(fmt.Sprintf("  ·  %s  ·  ", model)) + lipgloss.Width("  ·  alt+m select")
-			label = truncateRunes(label, m.columnWidth()-reserved)
+			reserved := lipgloss.Width(" ✦ valen") + lipgloss.Width(fmt.Sprintf("  ·  %s  ·  ", model)) + lipgloss.Width("  ·  alt+m select") + lipgloss.Width(tail)
+			// truncateRunes appends "…" past n, so leave one cell for it.
+			label = truncateRunes(label, m.columnWidth()-reserved-1)
 		}
 		meta = headerDimStyle.Render(fmt.Sprintf("  ·  %s  ·  %s  ·  alt+m select", model, label))
 	} else {
 		meta = headerDimStyle.Render(fmt.Sprintf("  ·  %s  ·  alt+m select", model))
 	}
-	if m.cfg.Plan {
-		meta += headerDimStyle.Render("  ·  plan")
-	}
-	mode := ""
-	switch m.mode {
-	case viewHistory:
-		mode = headerDimStyle.Render("  ·  history")
-	case viewSessions:
-		mode = headerDimStyle.Render("  ·  sessions")
-	case viewTools:
-		mode = headerDimStyle.Render("  ·  tools")
-	case viewErrors:
-		mode = headerDimStyle.Render("  ·  errors")
-	case viewHelp:
-		mode = headerDimStyle.Render("  ·  help")
-	case viewModels:
-		mode = headerDimStyle.Render("  ·  models")
-	case viewEffort:
-		mode = headerDimStyle.Render("  ·  thinking")
-	case viewDetail:
-		mode = headerDimStyle.Render("  ·  " + m.detailTitle)
-	case viewAsk:
-		mode = headerDimStyle.Render("  ·  question")
-	}
-	line := title + meta + mode
+	line := title + meta + headerDimStyle.Render(tail)
 	if m.width > 0 {
-		return lipgloss.NewStyle().Width(m.columnWidth()).Render(line)
+		// One row, always: clip instead of wrapping.
+		w := m.columnWidth()
+		return lipgloss.NewStyle().Inline(true).MaxWidth(w).Render(line)
 	}
 	return line
 }
@@ -2846,7 +2952,13 @@ func (m *tuiModel) statusView() string {
 		}
 		right += esc
 	}
-	return lipgloss.NewStyle().Padding(0, 2).Render(left + mid + right)
+	row := lipgloss.NewStyle().Padding(0, 2).Render(left + mid + right)
+	if m.width > 0 {
+		// One row, always: a long notice (e.g. the plan-mode switch text)
+		// must clip rather than wrap and push the layout down a line.
+		row = lipgloss.NewStyle().Inline(true).MaxWidth(m.columnWidth()).Render(row)
+	}
+	return row
 }
 
 // inputBorderColor: orange while working, green when ready (cyan in plan
