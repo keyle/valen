@@ -12,6 +12,7 @@ import (
 // network, and friendlyError names the right provider env.
 func TestMissingKeyErrorDistinguishesProviders(t *testing.T) {
 	t.Setenv(openCodeKeyEnv, "")
+	t.Setenv(openCodeLegacyKeyEnv, "")
 	t.Setenv(openRouterKeyEnv, "")
 
 	goCfg := Config{Model: "glm-5.3-flash", MaxRounds: 1}
@@ -48,6 +49,7 @@ func TestMissingKeyErrorDistinguishesProviders(t *testing.T) {
 // dispatchTurn with missing keys must not touch the network.
 func TestDispatchTurnMissingKeyMakesNoNetworkCall(t *testing.T) {
 	t.Setenv(openCodeKeyEnv, "")
+	t.Setenv(openCodeLegacyKeyEnv, "")
 	t.Setenv(openRouterKeyEnv, "")
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -93,6 +95,7 @@ func TestEffectiveKeysReadLiveEnv(t *testing.T) {
 // TUI submit with a missing key stays idle with a provider-specific notice.
 func TestTUISubmitWithoutKeyShowsNotice(t *testing.T) {
 	t.Setenv(openCodeKeyEnv, "")
+	t.Setenv(openCodeLegacyKeyEnv, "")
 	t.Setenv(openRouterKeyEnv, "")
 	cfg := Config{Model: "glm-5.3-flash", BaseURL: "https://unused", SessionID: "ses-tui", MaxRounds: 4}
 	m := newTestModel(t, cfg)
@@ -119,6 +122,7 @@ func TestTUISubmitWithoutKeyShowsNotice(t *testing.T) {
 // Picking a model without its key still switches but warns which key is missing.
 func TestTUIApplyModelSwitchWarnsMissingKey(t *testing.T) {
 	t.Setenv(openCodeKeyEnv, "")
+	t.Setenv(openCodeLegacyKeyEnv, "")
 	t.Setenv(openRouterKeyEnv, "")
 	cfg := Config{Model: "glm-5.3-flash", BaseURL: "https://unused", SessionID: "ses-tui", MaxRounds: 4}
 	m := newTestModel(t, cfg)
@@ -143,6 +147,7 @@ func TestTUIApplyModelSwitchWarnsMissingKey(t *testing.T) {
 // Keyless picker still lists both providers from fallbacks (offline).
 func TestTUIModelPickerListsBothWithoutKeys(t *testing.T) {
 	t.Setenv(openCodeKeyEnv, "")
+	t.Setenv(openCodeLegacyKeyEnv, "")
 	t.Setenv(openRouterKeyEnv, "")
 	oldBase := openRouterBaseURL
 	openRouterBaseURL = "http://127.0.0.1:1"
