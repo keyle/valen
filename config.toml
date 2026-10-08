@@ -17,8 +17,8 @@ thinking = "high"
 tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "grep"]
 base_url = "https://opencode.ai/zen/go/v1"
 # API keys: empty by default, falling back to the env vars
-# OPENCODE_GO_API_KEY / OPENROUTER_API_KEY. Set a value here to override.
-opencode_go_key = ""
+# OPENCODE_API_KEY / OPENROUTER_API_KEY. Set a value here to override.
+opencode_key = ""
 openrouter_key = ""
 # Second provider (no boot crash when unset):
 #   /model always lists OpenRouter models as openrouter/<vendor>/<model>

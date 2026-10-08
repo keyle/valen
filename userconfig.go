@@ -170,11 +170,12 @@ func applyUserState(cfg Config, statePath string) Config {
 }
 
 // validateModelID rejects IDs with an unknown provider prefix. Bare IDs
-// ride Go; "openrouter/…" rides OpenRouter. Anything else with a slash is
+// ride Go; "zen/…" rides OpenCode Zen; "openrouter/…" rides OpenRouter. Anything else with a slash is
 // almost certainly a pasted OpenRouter ID missing its prefix.
 func validateModelID(model string) error {
-	if strings.Contains(model, "/") && !strings.HasPrefix(normalizeModelID(model), ProviderOpenRouter+"/") {
-		return fmt.Errorf("model %q has an unknown provider prefix (OpenRouter models need %q)", model, ProviderOpenRouter+"/vendor/model")
+	n := normalizeModelID(model)
+	if strings.Contains(model, "/") && !strings.HasPrefix(n, ProviderOpenRouter+"/") && !strings.HasPrefix(n, ProviderZen+"/") {
+		return fmt.Errorf("model %q has an unknown provider prefix (OpenRouter models need %q, Zen models %q)", model, ProviderOpenRouter+"/vendor/model", ProviderZen+"/model")
 	}
 	return nil
 }

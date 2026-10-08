@@ -132,7 +132,8 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 - Go plan usage (`5h` rolling / `7d` / `30d` percent) sits dim at the right of
   the footer hint line, refreshed at startup, every minute, and after each
   turn; yellow past 80%, pink at 100% or rate-limited, with a `↻` reset hint
-  on hot windows. Hidden when `{base_url}/usage` is unavailable (non-Go keys).
+  on hot windows. Hidden when `{base_url}/usage` is unavailable (non-Go keys)
+  and on `zen/…` models (pay-as-you-go, no plan quota).
   On `openrouter/…` models the Go quota stays hidden and the footer shows the
   OpenRouter balance (`OR $X.XX left`) once the credits fetch lands; plain API
   keys 403 on `/credits`, so the footer shows only the hint until then.
@@ -194,10 +195,11 @@ Rules:
   `[tui] max_lines` budget picks between them and bounds the assembly, so
   per-delta cost is the bounded scrollback plus the live pending block, not
   history depth or total history bytes.
-- Go plan quota refreshes share one in-flight fetch: the minute tick and the
-  post-turn refresh never overlap on slow networks. The refresh dispatches by
-  provider (`fetchQuotaCmd`): the OpenRouter balance on `openrouter/…` models,
-  the Go quota otherwise — the hidden provider never refreshes.
+- Plan quota refreshes share one in-flight fetch per provider: the minute tick
+  and the post-turn refresh never overlap on slow networks. The refresh
+  dispatches by provider (`fetchQuotaCmd`): the OpenRouter balance on
+  `openrouter/…` models, the Go plan quota otherwise, and nothing on `zen/…`
+  models (pay-as-you-go, no plan quota) — the hidden provider never refreshes.
 
 ## Architecture
 
@@ -296,19 +298,20 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
 ## Model switching
 
 - `/model` (ctrl+p, or ctrl+m where the terminal sends disambiguated ctrl+m)
-  fetches the live catalogs — OpenCode Go (`GET {base_url}/models`) plus
+  fetches the live catalogs — OpenCode Go (`GET {base_url}/models`), OpenCode
+  Zen (`GET https://opencode.ai/zen/v1/models`, same OpenCode key as Go) plus
   OpenRouter (`GET https://openrouter.ai/api/v1/models`) — and opens
   a picker: ↑↓ move, Enter switches, Space stars/unstars, Esc backs out. The
   picker search box is
   pinned to the full content width (like the chatbox) so typing never resizes
-  it. Both providers list even
+  it. All three providers list even
   without keys (curated fallbacks when offline/unkeyed); picking or sending
-  with a model whose key is missing reports "OpenCode Go API key not found"
+  with a model whose key is missing reports "OpenCode API key not found"
   or "OpenRouter key not found" naming the env var, instead of failing boot.
   Every row carries its
-  provider prefix (`go/…`, `openrouter/…`); Go transports (`/chat`,
-  `/responses`, `/messages`) are marked, OpenRouter rows always converse
-  over its OpenAI-compatible chat endpoint.
+  provider prefix (`go/…`, `zen/…`, `openrouter/…`); Go and Zen transports
+  (`/chat`, `/responses`, `/messages`) are marked, OpenRouter rows always
+  converse over its OpenAI-compatible chat endpoint.
 - Favourites are a plain YAML list (`- glm-5.3`, OpenRouter IDs keep their
   `openrouter/…` prefix) at
   `~/.config/valen/favourites.yaml` (`$XDG_CONFIG_HOME/valen/`). Starred
@@ -413,7 +416,8 @@ retries the round unary.
 - `usage_test.go`: `/usage` parsing + identity headers, 404 hides the footer,
   severity thresholds, footer text/reset hints, refresh command wiring;
   `/credits` parsing, 403 hides the footer, balance flooring + footer text,
-  OpenRouter footer hiding Go usage, per-provider refresh dispatch.
+  OpenRouter footer hiding Go usage, Zen hiding the footer entirely,
+  per-provider refresh dispatch.
 - Fake completions server drives the real `runTurn` through `submit`.
 - `stream_test.go`: per-transport SSE rounds, stream-rejection fallback, and
   the pending tool/text timeline accumulation.

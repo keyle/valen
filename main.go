@@ -25,7 +25,8 @@ import (
 
 const (
 	defaultBaseURL               = "https://opencode.ai/zen/go/v1"
-	goKeyEnv                     = "OPENCODE_GO_API_KEY"
+	openCodeKeyEnv               = "OPENCODE_API_KEY"
+	openCodeLegacyKeyEnv         = "OPENCODE_GO_API_KEY"
 	openRouterKeyEnv             = "OPENROUTER_API_KEY"
 	defaultMaxRounds             = 300
 	defaultMaxTokens             = 16384
@@ -75,10 +76,13 @@ type Config struct {
 	Model    string `toml:"model"`
 	Thinking string `toml:"thinking"`
 	BaseURL  string `toml:"base_url"`
-	// OpenCodeGoKey / OpenRouterKey are the API keys themselves. Empty by
-	// default: the OPENCODE_GO_API_KEY / OPENROUTER_API_KEY env vars are
+	// OpenCodeKey / OpenRouterKey are the API keys themselves. Empty by
+	// default: the OPENCODE_API_KEY / OPENROUTER_API_KEY env vars are
 	// used instead. persistModelSelection only writes model/thinking
 	// lines, and nothing logs these.
+	OpenCodeKey string `toml:"opencode_key"`
+	// OpenCodeGoKey is the legacy name for OpenCodeKey (same key serves Go
+	// and Zen); read only when opencode_key is empty.
 	OpenCodeGoKey         string `toml:"opencode_go_key"`
 	OpenRouterKey         string `toml:"openrouter_key"`
 	SessionID             string `toml:"session_id"`
@@ -347,7 +351,7 @@ func start() error {
 		cfg.Plan = true
 	}
 
-	apiKey := effectiveGoKey(cfg, "")
+	apiKey := effectiveOpenCodeKey(cfg, "")
 	// Missing keys never fail boot: the TUI still opens so the user can
 	// browse /model, and the missing key surfaces when a model needing it
 	// is picked or a turn is sent (see missingKeyError + dispatchTurn).
@@ -566,17 +570,24 @@ func runTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey stri
 	return msg, usage, err
 }
 
-// effectiveGoKey resolves the Go credential: the boot snapshot first, then
-// the opencode_go_key setting, then a live env read so an export after boot
-// still works without a restart.
-func effectiveGoKey(cfg Config, apiKey string) string {
+// effectiveOpenCodeKey resolves the OpenCode credential (one key serves Go
+// and Zen): the boot snapshot first, then the opencode_key setting (legacy
+// opencode_go_key as fallback), then a live env read (OPENCODE_API_KEY, then
+// legacy OPENCODE_GO_API_KEY) so an export after boot works without a restart.
+func effectiveOpenCodeKey(cfg Config, apiKey string) string {
 	if k := strings.TrimSpace(apiKey); k != "" {
+		return k
+	}
+	if k := strings.TrimSpace(cfg.OpenCodeKey); k != "" {
 		return k
 	}
 	if k := strings.TrimSpace(cfg.OpenCodeGoKey); k != "" {
 		return k
 	}
-	return strings.TrimSpace(os.Getenv(goKeyEnv))
+	if k := strings.TrimSpace(os.Getenv(openCodeKeyEnv)); k != "" {
+		return k
+	}
+	return strings.TrimSpace(os.Getenv(openCodeLegacyKeyEnv))
 }
 
 // effectiveOpenRouterKey resolves the OpenRouter credential the same way.
@@ -598,8 +609,8 @@ func missingKeyError(cfg Config, apiKey string) error {
 		}
 		return nil
 	}
-	if effectiveGoKey(cfg, apiKey) == "" {
-		return fmt.Errorf("%s is not set (required by model %q)", goKeyEnv, cfg.Model)
+	if effectiveOpenCodeKey(cfg, apiKey) == "" {
+		return fmt.Errorf("%s is not set (required by model %q)", openCodeKeyEnv, cfg.Model)
 	}
 	return nil
 }
@@ -617,7 +628,7 @@ func dispatchTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey
 	// Refresh from the live env so an export after boot works without a
 	// restart; downstream transports must see the usable credential, not
 	// the possibly-empty boot snapshot.
-	apiKey = effectiveGoKey(cfg, apiKey)
+	apiKey = effectiveOpenCodeKey(cfg, apiKey)
 	cfg.OpenRouterKey = effectiveOpenRouterKey(cfg)
 	t0 := time.Now()
 	dvlog.Logf("turn start transport=%s %s", modelTransport(cfg.Model), dvlog.HistoryLine(*history, estimateTokens(*history)))
@@ -1027,7 +1038,7 @@ func chatTarget(cfg Config, apiKey string, hc *http.Client) (string, map[string]
 		sendCfg.SessionID = ""
 		return openRouterBaseURL + "/chat/completions", openRouterHeaders(cfg.OpenRouterKey), sendCfg, openRouterHTTPClient
 	}
-	return chatEndpoint(cfg.BaseURL), chatHeaders(apiKey), cfg, hc
+	return chatEndpoint(providerBaseURL(cfg)), chatHeaders(apiKey), cfg, hc
 }
 
 // chatTransportLabel names the failing side for error mapping: OpenRouter

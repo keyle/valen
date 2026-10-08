@@ -60,7 +60,62 @@ var fallbackGoModels = []string{
 const (
 	ProviderGo         = "go"
 	ProviderOpenRouter = "openrouter"
+	ProviderZen        = "zen"
 )
+
+// zenBaseURL is OpenCode Zen's gateway (same OpenCode key as Go). A var so
+// offline tests can point it at a fake server. Zen models carry a "zen/"
+// prefix ("zen/claude-haiku-5-5").
+var zenBaseURL = "https://opencode.ai/zen/v1"
+
+// fallbackZenModels is a curated Zen list (bare IDs, Oct 2026) used when the
+// live /models catalog cannot be reached. Gemini models are omitted: Zen
+// serves them on a native Gemini API valen does not speak.
+var fallbackZenModels = []string{
+	"claude-opus-5-5",
+	"claude-sonnet-5-5",
+	"claude-haiku-5-5",
+	"claude-opus-5",
+	"claude-sonnet-5",
+	"claude-haiku-4-5",
+	"gpt-6.1-sol",
+	"gpt-6-astra",
+	"gpt-6-luna",
+	"gpt-5.6-sol",
+	"gpt-5.5",
+	"grok-4.7",
+	"grok-4.6",
+	"muse-spark-1.3",
+	"mistral-large-4",
+	"deepseek-v4.1-flash",
+	"deepseek-v4-pro",
+	"glm-5.3",
+	"glm-5.3-flash",
+	"minimax-m3",
+	"kimi-k3",
+	"kimi-k2.7-code",
+	"qwen3.8-max",
+	"qwen3.8-flash",
+	"big-pickle",
+}
+
+// prefixedZenModels returns bare Zen IDs in stored (zen/-prefixed) form.
+func prefixedZenModels(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, ProviderZen+"/"+id)
+	}
+	return out
+}
+
+// providerBaseURL is the API base for the model's provider: Zen has its own
+// gateway; Go (and anything else non-OpenRouter) rides cfg.BaseURL.
+func providerBaseURL(cfg Config) string {
+	if modelProvider(cfg.Model) == ProviderZen {
+		return zenBaseURL
+	}
+	return cfg.BaseURL
+}
 
 // openRouterBaseURL is a var (not const) so offline tests can point it at a
 // fake server; production uses the OpenRouter v1 API.
@@ -114,14 +169,20 @@ func modelProvider(id string) string {
 	if strings.HasPrefix(normalizeModelID(id), ProviderOpenRouter+"/") {
 		return ProviderOpenRouter
 	}
+	if strings.HasPrefix(normalizeModelID(id), ProviderZen+"/") {
+		return ProviderZen
+	}
 	return ProviderGo
 }
 
 // wireModelID strips the provider prefix for the wire: OpenRouter expects
 // the full vendor/model ID, Go passes its bare ID through.
 func wireModelID(id string) string {
-	if modelProvider(id) == ProviderOpenRouter {
+	switch modelProvider(id) {
+	case ProviderOpenRouter:
 		return strings.TrimSpace(id)[len(ProviderOpenRouter)+1:]
+	case ProviderZen:
+		return strings.TrimSpace(id)[len(ProviderZen)+1:]
 	}
 	return strings.TrimSpace(id)
 }
@@ -155,11 +216,37 @@ func modelTransport(id string) string {
 	if modelProvider(id) == ProviderOpenRouter {
 		return "chat"
 	}
+	if modelProvider(id) == ProviderZen {
+		return zenTransport(wireModelID(id))
+	}
 	l := strings.ToLower(strings.TrimSpace(id))
 	switch {
 	case strings.HasPrefix(l, "grok-"), strings.HasPrefix(l, "gpt-"), strings.HasPrefix(l, "muse-spark-"):
 		return "responses"
 	case strings.HasPrefix(l, "minimax-"), strings.HasPrefix(l, "qwen"), strings.HasPrefix(l, "claude-"):
+		return "messages"
+	default:
+		return "chat"
+	}
+}
+
+// zenTransport maps a bare Zen model ID to its endpoint (Oct 2026 docs):
+// gpt/grok/muse → responses; claude and the qwen3.5–3.8 plus/flash/max-3.7
+// family → messages; gemini → "gemini" (native API, unsupported); the rest
+// (deepseek, glm, kimi, minimax, mistral, qwen3.8-max, big-pickle, free
+// models) → chat.
+func zenTransport(bare string) string {
+	l := strings.ToLower(strings.TrimSpace(bare))
+	switch {
+	case strings.HasPrefix(l, "gemini-"):
+		return "gemini"
+	case strings.HasPrefix(l, "gpt-"), strings.HasPrefix(l, "grok-"), strings.HasPrefix(l, "muse-spark-"):
+		return "responses"
+	case strings.HasPrefix(l, "claude-"):
+		return "messages"
+	case l == "qwen3.8-max":
+		return "chat"
+	case strings.HasPrefix(l, "qwen"):
 		return "messages"
 	default:
 		return "chat"
@@ -470,7 +557,7 @@ func probeThinkingLevels(ctx context.Context, cfg Config, apiKey string, hc *htt
 	var body any
 	sendCfg := cfg
 	// Resolve live keys so a post-boot export still probes correctly.
-	apiKey = effectiveGoKey(cfg, apiKey)
+	apiKey = effectiveOpenCodeKey(cfg, apiKey)
 	sendCfg.OpenRouterKey = effectiveOpenRouterKey(cfg)
 	headers := chatHeaders(apiKey)
 	if modelProvider(cfg.Model) == ProviderOpenRouter {
@@ -483,14 +570,14 @@ func probeThinkingLevels(ctx context.Context, cfg Config, apiKey string, hc *htt
 	} else {
 		switch modelTransport(cfg.Model) {
 		case "responses":
-			url = responsesEndpoint(cfg.BaseURL)
-			body = map[string]any{"model": cfg.Model, "input": []any{map[string]any{"role": "user", "content": "hi"}}, "reasoning": map[string]any{"effort": probe}, "store": false}
+			url = responsesEndpoint(providerBaseURL(cfg))
+			body = map[string]any{"model": wireModelID(cfg.Model), "input": []any{map[string]any{"role": "user", "content": "hi"}}, "reasoning": map[string]any{"effort": probe}, "store": false}
 		case "messages":
-			url = messagesEndpoint(cfg.BaseURL)
-			body = map[string]any{"model": cfg.Model, "max_tokens": 16, "messages": []any{map[string]any{"role": "user", "content": "hi"}}, "reasoning_effort": probe}
+			url = messagesEndpoint(providerBaseURL(cfg))
+			body = map[string]any{"model": wireModelID(cfg.Model), "max_tokens": 16, "messages": []any{map[string]any{"role": "user", "content": "hi"}}, "reasoning_effort": probe}
 		default:
-			url = chatEndpoint(cfg.BaseURL)
-			body = map[string]any{"model": cfg.Model, "messages": []any{map[string]any{"role": "user", "content": "hi"}}, "reasoning_effort": probe}
+			url = chatEndpoint(providerBaseURL(cfg))
+			body = map[string]any{"model": wireModelID(cfg.Model), "messages": []any{map[string]any{"role": "user", "content": "hi"}}, "reasoning_effort": probe}
 		}
 	}
 	if _, ok := ctx.Deadline(); !ok {
@@ -608,6 +695,55 @@ func fetchOpenRouterModels(ctx context.Context, hc *http.Client, baseURL, apiKey
 			continue
 		}
 		ids = append(ids, ProviderOpenRouter+"/"+id)
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
+// fetchZenModels returns the live OpenCode Zen model IDs in stored
+// (zen/-prefixed) form, sorted. Models on transports valen cannot speak
+// (native Gemini) are dropped. The catalog is public; the key is sent when
+// present.
+func fetchZenModels(ctx context.Context, hc *http.Client, baseURL, apiKey string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	req.Header.Set("User-Agent", userAgent)
+	client := hc
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := clientDoWithRetryTimeout(ctx, client, req, 30*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseTransportError("zen", resp.StatusCode, raw)
+	}
+	var list struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return nil, fmt.Errorf("api: zen: decode models: %w", err)
+	}
+	ids := make([]string, 0, len(list.Data))
+	for _, m := range list.Data {
+		id := strings.TrimSpace(m.ID)
+		if id == "" || zenTransport(id) == "gemini" {
+			continue
+		}
+		ids = append(ids, ProviderZen+"/"+id)
 	}
 	sort.Strings(ids)
 	return ids, nil

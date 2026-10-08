@@ -271,7 +271,7 @@ func callResponsesOnce(ctx context.Context, hc *http.Client, cfg Config, apiKey 
 	if err != nil {
 		return out, err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, responsesEndpoint(cfg.BaseURL), bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, responsesEndpoint(providerBaseURL(cfg)), bytes.NewReader(body))
 	if err != nil {
 		return out, err
 	}
@@ -378,7 +378,7 @@ func responsesReplyToOpenAI(resp responsesResponse) (openai.ChatCompletionMessag
 func runResponsesTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
 	tools := registry.ResponsesTools()
 	reasoning := responsesReasoning(cfg.Thinking)
-	if strings.HasPrefix(strings.ToLower(cfg.Model), "gpt-") && cfg.Thinking == "none" {
+	if strings.HasPrefix(modelBaseID(cfg.Model), "gpt-") && cfg.Thinking == "none" {
 		reasoning = map[string]any{"effort": "none"}
 	}
 	native := make(map[string][]responsesOutputItem)
@@ -386,7 +386,7 @@ func runResponsesTurn(ctx context.Context, cfg Config, client *openai.Client, ap
 	return runModelTurn(ctx, cfg, registry, history, onEvent, func(ctx context.Context, history []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
 		instructions, input := splitResponsesInputNative(history, native)
 		req := responsesRequest{
-			Model:           cfg.Model,
+			Model:           wireModelID(cfg.Model),
 			MaxOutputTokens: outputTokens(cfg),
 			Input:           input,
 			Instructions:    instructions,
@@ -432,7 +432,7 @@ func responsesRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string
 	if apiKey != "" {
 		headers["Authorization"] = "Bearer " + apiKey
 	}
-	resp, err := postAPI(ctx, hc, cfg, responsesEndpoint(cfg.BaseURL), req, headers)
+	resp, err := postAPI(ctx, hc, cfg, responsesEndpoint(providerBaseURL(cfg)), req, headers)
 	if err != nil {
 		return openai.ChatCompletionMessage{}, usage, nil, err
 	}

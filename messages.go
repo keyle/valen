@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/sashabaranov/go-openai"
@@ -59,15 +61,16 @@ type messagesMessage struct {
 }
 
 type messagesRequest struct {
-	Model       string            `json:"model"`
-	MaxTokens   int               `json:"max_tokens"`
-	System      any               `json:"system,omitempty"`
-	Messages    []messagesMessage `json:"messages"`
-	Tools       []messagesTool    `json:"tools,omitempty"`
-	ToolChoice  map[string]any    `json:"tool_choice,omitempty"`
-	Temperature *float32          `json:"temperature,omitempty"`
-	Thinking    map[string]any    `json:"thinking,omitempty"`
-	Stream      bool              `json:"stream,omitempty"`
+	Model        string            `json:"model"`
+	MaxTokens    int               `json:"max_tokens"`
+	System       any               `json:"system,omitempty"`
+	Messages     []messagesMessage `json:"messages"`
+	Tools        []messagesTool    `json:"tools,omitempty"`
+	ToolChoice   map[string]any    `json:"tool_choice,omitempty"`
+	Temperature  *float32          `json:"temperature,omitempty"`
+	Thinking     map[string]any    `json:"thinking,omitempty"`
+	OutputConfig map[string]any    `json:"output_config,omitempty"`
+	Stream       bool              `json:"stream,omitempty"`
 }
 
 type messagesBlock struct {
@@ -200,6 +203,50 @@ func messagesThinking(level string) map[string]any {
 	}
 }
 
+var claudeVersionRe = regexp.MustCompile(`^claude-(?:opus|sonnet|haiku)-(\d+)(?:-(\d{1,2}))?(?:$|-)`)
+
+// messagesAdaptiveModel reports whether a Claude model (wire ID) rejects
+// thinking.type=enabled in favour of adaptive thinking plus
+// output_config.effort: Claude 4.6 and newer.
+func messagesAdaptiveModel(model string) bool {
+	m := claudeVersionRe.FindStringSubmatch(strings.ToLower(strings.TrimSpace(model)))
+	if m == nil {
+		return false
+	}
+	major, _ := strconv.Atoi(m[1])
+	minor := 0
+	if m[2] != "" {
+		minor, _ = strconv.Atoi(m[2])
+	}
+	return major > 4 || (major == 4 && minor >= 6)
+}
+
+// messagesAdaptiveThinking is the adaptive-model counterpart of
+// messagesThinking: it returns the thinking param and output_config. Empty or
+// unknown levels omit both; "none" disables thinking.
+func messagesAdaptiveThinking(level string) (map[string]any, map[string]any) {
+	switch l := strings.ToLower(strings.TrimSpace(level)); l {
+	case "none":
+		return map[string]any{"type": "disabled"}, nil
+	case "minimal", "low":
+		return map[string]any{"type": "adaptive"}, map[string]any{"effort": "low"}
+	case "medium", "high", "xhigh", "max":
+		return map[string]any{"type": "adaptive"}, map[string]any{"effort": l}
+	default:
+		return nil, nil
+	}
+}
+
+// isAdaptiveThinkingRequired detects the provider 400 telling us to use
+// adaptive thinking, so unknown model names still self-correct.
+func isAdaptiveThinkingRequired(err error) bool {
+	var te *transportError
+	if !errors.As(err, &te) || te.Status != http.StatusBadRequest {
+		return false
+	}
+	return strings.Contains(strings.ToLower(te.Message), "thinking.type.adaptive")
+}
+
 // splitChatHistory converts OpenAI-shaped history into an Anthropic system
 // prompt plus user/assistant turns. Tool results become user tool_result
 // blocks; assistant tool calls become tool_use blocks.
@@ -328,7 +375,7 @@ func callMessagesOnce(ctx context.Context, hc *http.Client, cfg Config, apiKey s
 	if err != nil {
 		return out, err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, messagesEndpoint(cfg.BaseURL), bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, messagesEndpoint(providerBaseURL(cfg)), bytes.NewReader(body))
 	if err != nil {
 		return out, err
 	}
@@ -425,18 +472,22 @@ func messagesReplyToOpenAI(resp messagesResponse) (openai.ChatCompletionMessage,
 // SSE when the provider accepts it, else fall back to one unary call.
 func runMessagesTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
 	tools := registry.MessagesTools()
-	thinking := messagesThinking(cfg.Thinking)
+	adaptive := messagesAdaptiveModel(wireModelID(cfg.Model))
 	native := make(map[string][]messagesBlock)
 	stream := true
 	return runModelTurn(ctx, cfg, registry, history, onEvent, func(ctx context.Context, history []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
 		system, msgs := splitMessagesHistoryNative(history, native)
 		req := messagesRequest{
-			Model:     cfg.Model,
+			Model:     wireModelID(cfg.Model),
 			MaxTokens: messagesMaxTokens(cfg),
 			System:    messagesSystemParam(system),
 			Messages:  msgs,
-			Thinking:  thinking,
 			Stream:    stream,
+		}
+		if adaptive {
+			req.Thinking, req.OutputConfig = messagesAdaptiveThinking(cfg.Thinking)
+		} else {
+			req.Thinking = messagesThinking(cfg.Thinking)
 		}
 		if len(tools) > 0 {
 			req.Tools = tools
@@ -446,6 +497,11 @@ func runMessagesTurn(ctx context.Context, cfg Config, client *openai.Client, api
 			req.Temperature = cfg.Temperature
 		}
 		msg, usage, blocks, err := messagesRoundStreamDetailed(ctx, cfg, apiKey, hc, req, onEvent)
+		if !adaptive && isAdaptiveThinkingRequired(err) {
+			adaptive = true
+			req.Thinking, req.OutputConfig = messagesAdaptiveThinking(cfg.Thinking)
+			msg, usage, blocks, err = messagesRoundStreamDetailed(ctx, cfg, apiKey, hc, req, onEvent)
+		}
 		if stream && isStreamRejected(err) {
 			stream, req.Stream = false, false
 			msg, usage, blocks, err = messagesRoundStreamDetailed(ctx, cfg, apiKey, hc, req, onEvent)
@@ -482,7 +538,7 @@ func messagesRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string,
 		headers["x-api-key"] = apiKey
 	}
 	headers["anthropic-version"] = anthropicVersion
-	resp, err := postAPI(ctx, hc, cfg, messagesEndpoint(cfg.BaseURL), req, headers)
+	resp, err := postAPI(ctx, hc, cfg, messagesEndpoint(providerBaseURL(cfg)), req, headers)
 	if err != nil {
 		return openai.ChatCompletionMessage{}, usage, nil, err
 	}

@@ -23,7 +23,7 @@ func TestFriendlyError(t *testing.T) {
 		{"500", &openai.APIError{HTTPStatusCode: 502, Message: "bad gateway"}, "hiccuped"},
 		{"cancel", fmt.Errorf("api: %w", context.Canceled), "Cancelled"},
 		{"timeout", errors.New("context deadline exceeded"), "timed out"},
-		{"no key go", errors.New("OPENCODE_GO_API_KEY is not set"), "OpenCode Go API key not found"},
+		{"no key go", errors.New("OPENCODE_GO_API_KEY is not set"), "OpenCode API key not found"},
 		{"no key openrouter", errors.New("OPENROUTER_API_KEY is not set (required by model \"openrouter/moonshotai/kimi-k3\")"), "OpenRouter key not found"},
 		{"empty", errors.New("api: empty choices in response"), "empty reply"},
 		{"rounds", errors.New("stopped after 8 rounds without a final answer"), "stopped after 8 rounds"},

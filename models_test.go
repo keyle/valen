@@ -96,6 +96,14 @@ func TestModelTransport(t *testing.T) {
 		"qwen3.7-plus":     "messages",
 		"claude-haiku-5-5": "messages", "claude-sonnet-5-5": "messages",
 		"openrouter/anthropic/claude-haiku-5.5": "chat",
+		"zen/claude-haiku-5-5":                  "messages",
+		"zen/gpt-6-luna":                        "responses",
+		"zen/grok-4.7":                          "responses",
+		"zen/qwen3.6-plus":                      "messages",
+		"zen/qwen3.8-max":                       "chat",
+		"zen/kimi-k3":                           "chat",
+		"zen/big-pickle":                        "chat",
+		"zen/gemini-3.8-flash":                  "gemini",
 	}
 	for id, want := range cases {
 		if got := modelTransport(id); got != want {
@@ -540,5 +548,76 @@ func TestIsMaxRoundsStop(t *testing.T) {
 	}
 	if isMaxRoundsStop(fmt.Errorf("context too large: est. 1 tokens exceeds budget 2")) {
 		t.Fatal("budget error must not match")
+	}
+}
+
+func TestZenProviderRouting(t *testing.T) {
+	if modelProvider("ZEN/claude-haiku-5-5") != ProviderZen || modelProvider("claude-haiku-5-5") != ProviderGo {
+		t.Fatal("provider mismatch")
+	}
+	if got := wireModelID("zen/claude-haiku-5-5"); got != "claude-haiku-5-5" {
+		t.Fatalf("wire=%q", got)
+	}
+	cfg := Config{Model: "zen/claude-haiku-5-5", BaseURL: defaultBaseURL}
+	if providerBaseURL(cfg) != zenBaseURL {
+		t.Fatalf("zen base=%q", providerBaseURL(cfg))
+	}
+	cfg.Model = "claude-haiku-5-5"
+	if providerBaseURL(cfg) != defaultBaseURL {
+		t.Fatalf("go base=%q", providerBaseURL(cfg))
+	}
+	if err := validateModelID("zen/gpt-6-luna"); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateModelID("foo/bar"); err == nil {
+		t.Fatal("unknown prefix must fail")
+	}
+}
+
+func TestFetchZenModelsDropsGeminiAndPrefixes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" || r.Header.Get("Authorization") != "Bearer k" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		fmt.Fprint(w, `{"data":[{"id":"gemini-3.8-flash"},{"id":"claude-haiku-5-5"},{"id":"big-pickle"}]}`)
+	}))
+	defer srv.Close()
+	ids, err := fetchZenModels(context.Background(), srv.Client(), srv.URL, "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 || ids[0] != "zen/big-pickle" || ids[1] != "zen/claude-haiku-5-5" {
+		t.Fatalf("ids=%v", ids)
+	}
+}
+
+// TestZenTurnUsesZenEndpointAndWireModel: a zen/ Anthropic model posts to
+// {zen}/messages with the bare model ID and the shared OpenCode key.
+func TestZenTurnUsesZenEndpointAndWireModel(t *testing.T) {
+	var path, auth, model string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, auth = r.URL.Path, r.Header.Get("Authorization")
+		if auth == "" {
+			auth = "x-api-key=" + r.Header.Get("x-api-key")
+		}
+		var body struct {
+			Model string `json:"model"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		model = body.Model
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":{"message":"nope"}}`))
+	}))
+	defer srv.Close()
+	old := zenBaseURL
+	zenBaseURL = srv.URL
+	defer func() { zenBaseURL = old }()
+
+	cfg := newTestConfig("http://[IP_ADDRESS]:1")
+	cfg.Model = "zen/claude-haiku-5-5"
+	_ = chat(context.Background(), cfg, newClient(cfg, "k"), "k", srv.Client(), NewRegistry(), "hi", io.Discard, io.Discard)
+	if path != "/messages" || model != "claude-haiku-5-5" || !strings.Contains(auth, "k") {
+		t.Fatalf("path=%q model=%q auth=%q", path, model, auth)
 	}
 }

@@ -1308,7 +1308,7 @@ func newTestModelWithConfig(t *testing.T, body string) (*tuiModel, string) {
 }
 
 func TestTUIModelDirectSwitchPersists(t *testing.T) {
-	t.Setenv(goKeyEnv, "test-key")
+	t.Setenv(openCodeKeyEnv, "test-key")
 	m, path := newTestModelWithConfig(t, "model = \"glm-5.3-flash\"\nthinking = \"max\"\nbase_url = \"https://unused\"\n")
 	m.handleCommand("/model kimi-k2.6")
 	if m.cfg.Model != "kimi-k2.6" {
@@ -1585,8 +1585,11 @@ func TestTUIModelPickerMergesProviders(t *testing.T) {
 	if !ok {
 		t.Fatalf("msg=%T", msg)
 	}
-	if len(loaded.ids) != 2 || loaded.ids[0] != "glm-5.3-flash" || loaded.ids[1] != "openrouter/moonshotai/kimi-k3" {
+	if len(loaded.ids) != 1+len(fallbackZenModels)+1 || loaded.ids[0] != "glm-5.3-flash" || loaded.ids[len(loaded.ids)-1] != "openrouter/moonshotai/kimi-k3" {
 		t.Fatalf("merged ids=%v", loaded.ids)
+	}
+	if modelProvider(loaded.ids[1]) != ProviderZen {
+		t.Fatalf("zen rows must sit between go and openrouter: %v", loaded.ids)
 	}
 	_, _ = m.Update(loaded)
 	text := m.renderViewportContent()
@@ -1613,7 +1616,7 @@ func TestTUIModelPickerOpenRouterFallback(t *testing.T) {
 	loaded := msg.(modelsLoadedMsg)
 	found := false
 	for _, id := range loaded.ids {
-		if id == "glm-5.3-flash" {
+		if id == "glm-5.3-flash" || modelProvider(id) == ProviderZen {
 			continue
 		}
 		if modelProvider(id) != ProviderOpenRouter {

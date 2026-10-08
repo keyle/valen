@@ -383,3 +383,22 @@ func TestMessagesRejectsEmptyContent(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestMessagesAdaptiveModel(t *testing.T) {
+	for m, want := range map[string]bool{
+		"claude-haiku-5-5": true, "claude-opus-5": true, "claude-sonnet-4-6": true,
+		"claude-opus-4-7": true, "claude-haiku-4-5": false, "claude-sonnet-4": false,
+		"claude-sonnet-4-5-20250929": false, "gpt-6-luna": false,
+	} {
+		if got := messagesAdaptiveModel(m); got != want {
+			t.Errorf("%s: got %v want %v", m, got, want)
+		}
+	}
+	th, oc := messagesAdaptiveThinking("high")
+	if th["type"] != "adaptive" || oc["effort"] != "high" {
+		t.Fatalf("got %v %v", th, oc)
+	}
+	if th, oc := messagesAdaptiveThinking(""); th != nil || oc != nil {
+		t.Fatal("empty should omit")
+	}
+}

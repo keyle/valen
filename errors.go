@@ -34,7 +34,7 @@ func friendlyError(err error) FriendlyError {
 		if strings.Contains(lower, "openrouter") {
 			return FriendlyError{"OpenRouter key not found — set openrouter_key in config or export OPENROUTER_API_KEY.", msg}
 		}
-		return FriendlyError{"OpenCode Go API key not found — set opencode_go_key in config or export OPENCODE_GO_API_KEY.", msg}
+		return FriendlyError{"OpenCode API key not found — set opencode_key in config or export OPENCODE_API_KEY.", msg}
 	case strings.Contains(lower, "empty choices"):
 		return FriendlyError{"The model returned an empty reply. Try rephrasing or resending.", msg}
 	case strings.Contains(lower, "stopped after"):
@@ -166,9 +166,9 @@ func singleLine(s string, n int) string {
 func friendlyStatus(code int, detail string) FriendlyError {
 	switch code {
 	case 401, 403:
-		return FriendlyError{"The API rejected the key. Check opencode_go_key or OPENCODE_GO_API_KEY.", fmt.Sprintf("HTTP %d: %s", code, detail)}
+		return FriendlyError{"The API rejected the key. Check opencode_key or OPENCODE_API_KEY.", fmt.Sprintf("HTTP %d: %s", code, detail)}
 	case 402:
-		return FriendlyError{"Out of credits on the OpenCode Go account. Add balance or switch model.", fmt.Sprintf("HTTP %d: %s", code, detail)}
+		return FriendlyError{"Out of credits on the OpenCode account. Add balance or switch model.", fmt.Sprintf("HTTP %d: %s", code, detail)}
 	case 404:
 		return FriendlyError{"Model not available on this plan. Pick another in config.toml.", fmt.Sprintf("HTTP %d: %s", code, detail)}
 	case 429:
