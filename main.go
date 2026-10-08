@@ -26,7 +26,6 @@ import (
 const (
 	defaultBaseURL               = "https://opencode.ai/zen/go/v1"
 	openCodeKeyEnv               = "OPENCODE_API_KEY"
-	openCodeLegacyKeyEnv         = "OPENCODE_GO_API_KEY"
 	openRouterKeyEnv             = "OPENROUTER_API_KEY"
 	defaultMaxRounds             = 300
 	defaultMaxTokens             = 16384
@@ -80,10 +79,7 @@ type Config struct {
 	// default: the OPENCODE_API_KEY / OPENROUTER_API_KEY env vars are
 	// used instead. persistModelSelection only writes model/thinking
 	// lines, and nothing logs these.
-	OpenCodeKey string `toml:"opencode_key"`
-	// OpenCodeGoKey is the legacy name for OpenCodeKey (same key serves Go
-	// and Zen); read only when opencode_key is empty.
-	OpenCodeGoKey         string `toml:"opencode_go_key"`
+	OpenCodeKey           string `toml:"opencode_key"`
 	OpenRouterKey         string `toml:"openrouter_key"`
 	SessionID             string `toml:"session_id"`
 	System                string `toml:"system"`
@@ -571,9 +567,9 @@ func runTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey stri
 }
 
 // effectiveOpenCodeKey resolves the OpenCode credential (one key serves Go
-// and Zen): the boot snapshot first, then the opencode_key setting (legacy
-// opencode_go_key as fallback), then a live env read (OPENCODE_API_KEY, then
-// legacy OPENCODE_GO_API_KEY) so an export after boot works without a restart.
+// and Zen): the boot snapshot first, then the opencode_key setting, then a
+// live env read (OPENCODE_API_KEY) so an export after boot works without a
+// restart.
 func effectiveOpenCodeKey(cfg Config, apiKey string) string {
 	if k := strings.TrimSpace(apiKey); k != "" {
 		return k
@@ -581,13 +577,7 @@ func effectiveOpenCodeKey(cfg Config, apiKey string) string {
 	if k := strings.TrimSpace(cfg.OpenCodeKey); k != "" {
 		return k
 	}
-	if k := strings.TrimSpace(cfg.OpenCodeGoKey); k != "" {
-		return k
-	}
-	if k := strings.TrimSpace(os.Getenv(openCodeKeyEnv)); k != "" {
-		return k
-	}
-	return strings.TrimSpace(os.Getenv(openCodeLegacyKeyEnv))
+	return strings.TrimSpace(os.Getenv(openCodeKeyEnv))
 }
 
 // effectiveOpenRouterKey resolves the OpenRouter credential the same way.

@@ -31,7 +31,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.BaseURL != defaultBaseURL || cfg.OpenCodeKey != "" || cfg.OpenCodeGoKey != "" || cfg.OpenRouterKey != "" || cfg.MaxRounds != defaultMaxRounds || cfg.MaxContextTokens != 0 || cfg.MaxTokens != defaultMaxTokens || cfg.MaxStagnantRounds != guard.DefaultMaxStagnantRounds || cfg.RequestTimeoutSeconds != 300 {
+	if cfg.BaseURL != defaultBaseURL || cfg.OpenCodeKey != "" || cfg.OpenRouterKey != "" || cfg.MaxRounds != defaultMaxRounds || cfg.MaxContextTokens != 0 || cfg.MaxTokens != defaultMaxTokens || cfg.MaxStagnantRounds != guard.DefaultMaxStagnantRounds || cfg.RequestTimeoutSeconds != 300 {
 		t.Fatalf("bad defaults: %+v", cfg)
 	}
 	if contextBudget(cfg) != modelContextWindow("kimi-k3") {
