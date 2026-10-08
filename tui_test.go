@@ -2117,12 +2117,14 @@ func TestTUICSIUKeys(t *testing.T) {
 
 func TestTUIColonQQuits(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
-	cmd := m.submit(" :q ")
-	if cmd == nil {
-		t.Fatal(":q must quit")
-	}
-	if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Fatal("expected QuitMsg")
+	for _, in := range []string{" :q ", " :Q "} {
+		cmd := m.submit(in)
+		if cmd == nil {
+			t.Fatalf("%q must quit", in)
+		}
+		if _, ok := cmd().(tea.QuitMsg); !ok {
+			t.Fatalf("%q: expected QuitMsg", in)
+		}
 	}
 }
 

@@ -1223,7 +1223,7 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	if trimmed == "" {
 		return nil
 	}
-	if trimmed == ":q" {
+	if strings.EqualFold(trimmed, ":q") {
 		return tea.Quit // vim-style alias for /quit
 	}
 	if strings.HasPrefix(trimmed, "/") {
