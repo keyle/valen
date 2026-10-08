@@ -662,3 +662,29 @@ func TestSandboxArgvDeniesSystemHidden(t *testing.T) {
 		}
 	}
 }
+
+func TestFileAccessPromptShowsToolCall(t *testing.T) {
+	useTempRoot(t)
+	outside := t.TempDir()
+	old := askPrompter
+	var got AskQuestion
+	askPrompter = func(_ context.Context, qs []AskQuestion) ([]string, error) {
+		got = qs[0]
+		return []string{"Deny"}, nil
+	}
+	t.Cleanup(func() { askPrompter = old })
+
+	reg := NewRegistry()
+	reg.LoadBuiltins([]string{"write"})
+	args := `{"path":` + quoteJSON(filepath.Join(outside, "x.txt")) + `,"content":"hello\nworld"}`
+	_, _ = reg.Call(context.Background(), "write", args)
+	if !strings.Contains(got.Question, "Requested by: write 11 bytes: hello world") {
+		t.Fatalf("write prompt lacks content: %q", got.Question)
+	}
+
+	got = AskQuestion{}
+	_ = gateShell(context.Background(), "cat "+filepath.Join(outside, "y"), false)
+	if !strings.Contains(got.Question, "Requested by: shell: cat ") {
+		t.Fatalf("shell prompt lacks command: %q", got.Question)
+	}
+}

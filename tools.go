@@ -77,7 +77,8 @@ func (r *Registry) Call(ctx context.Context, name, args string) (string, error) 
 	if !ok {
 		return "", fmt.Errorf("unknown tool %s", name)
 	}
-	return t.Fn(ctx, normalizeArgs(args))
+	args = normalizeArgs(args)
+	return t.Fn(withToolCall(ctx, summarizeToolCall(name, args)), args)
 }
 
 // Run is Call for the agent loop: failures become tool output, never a crash.

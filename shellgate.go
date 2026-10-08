@@ -73,6 +73,7 @@ func gateShell(ctx context.Context, command string, network bool) error {
 	if shellLooksWrite(command) {
 		op = "write"
 	}
+	ctx = withToolCall(ctx, "shell: "+oneLine(command, 300))
 	for _, abs := range shellOutsidePaths(command) {
 		if err := checkFileAccess(ctx, op, abs); err != nil {
 			return err

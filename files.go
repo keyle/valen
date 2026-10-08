@@ -280,6 +280,52 @@ func blocksSecret(abs string) bool {
 	return false
 }
 
+// toolCallKey carries a short description of the tool call being executed so
+// permission prompts can say what the model is trying to do, not just which
+// path it touched.
+type toolCallKey struct{}
+
+// withToolCall annotates ctx with a human-readable summary of a tool call.
+func withToolCall(ctx context.Context, summary string) context.Context {
+	if strings.TrimSpace(summary) == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, toolCallKey{}, summary)
+}
+
+func toolCallFrom(ctx context.Context) string {
+	s, _ := ctx.Value(toolCallKey{}).(string)
+	return s
+}
+
+// oneLine collapses whitespace runs (newlines included) and truncates, so a
+// multi-line script or file body fits in a prompt.
+func oneLine(s string, n int) string {
+	return truncateRunes(strings.Join(strings.Fields(s), " "), n)
+}
+
+// summarizeToolCall renders what a tool call is about to do for a prompt:
+// the shell command, a write's content preview, an edit's old -> new text,
+// or the raw arguments for anything else.
+func summarizeToolCall(name, args string) string {
+	var a map[string]any
+	if err := json.Unmarshal([]byte(args), &a); err != nil {
+		return name + ": " + oneLine(args, 300)
+	}
+	str := func(k string) string { s, _ := a[k].(string); return s }
+	switch name {
+	case "shell":
+		if c := str("command"); c != "" {
+			return "shell: " + oneLine(c, 300)
+		}
+	case "write":
+		return fmt.Sprintf("write %d bytes: %s", len(str("content")), oneLine(str("content"), 150))
+	case "edit":
+		return fmt.Sprintf("edit: replace %q with %q", oneLine(str("oldString"), 100), oneLine(str("newString"), 100))
+	}
+	return name + ": " + oneLine(args, 300)
+}
+
 // checkFileAccess allows paths inside the root, inside a sibling worktree of
 // the same repo, or inside a previously approved folder; anything else asks
 // the user (per folder) via the active AskUserQuestion prompter. Without an
@@ -308,8 +354,12 @@ func checkFileAccess(ctx context.Context, op, abs string) error {
 	if isWriteOp(op) {
 		access = "read and write"
 	}
+	question := fmt.Sprintf("Allow %s of %s? This grants %s access to all of folder %s. Workdir is %s.", op, abs, access, folder, root)
+	if call := toolCallFrom(ctx); call != "" {
+		question += "\nRequested by: " + call
+	}
 	answers, err := promptUser(ctx, []AskQuestion{{
-		Question: fmt.Sprintf("Allow %s of %s? This grants %s access to all of folder %s. Workdir is %s.", op, abs, access, folder, root),
+		Question: question,
 		Header:   "File access",
 		Options: []AskOption{
 			{Label: "Allow", Description: "Permit this folder for the rest of this session"},
