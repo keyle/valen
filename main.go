@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1048,12 +1049,92 @@ func chatHeaders(apiKey string) map[string]string {
 	return map[string]string{"Authorization": "Bearer " + apiKey}
 }
 
+// OpenRouter names reasoning `reasoning` (not DeepSeek's `reasoning_content`)
+// both ways. go-openai only knows the latter, so without these helpers the
+// reasoning is dropped and thinking-mode upstreams 400 on the next round
+// ("reasoning_content must be passed back").
+func altStreamReasoning(data string, index int) string {
+	if !strings.Contains(data, `"reasoning"`) {
+		return ""
+	}
+	var c struct {
+		Choices []struct {
+			Index int `json:"index"`
+			Delta struct {
+				Reasoning string `json:"reasoning"`
+			} `json:"delta"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal([]byte(data), &c) != nil {
+		return ""
+	}
+	for _, ch := range c.Choices {
+		if ch.Index == index {
+			return ch.Delta.Reasoning
+		}
+	}
+	return ""
+}
+
+// fillReasoning recovers `reasoning` from a unary body when reasoning_content
+// was absent.
+func fillReasoning(msg *openai.ChatCompletionMessage, raw []byte) {
+	if msg.ReasoningContent != "" || !bytes.Contains(raw, []byte(`"reasoning"`)) {
+		return
+	}
+	var c struct {
+		Choices []struct {
+			Message struct {
+				Reasoning string `json:"reasoning"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal(raw, &c) == nil && len(c.Choices) > 0 {
+		msg.ReasoningContent = c.Choices[0].Message.Reasoning
+	}
+}
+
+// chatWireBody mirrors each assistant reasoning_content as `reasoning` for
+// OpenRouter, the field it documents for passing reasoning back. Other
+// providers get the request untouched.
+func chatWireBody(cfg Config, req openai.ChatCompletionRequest) any {
+	if modelProvider(cfg.Model) != ProviderOpenRouter {
+		return req
+	}
+	has := false
+	for _, m := range req.Messages {
+		if m.ReasoningContent != "" {
+			has = true
+			break
+		}
+	}
+	if !has {
+		return req
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return req
+	}
+	var body map[string]json.RawMessage
+	var msgs []map[string]json.RawMessage
+	if json.Unmarshal(raw, &body) != nil || json.Unmarshal(body["messages"], &msgs) != nil {
+		return req
+	}
+	for _, m := range msgs {
+		if rc, ok := m["reasoning_content"]; ok {
+			m["reasoning"] = rc
+		}
+	}
+	body["messages"], _ = json.Marshal(msgs)
+	return body
+}
+
 // chatRoundOnce is the non-streaming round, kept as the fallback when a
 // provider rejects `stream: true`.
 func chatRoundOnce(ctx context.Context, cfg Config, apiKey string, hc *http.Client, req openai.ChatCompletionRequest) (openai.ChatCompletionMessage, openai.Usage, error) {
 	var usage openai.Usage
 	endpoint, headers, sendCfg, httpClient := chatTarget(cfg, apiKey, hc)
-	resp, err := postAPI(ctx, httpClient, sendCfg, endpoint, req, headers)
+	resp, err := postAPI(ctx, httpClient, sendCfg, endpoint, chatWireBody(cfg, req), headers)
 	if err != nil {
 		return openai.ChatCompletionMessage{}, usage, err
 	}
@@ -1076,6 +1157,7 @@ func chatRoundOnce(ctx context.Context, cfg Config, apiKey string, hc *http.Clie
 	if err := chatFinishError(string(out.Choices[0].FinishReason)); err != nil {
 		return openai.ChatCompletionMessage{}, out.Usage, err
 	}
+	fillReasoning(&msg, raw)
 	return msg, out.Usage, validateModelReply(msg)
 }
 
@@ -1107,7 +1189,7 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 	req.Stream = true
 	req.StreamOptions = &openai.StreamOptions{IncludeUsage: true}
 	endpoint, headers, sendCfg, httpClient := chatTarget(cfg, apiKey, hc)
-	resp, err := postAPI(ctx, httpClient, sendCfg, endpoint, req, headers)
+	resp, err := postAPI(ctx, httpClient, sendCfg, endpoint, chatWireBody(cfg, req), headers)
 	if err != nil {
 		return openai.ChatCompletionMessage{}, usage, err
 	}
@@ -1141,6 +1223,7 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 			return openai.ChatCompletionMessage{}, out.Usage, err
 		}
 		msg := out.Choices[0].Message
+		fillReasoning(&msg, raw)
 		return msg, out.Usage, validateModelReply(msg)
 	}
 
@@ -1181,13 +1264,17 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 				terminal = true
 			}
 			d := choice.Delta
+			altReasoning := altStreamReasoning(ev.data, choice.Index)
 			if d.Content != "" {
 				content.WriteString(d.Content)
 				emit("text_delta", d.Content)
 			}
-			if d.ReasoningContent != "" {
-				thinking.WriteString(d.ReasoningContent)
-				emit("thinking_delta", d.ReasoningContent)
+			if r := d.ReasoningContent; r != "" || altReasoning != "" {
+				if r == "" {
+					r = altReasoning
+				}
+				thinking.WriteString(r)
+				emit("thinking_delta", r)
 			}
 			for _, tc := range d.ToolCalls {
 				idx := 0

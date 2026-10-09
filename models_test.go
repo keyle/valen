@@ -621,3 +621,47 @@ func TestZenTurnUsesZenEndpointAndWireModel(t *testing.T) {
 		t.Fatalf("path=%q model=%q auth=%q", path, model, auth)
 	}
 }
+
+// TestOpenRouterReasoningRoundTrip: OpenRouter streams `reasoning` (not
+// `reasoning_content`); it must be captured and echoed back on the next round
+// or thinking-mode upstreams 400 ("reasoning_content must be passed back").
+func TestOpenRouterReasoningRoundTrip(t *testing.T) {
+	var second map[string]any
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if n == 1 {
+			io.WriteString(w, `data: {"choices":[{"index":0,"delta":{"reasoning":"plan"}}]}`+"\n\n")
+			io.WriteString(w, `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`+"\n\n")
+		} else {
+			json.NewDecoder(r.Body).Decode(&second)
+			io.WriteString(w, `data: {"choices":[{"index":0,"delta":{"content":"done"},"finish_reason":"stop"}]}`+"\n\n")
+		}
+		io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	oldBase := openRouterBaseURL
+	openRouterBaseURL = srv.URL
+	defer func() { openRouterBaseURL = oldBase }()
+
+	reg := NewRegistry()
+	_ = reg.Add(Tool{Name: "read", Fn: func(context.Context, string) (string, error) { return "ok", nil }})
+	cfg := newTestConfig(srv.URL)
+	cfg.Model = "openrouter/deepseek/deepseek-v4"
+	cfg.OpenRouterKey = "k"
+	history := []openai.ChatCompletionMessage{{Role: "user", Content: "hi"}}
+	if _, _, err := runTurn(context.Background(), cfg, nil, "", srv.Client(), reg, &history, nil); err != nil {
+		t.Fatal(err)
+	}
+	msgs, _ := second["messages"].([]any)
+	var asst map[string]any
+	for _, m := range msgs {
+		if mm := m.(map[string]any); mm["role"] == "assistant" {
+			asst = mm
+		}
+	}
+	if asst == nil || asst["reasoning_content"] != "plan" || asst["reasoning"] != "plan" {
+		t.Fatalf("reasoning not passed back: %v", asst)
+	}
+}

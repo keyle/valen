@@ -138,6 +138,9 @@ filtered out of the catalog as unsupported.
 `X-Title: valen`, no Go session header) with the vendor/model ID on the
 wire and `reasoning_effort` for thinking; family levels resolve through
 the vendor segment (`openrouter/moonshotai/kimi-k3` → `kimi-k3` rules).
+OpenRouter returns reasoning as `reasoning` (not `reasoning_content`); it is
+captured into `ReasoningContent` and sent back on assistant messages as both
+fields, since thinking-mode upstreams 400 when it is not passed back.
 History stays OpenAI-shaped in memory; the non-chat transports convert each
 round and fold the reply back, so the TUI, session log and tool registry are
 transport-agnostic.

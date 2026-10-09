@@ -227,3 +227,33 @@ func TestPlanModeRefusesMutatingTools(t *testing.T) {
 		t.Fatal("plan mode wrote a file")
 	}
 }
+
+// Plan-mode prompts are labelled in scrollback, the placeholder follows the
+// mode, and the switch notices stay short.
+func TestPlanModeLabelsAndPlaceholder(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	if m.input.Placeholder != inputPlaceholder(false) || strings.Contains(m.input.Placeholder, "TAB") {
+		t.Fatalf("work placeholder=%q", m.input.Placeholder)
+	}
+	m.applyPlanMode(true)
+	if m.input.Placeholder != "Plan mode…  TAB to switch (/help)" || m.notice != "Plan Mode enabled: read only and planning" {
+		t.Fatalf("plan placeholder=%q notice=%q", m.input.Placeholder, m.notice)
+	}
+	m.applyPlanMode(false)
+	if m.notice != "Work mode enabled" || m.input.Placeholder != inputPlaceholder(false) {
+		t.Fatalf("work notice=%q", m.notice)
+	}
+	if h := userHead(true, "now"); !strings.Contains(h, "You (PLAN)") {
+		t.Fatalf("plan head=%q", h)
+	}
+	if h := userHead(false, "now"); strings.Contains(h, "PLAN") {
+		t.Fatalf("work head=%q", h)
+	}
+	turn := Turn{Prompt: "p", Plan: true}
+	if out := m.renderTurn(&turn, 80); !strings.Contains(out, "You (PLAN)") {
+		t.Fatalf("scrollback missing plan label:\n%s", out)
+	}
+	if !strings.Contains(m.renderHelp(), "PLAN (cyan chatbox)") {
+		t.Fatal("help must document plan mode")
+	}
+}

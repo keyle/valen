@@ -16,8 +16,6 @@ import (
 	"time"
 	"unicode"
 
-	"valen/internal/prompts"
-
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -50,6 +48,12 @@ var (
 	userHeaderStyle  = lipgloss.NewStyle().Bold(true).Foreground(mkOrange)
 	userBodyStyle    = lipgloss.NewStyle().Foreground(mkFg).
 				BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderForeground(mkOrange).
+				PaddingLeft(1)
+	// Plan-mode prompts wear the chatbox's cyan: header gains "(PLAN)" so a
+	// scrollback of mixed turns reads which mode each message was sent in.
+	userHeaderPlanStyle = lipgloss.NewStyle().Bold(true).Foreground(mkCyan)
+	userBodyPlanStyle   = lipgloss.NewStyle().Foreground(mkFg).
+				BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderForeground(mkCyan).
 				PaddingLeft(1)
 	thinkHeaderStyle = lipgloss.NewStyle().Italic(true).Foreground(mkComment)
 	thinkBodyStyle   = lipgloss.NewStyle().Italic(true).Foreground(mkComment).
@@ -234,6 +238,7 @@ type turnDoneMsg struct {
 	history  []openai.ChatCompletionMessage
 	model    string
 	effort   string
+	plan     bool
 }
 
 type historyItem struct {
@@ -328,6 +333,7 @@ type tuiModel struct {
 
 	busy          bool
 	pendingPrompt string
+	pendingPlan   bool
 	pendingSince  time.Time
 	lastTurnDur   time.Duration // working time of the last finished turn, shown beside "ready"
 	// retrying marks that the chatbox holds the recalled last prompt: the
@@ -418,9 +424,18 @@ type tuiModel struct {
 	done      chan struct{}
 }
 
+// inputPlaceholder is the ghosted chatbox hint; plan mode tells the user how
+// to leave instead of the generic prompt.
+func inputPlaceholder(plan bool) string {
+	if plan {
+		return "Plan mode…  TAB to switch (/help)"
+	}
+	return "Type a message…  (/help)"
+}
+
 func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session *Session) *tuiModel {
 	ta := textarea.New()
-	ta.Placeholder = "Type a message…  (/help)"
+	ta.Placeholder = inputPlaceholder(cfg.Plan)
 	ta.ShowLineNumbers = false
 	// No white thick bar: the textarea default Prompt is
 	// lipgloss.ThickBorder().Left + " " (a white ▌ on every line).
@@ -1270,6 +1285,7 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	m.cancel = cancel
 	m.busy = true
 	m.pendingPrompt = trimmed
+	m.pendingPlan = m.cfg.Plan
 	m.session.nameSession(trimmed)
 	m.pendingSince = time.Now()
 	m.askSince = time.Time{}
@@ -1342,7 +1358,7 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 				thinking = streamedThinking
 			}
 		}
-		return turnDoneMsg{prompt: trimmed, thinking: thinking, answer: answer, tools: tools, usage: usage, err: err, history: h, model: cfg.Model, effort: cfg.Thinking}
+		return turnDoneMsg{prompt: trimmed, thinking: thinking, answer: answer, tools: tools, usage: usage, err: err, history: h, model: cfg.Model, effort: cfg.Thinking, plan: cfg.Plan}
 	}
 }
 
@@ -1356,13 +1372,11 @@ func (m *tuiModel) applyPlanMode(on bool) {
 	} else {
 		m.history = seedHistory(m.cfg)
 	}
+	m.input.Placeholder = inputPlaceholder(on)
 	if on {
-		m.notice = "Plan mode on — read-only investigation; reply will be the plan."
+		m.notice = "Plan Mode enabled: read only and planning"
 	} else {
-		m.notice = strings.TrimSpace(prompts.BuildSwitch())
-		if m.notice == "" {
-			m.notice = "Plan mode off — work mode."
-		}
+		m.notice = "Work mode enabled"
 	}
 	m.noticeErr = false
 	if m.busy {
@@ -2082,7 +2096,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		turn := Turn{
 			At: msg.promptAt(), Prompt: msg.prompt, Thinking: msg.thinking, Reply: msg.answer, Tools: msg.tools,
 			Usage: Usage{Prompt: msg.usage.PromptTokens, Completion: msg.usage.CompletionTokens, Total: msg.usage.TotalTokens},
-			Model: msg.model, Effort: msg.effort, History: msg.history,
+			Model: msg.model, Effort: msg.effort, Plan: msg.plan, History: msg.history,
 		}
 		if !m.pendingSince.IsZero() {
 			m.resumeTimer()
@@ -3291,6 +3305,24 @@ func (m *tuiModel) renderTurnCompact(t *Turn, w int) string {
 	return m.renderTurnMode(t, w, true)
 }
 
+// userHead renders the "You" header for a turn, suffixed "(PLAN)" and tinted
+// cyan when the prompt was sent in plan mode, so a mixed scrollback reads at
+// a glance which mode each message belongs to.
+func userHead(plan bool, when string) string {
+	label, style := "You", userHeaderStyle
+	if plan {
+		label, style = "You (PLAN)", userHeaderPlanStyle
+	}
+	return style.Render(label) + "  " + metaStyle.Render(when)
+}
+
+func userBody(plan bool) lipgloss.Style {
+	if plan {
+		return userBodyPlanStyle
+	}
+	return userBodyStyle
+}
+
 func (m *tuiModel) renderTurnMode(t *Turn, w int, compact bool) string {
 	var parts []string
 	// bodyW is the style width; textW leaves room for the left border plus
@@ -3298,8 +3330,8 @@ func (m *tuiModel) renderTurnMode(t *Turn, w int, compact bool) string {
 	bodyW := min(w-4, 120)
 	textW := bodyW - 2
 
-	head := userHeaderStyle.Render("You") + "  " + metaStyle.Render(t.At.Format("15:04"))
-	body := userBodyStyle.Width(bodyW).Render(breakLongWords(t.Prompt, textW))
+	head := userHead(t.Plan, t.At.Format("15:04"))
+	body := userBody(t.Plan).Width(bodyW).Render(breakLongWords(t.Prompt, textW))
 	parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, head, "", body))
 
 	if t.Thinking != "" {
@@ -3353,7 +3385,11 @@ func (m *tuiModel) renderTurnMode(t *Turn, w int, compact bool) string {
 // off-screen.
 func (m *tuiModel) renderTurnFull(t *Turn) string {
 	var b strings.Builder
-	b.WriteString(m.wrapPlain("You · "+t.At.Format("15:04:05")+"\n"+t.Prompt) + "\n\n")
+	who := "You"
+	if t.Plan {
+		who = "You (PLAN)"
+	}
+	b.WriteString(m.wrapPlain(who+" · "+t.At.Format("15:04:05")+"\n"+t.Prompt) + "\n\n")
 	if t.Thinking != "" {
 		b.WriteString(m.wrapPlain("✦ thinking"+thinkDurSuffix(t.DurMs)+"\n"+t.Thinking) + "\n\n")
 	}
@@ -3744,8 +3780,8 @@ func (m *tuiModel) renderPendingTool(t pendingTool) string {
 func (m *tuiModel) renderPending(w int) string {
 	bodyW := min(w-4, 120)
 	textW := bodyW - 2
-	head := userHeaderStyle.Render("You") + "  " + metaStyle.Render("now")
-	body := userBodyStyle.Width(bodyW).Render(breakLongWords(m.pendingPrompt, textW))
+	head := userHead(m.pendingPlan, "now")
+	body := userBody(m.pendingPlan).Width(bodyW).Render(breakLongWords(m.pendingPrompt, textW))
 	parts := []string{head, "", body, ""}
 
 	// The thinking header renders from turn start (body follows once text
@@ -4296,6 +4332,11 @@ Keys
   ↑ on an empty chatbox reloads your last prompt: edit it and enter resends from there
   in lists: ↑↓ move · enter open · esc back
   /model picker: type to filter · ↑↓ select · enter switches · ctrl+f stars/unstars favourites (kept on top) · esc clears search, then backs
+
+Modes
+   WORK (green chatbox) — default: the agent can read, edit, write and run commands.
+   PLAN (cyan chatbox) — read-only: the agent investigates and replies with a plan; write/edit/shell/MCP are blocked, task is explore-only.
+   Switch with tab or /plan (or start with -plan). Scrollback labels each message "You (PLAN)" in cyan or plain "You" in orange.
 
 Commands
    /help /history /sessions (/resume) /tools /errors /think /save /clear /new /plan /quit (or :q)

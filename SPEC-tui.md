@@ -81,7 +81,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   tools count is not shown, and `alt+m select` names the plain-drag selection
   toggle.
 - Transcript is padded conversation blocks separated by blank lines; no role
-  prefixes. `You` (orange) and ` ✦ <model>` (green, leading space so it lines
+  prefixes. `You` (orange; `You (PLAN)` in cyan with a cyan left bar when sent in plan mode) and ` ✦ <model>` (green, leading space so it lines
   up with ` ✦ valen`) head each block.
   A blank session shows only a `valen <version>` label (the `-X main.version` stamp, `dev` unstamped); the AGENTS.md-first
   behaviour lives in the default system prompt (`config.toml`), not as
@@ -372,7 +372,7 @@ the full height, starts at its heading and scrolls to follow the selected option
 | Ctrl+G | help | help |
 | Ctrl+R / Ctrl+L / Ctrl+U / Ctrl+X | history / sessions / tools / errors | same |
 | Ctrl+Y | toggle thinking display | toggle thinking display |
-| Tab | swap work ↔ plan mode (chatbox border cyan in plan mode, green in work mode; header shows `· plan`) | — |
+| Tab | swap work ↔ plan mode (chatbox border cyan in plan mode, green in work mode; header shows `· plan`; placeholder becomes `Plan mode…  TAB to switch (/help)`; notices: `Plan Mode enabled: read only and planning` / `Work mode enabled`) | — |
 | Ctrl+N | new blank session (fresh id + file; blocked while busy) | same |
 | Ctrl+T | thinking level cycle low→high, wraps to low | same |
 | Ctrl+O | toggle status details | toggle status details |
