@@ -665,3 +665,37 @@ func TestOpenRouterReasoningRoundTrip(t *testing.T) {
 		t.Fatalf("reasoning not passed back: %v", asst)
 	}
 }
+
+// TestDeepSeekToolCallReasoningPadded: DeepSeek thinking mode 400s when an
+// assistant tool-call message lacks reasoning_content; go-openai omits empty
+// strings, so the wire body must carry an explicit "".
+func TestDeepSeekToolCallReasoningPadded(t *testing.T) {
+	cfg := newTestConfig("http://x")
+	cfg.Model, cfg.Thinking = "deepseek-v4.1-flash", "high"
+	calls := []openai.ToolCall{{ID: "c1", Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "read", Arguments: "{}"}}}
+	req := openai.ChatCompletionRequest{Model: "m", Messages: []openai.ChatCompletionMessage{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", ToolCalls: calls},
+		{Role: "tool", ToolCallID: "c1", Content: "ok"},
+		{Role: "assistant", Content: "done"},
+	}}
+	raw, _ := json.Marshal(chatWireBody(cfg, req))
+	var got struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	json.Unmarshal(raw, &got)
+	if v, ok := got.Messages[1]["reasoning_content"]; !ok || v != "" {
+		t.Fatalf("tool-call message missing reasoning_content: %v", got.Messages[1])
+	}
+	if _, ok := got.Messages[3]["reasoning_content"]; ok {
+		t.Fatalf("plain reply must stay untouched: %v", got.Messages[3])
+	}
+	cfg.Thinking = "none"
+	if _, ok := chatWireBody(cfg, req).(openai.ChatCompletionRequest); !ok {
+		t.Fatal("thinking none must leave the request untouched")
+	}
+	cfg.Model, cfg.Thinking = "glm-5.3-flash", "high"
+	if _, ok := chatWireBody(cfg, req).(openai.ChatCompletionRequest); !ok {
+		t.Fatal("non-deepseek must be untouched")
+	}
+}

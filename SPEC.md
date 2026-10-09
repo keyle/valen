@@ -141,6 +141,8 @@ the vendor segment (`openrouter/moonshotai/kimi-k3` → `kimi-k3` rules).
 OpenRouter returns reasoning as `reasoning` (not `reasoning_content`); it is
 captured into `ReasoningContent` and sent back on assistant messages as both
 fields, since thinking-mode upstreams 400 when it is not passed back.
+DeepSeek models (any provider) also get an explicit `reasoning_content: ""` on
+assistant tool-call messages that have none, unless `thinking = "none"`.
 History stays OpenAI-shaped in memory; the non-chat transports convert each
 round and fold the reply back, so the TUI, session log and tool registry are
 transport-agnostic.
