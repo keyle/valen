@@ -142,8 +142,8 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 - Autoscroll follows new turns while pinned to the bottom; PgUp/PgDn or the
   mouse wheel scrolls the transcript, which pauses autoscroll until scrolled
   back to the bottom (a new submit or committed turn re-pins). Mouse reporting
-  is on by default so the wheel scrolls; the terminal bypass modifier
-  (shift in most terminals, opt in iTerm2/Terminal.app) drag-selects +
+  is on by default so the wheel scrolls; shift+mouse drag (the terminal
+  bypass modifier: shift in most terminals, opt in iTerm2/Terminal.app) selects +
   copies without toggling. alt+m toggles plain-drag selection: reporting
   off means a plain drag selects + copies natively (wheel paused) until
   alt+m re-enables it. Split mouse
@@ -151,6 +151,10 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   held for reassembly and never typed: a completed `[<…M` report drops,
   anything else releases as typing; genuine wheel input still arrives as
   mouse events. Only pasted or typed chars may reach the input box.
+- After a finished turn with a reply, an underlined dim `copy response` row, right-aligned, ends the
+  transcript; a left click on it (or `/copy`) writes the last reply's markdown
+  source to the clipboard via OSC 52 (needs terminal support; works over ssh).
+  The row is absent while a turn is pending.
 - Chatbox chrome is configurable via `[input]` in `config.toml`: `blink`
   (default `true`; `false` parks the block cursor steady with no blink
   timer) and `height` (default `3` box lines; the transcript viewport
@@ -368,6 +372,7 @@ the full height, starts at its heading and scrolls to follow the selected option
 | Ctrl+J / Alt+Enter / Shift+Enter | newline in input (shift+enter where the terminal supports it) | — |
 | PgUp/PgDn / wheel | scroll transcript (pauses autoscroll until back at bottom) | scroll view |
 | Shift+drag (Opt+drag in iTerm/Terminal) | native drag-select + copy (wheel keeps scrolling) | same |
+| Click `copy response` (right edge, under last reply) / `/copy` | copy last reply via OSC 52 | — |
 | Alt+M | toggle plain-drag selection (mouse reporting off: drag selects, wheel paused) | — |
 | Ctrl+G | help | help |
 | Ctrl+R / Ctrl+L / Ctrl+U / Ctrl+X | history / sessions / tools / errors | same |
@@ -385,7 +390,7 @@ the full height, starts at its heading and scrolls to follow the selected option
 Function keys are gone; the footer only points at `/help`, which lists every
 shortcut (and the shortcut line above).
 
-Slash commands: `/help` `/history` `/sessions` (`/resume`, `/continue` — resume most recent) `/tools` `/errors` `/think` `/save`
+Slash commands: `/help` `/history` `/sessions` (`/resume`, `/continue` — resume most recent) `/tools` `/errors` `/think` `/save` `/copy`
 `/clear` `/compact` (`/summarize` alias) `/model [filter]` `/effort [level]` (`/thinking` alias) `/quit` (`:q` alias).
 
 ## Streaming (live)

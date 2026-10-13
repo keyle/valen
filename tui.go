@@ -1416,6 +1416,9 @@ func (m *tuiModel) handleCommand(text string) tea.Cmd {
 		m.notice = msg
 		m.noticeErr = isErr
 		return nil
+	case "/copy":
+		m.copyLastReply()
+		return nil
 	case "/help", "/h", "/?":
 		m.show(viewHelp)
 		return nil
@@ -2183,6 +2186,10 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the terminal keeps drags for native selection, so stray
 		// reports are ignored instead of moving the viewport.
 		if m.mouseOff {
+			return m, nil
+		}
+		if m.copyClicked(msg) {
+			m.copyLastReply()
 			return m, nil
 		}
 		// Wheel (and clicks) go to the viewport in every mode: in chat
@@ -3126,6 +3133,9 @@ func (m *tuiModel) renderChat() string {
 	}
 	committed := m.committedTurns(w)
 	if m.pendingPrompt == "" {
+		if m.lastReply() != "" {
+			committed += "\n\n" + strings.Repeat(" ", max(w-len(copyLabel)-2, 0)) + copyStyle.Render(copyLabel)
+		}
 		return committed
 	}
 	if committed == "" {
@@ -3154,6 +3164,48 @@ func (m *tuiModel) committedTurns(w int) string {
 	}
 	m.chatCacheW, m.chatCacheThink, m.chatCacheModel = w, m.showThink, m.cfg.Model
 	return m.assembleCommitted(tuiMaxLines(m.cfg))
+}
+
+const copyLabel = "copy response"
+
+var copyStyle = lipgloss.NewStyle().Foreground(mkComment).Underline(true)
+
+// clipboardWrite sends text to the system clipboard via OSC 52 (works over
+// ssh; needs terminal support). A var so tests stay off stdout.
+var clipboardWrite = func(s string) { fmt.Fprint(os.Stdout, ansi.SetSystemClipboard(s)) }
+
+// lastReply is the newest turn's reply, "" when it has none.
+func (m *tuiModel) lastReply() string {
+	if m.session == nil || len(m.session.Turns) == 0 {
+		return ""
+	}
+	return m.session.Turns[len(m.session.Turns)-1].Reply
+}
+
+// copyLastReply copies the newest reply (markdown source) and sets a notice.
+func (m *tuiModel) copyLastReply() {
+	r := m.lastReply()
+	if r == "" {
+		m.notice, m.noticeErr = "Nothing to copy yet.", true
+		return
+	}
+	clipboardWrite(r)
+	m.notice, m.noticeErr = fmt.Sprintf("Copied last reply (%d chars).", len(r)), false
+}
+
+// copyClicked reports whether a left press landed on the copy row, which is
+// always the last transcript line (header is one row above the viewport).
+func (m *tuiModel) copyClicked(msg tea.MouseMsg) bool {
+	if m.mode != viewChat || m.pendingPrompt != "" || m.lastReply() == "" ||
+		msg.Button != tea.MouseButtonLeft || msg.Action != tea.MouseActionPress {
+		return false
+	}
+	row := msg.Y - 1
+	lines := strings.Split(m.viewport.View(), "\n")
+	if row < 0 || row >= len(lines) || m.viewport.YOffset+row != m.viewport.TotalLineCount()-1 {
+		return false
+	}
+	return strings.TrimSpace(ansi.Strip(lines[row])) == copyLabel
 }
 
 // lineCount is the rendered line count of one turn, used to budget the
@@ -4322,7 +4374,7 @@ func (m *tuiModel) renderHelp() string {
 Keys
   enter send · tab swaps work/plan mode (cyan box = plan) · shift+enter/alt+enter/ctrl+j newline · esc cancel/back · pgup/pgdn/wheel scroll
   wheel/pgup pauses autoscroll until you reach the bottom again
-   shift+drag (opt+drag in iTerm/Terminal) selects + copies natively · alt+m toggles plain-drag selection (wheel paused while off)
+   shift+mouse drag selects text (opt+drag in iTerm/Terminal) and copies natively, wheel stays on · alt+m toggles plain-drag selection (wheel paused while off)
   ctrl+g help · ctrl+r history · ctrl+l sessions · ctrl+u tools · ctrl+x errors · ctrl+y thinking display
   ctrl+o details · ctrl+p/ctrl+m model · ctrl+n new session · ctrl+t thinking level (cycles low→high, wraps) · ctrl+s save · ctrl+q quit · ctrl+c/ctrl+d cancel · clear input · quit
   ↑ on an empty chatbox reloads your last prompt: edit it and enter resends from there
@@ -4335,7 +4387,8 @@ Modes
    Switch with tab or /plan (or start with -plan). Scrollback labels each message "You (PLAN)" in cyan or plain "You" in orange.
 
 Commands
-   /help /history /sessions (/resume) /tools /errors /think /save /clear /new /plan /quit (or :q)
+   /help /history /sessions (/resume) /tools /errors /think /save /copy /clear /new /plan /quit (or :q)
+   /copy — copy the last reply to the clipboard (OSC 52); clicking the underlined "copy response" under it does the same
    /compact (/summarize) — prune + summarize older history with the cheap model; disk log untouched
    /plan (or tab) — toggle plan mode: read-only investigation, the reply is the plan (write/edit/shell/MCP blocked, task explore-only)
    /model [filter] — list models with provider prefixes (go/…, zen/…, openrouter/…) and switch (ctrl+p/ctrl+m does the same); missing keys report on pick/send, never block boot

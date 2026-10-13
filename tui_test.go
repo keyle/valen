@@ -2465,3 +2465,42 @@ func TestBreakLongWordsKeepsANSIIntact(t *testing.T) {
 		t.Fatalf("content lost: %q", got)
 	}
 }
+
+// TestTUICopyLastReply: a finished reply gets an underlined "copy" row as the
+// last transcript line; clicking it (or /copy) sends the reply to the clipboard.
+func TestTUICopyLastReply(t *testing.T) {
+	var got string
+	old := clipboardWrite
+	clipboardWrite = func(s string) { got = s }
+	t.Cleanup(func() { clipboardWrite = old })
+
+	m := newTestModel(t, testConfig("https://unused"))
+	m.handleCommand("/copy")
+	if got != "" || !m.noticeErr {
+		t.Fatalf("empty session must not copy: %q %q", got, m.notice)
+	}
+	m.session.Turns = append(m.session.Turns, Turn{At: time.Now(), Prompt: "q", Reply: "**answer**"})
+	m.viewport.Width, m.viewport.Height = 80, 10
+	m.pinBottom()
+	lines := strings.Split(m.viewport.View(), "\n")
+	row := -1
+	for i, l := range lines {
+		if strings.TrimSpace(ansi.Strip(l)) == copyLabel {
+			row = i
+		}
+	}
+	if row < 0 {
+		t.Fatalf("no copy row in view:\n%s", m.viewport.View())
+	}
+	click := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: row + 1}
+	_, _ = m.Update(click)
+	if got != "**answer**" {
+		t.Fatalf("click did not copy reply: %q", got)
+	}
+	got = ""
+	click.Y = row // a different row must not copy
+	_, _ = m.Update(click)
+	if got != "" {
+		t.Fatalf("click off the copy row copied: %q", got)
+	}
+}
