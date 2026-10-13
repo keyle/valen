@@ -2448,3 +2448,20 @@ func TestTUIHeaderStatusNeverWrap(t *testing.T) {
 		t.Fatalf("frame rows=%d exceeds terminal", h)
 	}
 }
+
+func TestBreakLongWordsKeepsANSIIntact(t *testing.T) {
+	line := "\x1b[38;5;231mselect\x1b[0m \x1b[38;5;231mgift_cards.*\x1b[0m"
+	if got := breakLongWords(line, 40); got != line {
+		t.Fatalf("styled short line modified: %q", got)
+	}
+	long := "\x1b[38;5;231m" + strings.Repeat("x", 30) + "\x1b[0m"
+	got := breakLongWords(long, 10)
+	for _, ln := range strings.Split(got, "\n") {
+		if ansi.StringWidth(ln) > 10 {
+			t.Fatalf("line too wide: %q", ln)
+		}
+	}
+	if ansi.Strip(got) != strings.Repeat("x", 30)+"" && strings.ReplaceAll(ansi.Strip(got), "\n", "") != strings.Repeat("x", 30) {
+		t.Fatalf("content lost: %q", got)
+	}
+}

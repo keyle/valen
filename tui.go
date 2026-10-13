@@ -24,6 +24,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -1154,24 +1155,19 @@ func breakLongWords(s string, width int) string {
 	}
 	lines := strings.Split(s, "\n")
 	for i, line := range lines {
-		if len([]rune(line)) <= width {
+		// Measure display width, not runes: s may carry ANSI styling
+		// (rendered markdown), and escape bytes must neither count toward
+		// the width nor ever be split.
+		if ansi.StringWidth(line) <= width {
 			continue
 		}
 		words := strings.Split(line, " ")
-		var b strings.Builder
 		for j, w := range words {
-			if j > 0 {
-				b.WriteByte(' ')
+			if ansi.StringWidth(w) > width {
+				words[j] = ansi.Hardwrap(w, width, true)
 			}
-			r := []rune(w)
-			for len(r) > width {
-				b.WriteString(string(r[:width]))
-				b.WriteByte('\n')
-				r = r[width:]
-			}
-			b.WriteString(string(r))
 		}
-		lines[i] = b.String()
+		lines[i] = strings.Join(words, " ")
 	}
 	return strings.Join(lines, "\n")
 }
