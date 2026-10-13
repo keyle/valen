@@ -20,8 +20,9 @@ useful; foreground-only first (no job view, no background results plumbing).
    resource.
 3. `task` third: `task {agent,prompt}` spawns a nested foreground `runTurn`
    with narrowed permissions (`explore`: read/glob/grep/web only;
-   `general`: full except nested `task`, depth ≤2). Shares `mcpMu`;
-   interactive `task` batches stay serial like `AskUserQuestion`.
+   `general`: full except nested `task`, depth 1). Shares `mcpMu`.
+   Superseded: `task` batches now run in parallel (max 5, per-path
+   `write`/`edit` locks); see `SPEC.md`.
 
 ## Non-goals
 

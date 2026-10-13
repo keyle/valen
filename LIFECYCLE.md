@@ -13,7 +13,7 @@ Terms first, because the codebase uses them precisely:
 | **turn** | One user prompt → final assistant answer, including all tool work. The unit billed, logged, and resumed. | `Turn` in `session.go`, `runTurn` in `main.go` |
 | **round** | One model request → response inside a turn. A turn with 5 tool batches = 5+ rounds. | shared `runModelTurn`; transport closures in `runChatTurn` / `runMessagesTurn` / `runResponsesTurn` |
 | **step** | opencode's word for roughly one round (its processor emits `step-start` / `step-finish` events around each model call plus its tool calls). Valen has no step events; round is the equivalent unit. | opencode `session/processor.ts` |
-| **batch** | Tool calls emitted in one round. Read-only builtin batches may overlap; other batches execute serially. Results append in request order. | `runToolCalls` in `main.go` |
+| **batch** | Tool calls emitted in one round. Read-only builtin and `task` batches may overlap; other batches execute serially. Results append in request order. | `runToolCalls` in `main.go` |
 | **history** | OpenAI-shaped continuation state carried across turns; older turns may be pruned/summarized. Separate session records keep the transcript and tool outputs. | `[]openai.ChatCompletionMessage`, `Turn.History` |
 
 ## 1. The lifecycle of one user turn, step by step
@@ -146,11 +146,11 @@ cheapest fallback per model) summarizes.
 | `grep` | 100 matches, 20/file, skip >1MiB/binaries | One noisy file can't starve the result; same shape as opencode's limit: 100 |
 | `shell` | 60s timeout, combined output | Non-zero exit returns as content (`[exit N]`), never as loop error |
 | MCP handshake / call | 30s / 2m | Slow servers warn-and-continue at startup, never abort the run |
-| Parallel tools | max 8 known read-only builtins | Any other tool makes the whole batch serial |
+| Parallel tools | max 8 known read-only builtins, max 5 `task` subagents | Any other tool makes the whole batch serial |
 | Stream body cap | 8MiB LimitReader/round | A runaway stream can't OOM the harness |
 | Retry | 3 attempts, 300ms→800ms, 429/502/503/504 + network errors | Overloads back off; 400s never retry (stream-fallback depends on it) |
 | HTTP deadlines | 300s per attempt including body; headers 60s, dial/TLS 10s | Optional `request_timeout_seconds`; no blocking retry-body drain, no new dependency |
-| Task subagent | ≤25 rounds, depth ≤2 | A flailing delegate can't eat the session budget |
+| Task subagent | ≤25 rounds, depth 1 | A flailing delegate can't eat the session budget |
 | Web | search 8 results/1MiB; fetch 512KiB→8000 chars | Snippets stay plannable, pages stay skimmable |
 | TUI stream tail | last ~1500 runes displayed; rolling 32768 bytes per text/thinking buffer; 60ms throttle | Exact fragments, no inserted newlines; newest UTF-8-safe tail retained, commit renders full reply |
 
@@ -201,10 +201,12 @@ Anthropic pattern: stable prefixes cache, the moving tail doesn't.
 ## 6. Batching and parallelism
 
 - Only entirely read-only builtin batches (`read`, `glob`, `grep`,
-  `web_search`, `web_fetch`) overlap, max 8. Starts emit in request order,
+  `web_search`, `web_fetch`) and `task` subagents overlap, max 8 and max 5
+  respectively (extras queue). `write`/`edit` lock per canonical path so
+  parallel subagents cannot lose updates; `shell` writes are unlocked. Starts emit in request order,
   results in completion order; call IDs match live rows. History always
   appends in request order after the batch finishes.
-- Any mutating, interactive, stateful, `task`, MCP or unknown tool makes the
+- Any mutating, interactive, stateful, MCP or unknown tool makes the
   whole batch serial in request order. Even cross-server MCP calls do not
   overlap within a batch. File-access approvals also serialize.
 - The model must be *told* to batch: `prompt_meta.txt` / `prompt_default.txt`

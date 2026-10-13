@@ -71,7 +71,7 @@ regresses `project.md` caps.
 - [ ] W.1 `todowrite`/`todoread` (in-memory + session fold, opencode schema).
 - [ ] W.2 `skill` loader + discovery (`~/.config/valen/skills`,
   `.valen/skills`, `.opencode/`+`.claude/` compat) + `skill` permission.
-- [ ] W.3 `task` foreground-only (`general`/`explore` policies, depth ≤2,
+- [ ] W.3 `task` foreground-only (`general`/`explore` policies, depth 1,
   shared `mcpMu`); background deferred.
 
 Gate per track: SPEC + help + `config.toml` comments together;

@@ -37,9 +37,9 @@ Single-binary Go agent harness. No server/client split, everything in-process in
 - Execution caps: `300` main rounds per window with one compact-and-continue
   extension; `25` consecutive identical ordered
   batches allowed, single-call third-repeat guard; max `8` parallel known
-  read-only builtins. Any other tool (including MCP/task) makes a batch
-  ordered serial. Result Events are completion-ordered, history request-ordered.
-  Shell `60s`; MCP handshake `30s`, call `2m`; task max `25` rounds/depth `2`.
+  read-only builtins plus max `5` parallel `task` subagents (extras queue).
+  Any other tool (including MCP) makes a batch ordered serial. Result Events are completion-ordered, history request-ordered.
+  Shell `60s`; MCP handshake `30s`, call `2m`; task max `25` rounds/depth `1`.
   Each HTTP attempt including body: `request_timeout_seconds=300` default,
   header `60s`, dial/TLS `10s`; transient retry max `3`, backoff `300/800ms`,
   no blocking retry-body drain or new dependency. No idle/whole-turn timeout.

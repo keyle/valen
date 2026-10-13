@@ -16,7 +16,7 @@ models and runs the tool loop locally.
   `web_fetch`, plus todos and questions
 - Stdio MCP servers
 - Plan mode (read-only investigation)
-- Foreground `task` subagents with isolated history
+- Foreground `task` subagents with isolated history, up to 5 in parallel
 - Summary-style auto-compaction (on by default, `/compact` for manual)
 - Session logs (JSONL) and resume
 - Live model and reasoning-effort switching (`/model`, `/effort`)
