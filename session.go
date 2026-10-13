@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"os"
@@ -65,15 +67,27 @@ type Session struct {
 	Effort     string
 }
 
+// sessionsDir is the per-project session folder: sessions/<base>-<hash of the
+// working folder>, so projects never share a session list. Flat legacy
+// sessions/*.jsonl files are simply no longer listed.
 func sessionsDir() (string, error) {
-	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
-		return filepath.Join(d, "valen", "sessions"), nil
+	base := filepath.Join(os.Getenv("XDG_DATA_HOME"), "valen", "sessions")
+	if os.Getenv("XDG_DATA_HOME") == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		base = filepath.Join(home, ".local", "share", "valen", "sessions")
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".local", "share", "valen", "sessions"), nil
+	root := filepath.Clean(getFileRoot())
+	sum := sha256.Sum256([]byte(root))
+	name := strings.Map(func(r rune) rune {
+		if r == '-' || r == '_' || r == '.' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
+			return r
+		}
+		return '_'
+	}, filepath.Base(root))
+	return filepath.Join(base, name+"-"+hex.EncodeToString(sum[:4])), nil
 }
 
 func newSession(cfg Config) (*Session, error) {

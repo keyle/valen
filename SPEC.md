@@ -31,7 +31,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `messages.go` | Anthropic `/messages` transport: wire format, thinking, tool loop |
 | `responses.go` | OpenAI `/responses` transport (stateless): wire format, reasoning, tool loop |
 | `stream.go` | Shared streaming layer: raw POST, SSE scanner, unary-JSON fallback |
-| `session.go` | Turn model + JSONL session log at `$XDG_DATA_HOME/valen/sessions/` |
+| `session.go` | Turn model + JSONL session log at `$XDG_DATA_HOME/valen/sessions/<workdir>-<hash>/` (one folder per working directory) |
 | `compaction.go` | Summary-mode compaction (prune + cheap-model summary, send-side only) |
 | `usage.go` | Quota for the TUI footer: Go plan quota (`GET /usage`) and OpenRouter balance (`GET /credits`) |
 | `errors.go` | Friendly one-line errors mapped from status codes/causes (ctrl+x has details) |

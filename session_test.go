@@ -19,7 +19,8 @@ func TestSessionAppendAndLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(tmp, "valen", "sessions", "ses-test-1.jsonl"); s.Path != want {
+	dir, _ := sessionsDir()
+	if want := filepath.Join(dir, "ses-test-1.jsonl"); s.Path != want || filepath.Dir(dir) != filepath.Join(tmp, "valen", "sessions") {
 		t.Fatalf("path %q want %q", s.Path, want)
 	}
 	turn := Turn{
@@ -126,5 +127,22 @@ func TestListSessionsNewestFirst(t *testing.T) {
 	}
 	if filepath.Base(paths[0]) != "ses-b.jsonl" {
 		t.Fatalf("newest first violated: %v", paths)
+	}
+}
+
+func TestListSessionsScopedToWorkdir(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	a, b := t.TempDir(), t.TempDir()
+	defer setFileRoot("")
+	setFileRoot(a)
+	sa, _ := newSession(Config{SessionID: "ses-a"})
+	sa.append(Turn{At: time.Now(), Prompt: "a"})
+	setFileRoot(b)
+	if paths, _ := listSessions(); len(paths) != 0 {
+		t.Fatalf("project b sees a's sessions: %v", paths)
+	}
+	setFileRoot(a)
+	if paths, _ := listSessions(); len(paths) != 1 {
+		t.Fatalf("project a lost its session: %v", paths)
 	}
 }

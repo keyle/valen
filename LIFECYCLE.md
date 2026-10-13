@@ -341,9 +341,9 @@ same state; Esc/Ctrl-C cancels the run context (turn commits as
 
 ## 12. Session lifecycle (across runs)
 
-Each session is one append-only JSONL (`$XDG_DATA_HOME/valen/sessions/<id>.jsonl`)
+Each session is one append-only JSONL (`$XDG_DATA_HOME/valen/sessions/<workdir>-<hash>/<id>.jsonl`, one folder per working directory)
 plus a `.meta.json` sidecar (title = first prompt's first 60 runes,
-model/effort). `/sessions` (Ctrl+L) lists every session with title and
+model/effort). `/sessions` (Ctrl+L) lists this folder's sessions with title and
 turn count; Enter resumes (latest `Turn.History` checkpoint plus any later
 legacy turns, same file continues, last `todowrite` plan restored). Legacy
 records without checkpoints reconstruct assistant tool calls and matching

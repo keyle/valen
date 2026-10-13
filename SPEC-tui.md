@@ -253,10 +253,11 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
 ## History & recall
 
 - Same `Turn` model + JSONL log at
-  `$XDG_DATA_HOME/valen/sessions/<session_id>.jsonl`.
+  `$XDG_DATA_HOME/valen/sessions/<workdir>-<hash>/<session_id>.jsonl` (one
+  folder per working directory, so projects never share a session list).
 - History view: one row per turn (time, prompt snippet, tokens) plus older
   saved session files read-only. Sessions view (Ctrl+L): every saved session
-  with its title (first prompt, 60 runes), model/effort, turn count — Enter
+  of this working folder with its title (first prompt, 60 runes), model/effort, turn count — Enter
   resumes it (latest `Turn.History` checkpoint plus later legacy turns, same
   file continues). Esc backs to the current session without arming the cancel
   confirm, so browsing sessions never counts toward stopping a running turn.
