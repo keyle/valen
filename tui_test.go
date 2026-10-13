@@ -2550,3 +2550,86 @@ func TestTUIModelPickerCachesAndRefreshesInPlace(t *testing.T) {
 		t.Fatalf("mode=%v", m.mode)
 	}
 }
+
+func TestSlotKey(t *testing.T) {
+	for in, want := range map[string]struct {
+		key    string
+		assign bool
+		ok     bool
+	}{
+		"alt+1": {"1", false, true}, "alt+0": {"0", false, true}, "alt+!": {"1", true, true},
+		"alt+)": {"0", true, true}, "alt+a": {}, "1": {}, "alt+enter": {},
+	} {
+		k, a, ok := slotKey(in)
+		if k != want.key || a != want.assign || ok != want.ok {
+			t.Fatalf("slotKey(%q)=%q,%v,%v want %+v", in, k, a, ok, want)
+		}
+	}
+}
+
+func TestTUIFavouriteSlotsAssignAndSwitch(t *testing.T) {
+	t.Setenv(openCodeKeyEnv, "test-key")
+	m, statePath := newTestModelWithConfig(t, "model = \"glm-5.3\"\nthinking = \"high\"\nbase_url = \"https://unused\"\n")
+	alt := func(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}, Alt: true} }
+
+	// alt+shift+2 (alt+@) stores the current pair and says so.
+	_, _ = m.handleKey(alt('@'))
+	if !strings.Contains(m.notice, "Slot 2") || m.noticeErr {
+		t.Fatalf("assign notice=%q", m.notice)
+	}
+	if raw, _ := os.ReadFile(slotsPathFor(statePath)); string(raw) != "2: glm-5.3 high\n" {
+		t.Fatalf("slots.yaml=%q", raw)
+	}
+
+	// Switch elsewhere, then alt+2 returns to glm-5.3 + high.
+	m.handleCommand("/model kimi-k2.6")
+	if m.cfg.Model != "kimi-k2.6" {
+		t.Fatalf("model=%q", m.cfg.Model)
+	}
+	_, _ = m.handleKey(alt('2'))
+	if m.cfg.Model != "glm-5.3" || m.cfg.Thinking != "high" {
+		t.Fatalf("slot 2 → %q/%q notice=%q", m.cfg.Model, m.cfg.Thinking, m.notice)
+	}
+	if st := loadUserState(statePath); st.Model != "glm-5.3" || st.Thinking != "high" {
+		t.Fatalf("slot switch must persist state: %+v", st)
+	}
+
+	// Slots reload from disk on a fresh model; empty slots report.
+	m.slots = nil
+	_, _ = m.handleKey(alt('5'))
+	if !m.noticeErr || !strings.Contains(m.notice, "empty") || m.cfg.Model != "glm-5.3" {
+		t.Fatalf("empty slot notice=%q err=%v", m.notice, m.noticeErr)
+	}
+	_, _ = m.handleKey(alt('2'))
+	if m.cfg.Model != "glm-5.3" || m.noticeErr {
+		t.Fatalf("slot reload failed: %q %q", m.cfg.Model, m.notice)
+	}
+}
+
+func TestTUIFavouriteSlotsKittyAltShift(t *testing.T) {
+	type raw []byte
+	km, ok := csiUKey(raw("\x1b[50;4u")) // alt+shift+2
+	if !ok || km.String() != "alt+@" {
+		t.Fatalf("got %q %v", km.String(), ok)
+	}
+}
+
+func TestSlotsRoundTrip(t *testing.T) {
+	p := filepath.Join(t.TempDir(), userSlotsName)
+	if err := os.WriteFile(p, []byte("# mine\n1: \"glm-5.3\" high # fast\n0: openrouter/x/y\nbad\nz: a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := readSlots(p)
+	if len(got) != 2 || got["1"] != (modelSlot{"glm-5.3", "high"}) || got["0"] != (modelSlot{"openrouter/x/y", ""}) {
+		t.Fatalf("parsed=%v", got)
+	}
+	if err := saveSlots(p, got); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(p); string(raw) != "1: glm-5.3 high\n0: openrouter/x/y\n" {
+		t.Fatalf("saved=%q", raw)
+	}
+	if len(readSlots("")) != 0 || slotsPathFor("") != "" {
+		t.Fatal("no state path must mean session-only")
+	}
+}

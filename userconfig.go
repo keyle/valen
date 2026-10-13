@@ -23,6 +23,7 @@ const (
 	userConfigOrigName  = "config-ori.toml"
 	userStateName       = "state.json"
 	userFavouritesName  = "favourites.yaml"
+	userSlotsName       = "slots.yaml"
 	userModelsCacheName = "models.json"
 	userAgentsName      = "AGENTS.md"
 	// maxUserAgentsBytes caps the sideloaded AGENTS.md so a huge file cannot
@@ -214,6 +215,84 @@ func favouritesPathFor(statePath string) string {
 		return ""
 	}
 	return filepath.Join(filepath.Dir(statePath), userFavouritesName)
+}
+
+// slotKeys are the favourite-slot names in keyboard order: alt+1…alt+9,
+// then alt+0 as the tenth.
+const slotKeys = "1234567890"
+
+// modelSlot is one favourite slot: a model plus a thinking level ("" means
+// the provider default).
+type modelSlot struct{ model, thinking string }
+
+// slotsPathFor returns the favourite-slots file beside the state file, or ""
+// when there is no state path (slots stay session-only then).
+func slotsPathFor(statePath string) string {
+	if statePath == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(statePath), userSlotsName)
+}
+
+// readSlots loads slots.yaml: one "<digit>: <model> [thinking]" line per
+// slot. Blank lines, comments, quotes and malformed lines are skipped; a
+// missing file yields an empty map.
+func readSlots(path string) map[string]modelSlot {
+	slots := map[string]modelSlot{}
+	if path == "" {
+		return slots
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return slots
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if i := strings.Index(line, "#"); i >= 0 {
+			line = line[:i]
+		}
+		key, val, ok := strings.Cut(line, ":")
+		key = strings.TrimSpace(key)
+		f := strings.Fields(strings.NewReplacer(`"`, "", `'`, "").Replace(val))
+		if !ok || len(key) != 1 || !strings.Contains(slotKeys, key) || len(f) == 0 {
+			continue
+		}
+		s := modelSlot{model: f[0]}
+		if len(f) > 1 {
+			s.thinking = strings.ToLower(f[1])
+		}
+		slots[key] = s
+	}
+	return slots
+}
+
+// saveSlots writes the slots atomically, in key order.
+func saveSlots(path string, slots map[string]modelSlot) error {
+	if path == "" {
+		return errors.New("no slots path")
+	}
+	var b strings.Builder
+	for _, k := range slotKeys {
+		if s, ok := slots[string(k)]; ok {
+			fmt.Fprintf(&b, "%c: %s\n", k, strings.TrimSpace(s.model+" "+s.thinking))
+		}
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".slots-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.WriteString(b.String()); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // modelsCachePathFor returns the picker's model-list cache beside the state

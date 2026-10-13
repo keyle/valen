@@ -408,6 +408,7 @@ type tuiModel struct {
 	modelLoadFilter string
 	modelSearch     textinput.Model
 	favourites      map[string]bool
+	slots           map[string]modelSlot // favourite slots, lazily read from slots.yaml
 	effortLevels    []string
 	ask             *askState
 
@@ -1733,6 +1734,72 @@ func (m *tuiModel) toggleFavourite() {
 	m.ensureCursorVisible()
 }
 
+// slotShifted are the US-layout symbols alt+shift+<digit> produces, in
+// slotKeys order (1…9, 0). Terminals send the shifted character, not the digit.
+const slotShifted = "!@#$%^&*()"
+
+// slotKey maps a key string to its favourite slot ("1"…"0"): alt+<digit>
+// picks it, alt+shift+<digit> (alt+!…alt+)) assigns it.
+func slotKey(s string) (key string, assign, ok bool) {
+	r, found := strings.CutPrefix(s, "alt+")
+	if !found || len(r) != 1 {
+		return "", false, false
+	}
+	if strings.Contains(slotKeys, r) {
+		return r, false, true
+	}
+	if i := strings.Index(slotShifted, r); i >= 0 {
+		return slotKeys[i : i+1], true, true
+	}
+	return "", false, false
+}
+
+func (m *tuiModel) loadSlots() {
+	if m.slots == nil {
+		m.slots = readSlots(slotsPathFor(m.statePath))
+	}
+}
+
+// assignSlot stores the current model + thinking level in slot key and
+// announces it. Persists to slots.yaml; session-only without a state path.
+func (m *tuiModel) assignSlot(key string) {
+	m.loadSlots()
+	m.slots[key] = modelSlot{model: m.cfg.Model, thinking: m.cfg.Thinking}
+	m.notice = fmt.Sprintf("Slot %s ← %s · %s.", key, displayModelID(m.cfg.Model), effortLabel(m.cfg.Thinking))
+	m.noticeErr = false
+	if path := slotsPathFor(m.statePath); path == "" {
+		m.notice += " (session only)"
+	} else if err := saveSlots(path, m.slots); err != nil {
+		m.notice = "Slot save failed: " + err.Error()
+		m.noticeErr = true
+	}
+}
+
+// applySlot switches to the model + thinking level stored in slot key.
+func (m *tuiModel) applySlot(key string) tea.Cmd {
+	m.loadSlots()
+	s, ok := m.slots[key]
+	if !ok {
+		m.notice = fmt.Sprintf("Slot %s is empty — set a model + thinking, then alt+shift+%s assigns it.", key, key)
+		m.noticeErr = true
+		return nil
+	}
+	if err := validateModelID(s.model); err != nil {
+		m.notice = fmt.Sprintf("Slot %s: %v", key, err)
+		m.noticeErr = true
+		return nil
+	}
+	m.cfg.Thinking = s.thinking // applyModelSwitch resets it if the model rejects it
+	m.applyModelSwitch(s.model)
+	if !m.noticeErr {
+		m.notice = fmt.Sprintf("Slot %s: %s · %s", key, displayModelID(m.cfg.Model), effortLabel(m.cfg.Thinking))
+		if m.cfg.Thinking != s.thinking {
+			m.notice += fmt.Sprintf(" (%s unavailable)", s.thinking)
+		}
+	}
+	return m.fetchQuotaCmd()
+}
+
 // openEffortPicker lists the thinking levels available on the current model,
 // plus the provider default.
 func (m *tuiModel) openEffortPicker() {
@@ -2406,6 +2473,10 @@ func csiUKey(msg tea.Msg) (tea.KeyMsg, bool) {
 		return tea.KeyMsg{Type: tea.KeyType(cp - 'a' + 1)}, true
 	case bits == 2 && cp > 32 && cp < 127:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{rune(cp)}, Alt: true}, true
+	case bits == 3 && cp >= '0' && cp <= '9':
+		// alt+shift+digit: Kitty reports the unshifted key plus the shift
+		// bit; legacy terminals send the US shifted symbol (alt+!), so match.
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{rune(slotShifted[strings.IndexRune(slotKeys, rune(cp))])}, Alt: true}, true
 	}
 	return tea.KeyMsg{}, false
 }
@@ -2622,6 +2693,13 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Ctrl shortcuts work everywhere; /help lists them.
 	if m.ask != nil {
 		return m.handleAskKey(s)
+	}
+	if key, assign, ok := slotKey(s); ok {
+		if assign {
+			m.assignSlot(key)
+			return m, nil
+		}
+		return m, m.applySlot(key)
 	}
 	switch s {
 	case "alt+m":
@@ -4470,6 +4548,7 @@ Keys
   ctrl+g help · ctrl+r history · ctrl+l sessions · ctrl+u tools · ctrl+x errors · ctrl+y thinking display
   ctrl+o details · ctrl+p/ctrl+m model · ctrl+n new session · ctrl+t thinking level (cycles low→high, wraps) · ctrl+s save · ctrl+q quit · ctrl+c/ctrl+d cancel · clear input · quit
   ↑ on an empty chatbox reloads your last prompt: edit it and enter resends from there
+  favourite slots: alt+1…alt+9, alt+0 switch to the model + thinking level saved in that slot · alt+shift+1…0 saves the current pair there
   in lists: ↑↓ move · enter open · esc back
   /model picker: ↑↓/j/k select · enter switches · space stars/unstars favourites (kept on top) · ctrl+f filters (esc leaves the field, then backs)
 
@@ -4494,6 +4573,10 @@ minute and after every turn: dim normally, yellow past 80%, pink at the cap.
 Models persist to ~/.config/valen/state.json, so the last switch sticks across runs.
 Favourites live beside it in ~/.config/valen/favourites.yaml (a plain list) and
 show with a ★ at the top of the picker; space toggles them there.
+Favourite slots (10, like weapon slots) live in ~/.config/valen/slots.yaml: pick a
+model + thinking level, press alt+shift+<1-9,0> to store it, then alt+<1-9,0> jumps
+back to it. Terminals need Option/Alt sent as Meta (macOS Terminal: "Use Option as
+Meta key"; iTerm2: Left Option key = Esc+).
 Thinking levels depend on the model (see /effort picker): muse-spark takes
 minimal/low/medium/high/xhigh, gpt/grok take low…max, glm/deepseek take
 low/high/max or high/max, kimi-k3 is max-only, toggle models take none/high.

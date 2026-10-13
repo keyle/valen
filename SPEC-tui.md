@@ -331,6 +331,17 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
   models sort to the top of the picker with a ★, alphabetically within each
   group, and the cursor stays on the toggled row. Space writes the file;
   without a state path (tests, `-config <file>`) favourites are session-only.
+- Favourite slots: ten assignable model + thinking-level pairs, like weapon
+  slots. `alt+1`…`alt+9`, `alt+0` (the tenth) switch to the pair stored in
+  that slot; `alt+shift+<digit>` stores the current model + thinking there
+  and says so in the status notice (`Slot 2 ← go/glm-5.3 · high.`). Stored at
+  `~/.config/valen/slots.yaml`, one `<digit>: <model> [thinking]` line per
+  slot (no thinking = provider default); without a state path they are
+  session-only. An empty slot reports it; a saved level the model no longer
+  offers resets to the provider default with a note. Works in chat and
+  overlays (not during a question). Terminals must send Option/Alt as Meta;
+  alt+shift+digit arrives as the US shifted symbol (`alt+!`) or, under Kitty
+  disambiguate mode, CSI `<digit>;4u`.
 - `/model <filter>` switches directly on an exact or unique-substring match,
   otherwise opens the filtered picker. `/model <known-id>` works offline.
 - Switching keeps the conversation history; an incompatible thinking level
@@ -387,6 +398,7 @@ the full height, starts at its heading and scrolls to follow the selected option
 | Tab | swap work ↔ plan mode (chatbox border cyan in plan mode, green in work mode; header shows `· plan`; placeholder becomes `Plan mode…  TAB to switch (/help)`; notices: `Plan Mode enabled: read only and planning` / `Work mode enabled`) | — |
 | Ctrl+N | new blank session (fresh id + file; blocked while busy) | same |
 | Ctrl+T | thinking level cycle low→high, wraps to low | same |
+| Alt+1…9, Alt+0 / Alt+Shift+1…0 | favourite slots: switch to slot / store current model + thinking in slot | same |
 | Ctrl+O | toggle status details | toggle status details |
 | Ctrl+P / Ctrl+M | model picker | model picker |
 | Ctrl+S | save transcript | save transcript |
