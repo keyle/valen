@@ -1373,10 +1373,10 @@ func TestTUIModelPickerFavouritesFloatAndToggle(t *testing.T) {
 		t.Fatalf("favourite must render a star:\n%s", text)
 	}
 
-	// Ctrl+F on the highlighted favourite unstars it and persists.
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlF})
+	// Space on the highlighted favourite unstars it and persists.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
 	if m.isFavourite("gpt-5.6-luna") {
-		t.Fatal("ctrl+f must unstar the highlighted model")
+		t.Fatal("space must unstar the highlighted model")
 	}
 	if m.modelChoices[m.cursor].id != "gpt-5.6-luna" {
 		t.Fatalf("cursor should stay on the toggled model: cursor=%d choices=%v", m.cursor, m.modelChoices)
@@ -1385,16 +1385,16 @@ func TestTUIModelPickerFavouritesFloatAndToggle(t *testing.T) {
 		t.Fatalf("unstar must persist: %q", raw)
 	}
 
-	// Ctrl+F on a plain row stars it, floats it to the top and writes the file.
+	// Space on a plain row stars it, floats it to the top and writes the file.
 	m.cursor = 0
 	for i, c := range m.modelChoices {
 		if c.id == "glm-5.3" {
 			m.cursor = i
 		}
 	}
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlF})
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
 	if !m.isFavourite("glm-5.3") {
-		t.Fatal("ctrl+f must star glm-5.3")
+		t.Fatal("space must star glm-5.3")
 	}
 	if m.modelChoices[0].id != "glm-5.3" {
 		t.Fatalf("new favourite must float to top: %v", m.modelChoices)
@@ -1439,10 +1439,19 @@ func TestTUIModelPickerSearchAndEscape(t *testing.T) {
 	if m.mode != viewModels {
 		t.Fatalf("mode=%v", m.mode)
 	}
-	if text := ansi.Strip(m.renderViewportContent()); !strings.Contains(text, "Filter available models...") {
+	if text := ansi.Strip(m.renderViewportContent()); !strings.Contains(text, "ctrl+f to filter models") {
 		t.Fatalf("picker should render its search box:\n%s", text)
 	}
 
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if m.cursor != 1 || m.modelSearch.Value() != "" {
+		t.Fatalf("unfocused j should move down: cursor=%d query=%q", m.cursor, m.modelSearch.Value())
+	}
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	if m.cursor != 0 {
+		t.Fatalf("unfocused k should move up: cursor=%d", m.cursor)
+	}
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlF})
 	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	if m.modelSearch.Value() != "j" || len(m.modelChoices) != 1 || m.modelChoices[0].id != "j-model" {
 		t.Fatalf("j should filter instead of moving the cursor: query=%q choices=%v cursor=%d", m.modelSearch.Value(), m.modelChoices, m.cursor)
@@ -1458,16 +1467,16 @@ func TestTUIModelPickerSearchAndEscape(t *testing.T) {
 	}
 
 	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
-	if m.mode != viewModels || m.modelSearch.Value() != "" || len(m.modelChoices) != 3 {
-		t.Fatalf("first esc should clear search only: mode=%v query=%q choices=%v", m.mode, m.modelSearch.Value(), m.modelChoices)
+	if m.mode != viewModels || m.modelSearch.Focused() || m.modelSearch.Value() != "k" {
+		t.Fatalf("first esc should only unfocus the field: mode=%v query=%q", m.mode, m.modelSearch.Value())
 	}
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
-	if m.cursor != 1 {
-		t.Fatalf("down arrow should move the selection: cursor=%d", m.cursor)
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if m.modelSearch.Value() != "k" || m.cursor != 0 {
+		t.Fatalf("unfocused j must navigate, not type: query=%q cursor=%d", m.modelSearch.Value(), m.cursor)
 	}
 	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
 	if m.mode != viewChat {
-		t.Fatalf("esc on empty search should close the picker: mode=%v", m.mode)
+		t.Fatalf("esc without field focus should close the picker: mode=%v", m.mode)
 	}
 }
 
@@ -2234,7 +2243,7 @@ func TestPickerViewsHideChatboxAndFooter(t *testing.T) {
 		if strings.Contains(out, "Type a message") {
 			t.Fatalf("%v should hide the chatbox:\n%s", mode, out)
 		}
-		if strings.Contains(out, "/help for keys and commands") {
+		if strings.Contains(out, footerDir()) {
 			t.Fatalf("%v should hide the footer:\n%s", mode, out)
 		}
 		lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
@@ -2502,5 +2511,42 @@ func TestTUICopyLastReply(t *testing.T) {
 	_, _ = m.Update(click)
 	if got != "" {
 		t.Fatalf("click off the copy row copied: %q", got)
+	}
+}
+
+// TestTUIModelPickerCachesAndRefreshesInPlace: the first open fetches and
+// caches; the next open renders from the cache and a debounced live refresh
+// swaps the catalog in without moving the cursor or search text.
+func TestTUIModelPickerCachesAndRefreshesInPlace(t *testing.T) {
+	m, statePath := newTestModelWithConfig(t, "model = \"m\"\nbase_url = \"https://unused\"\n")
+	cache := modelsCachePathFor(statePath)
+	if err := saveModelsCache(cache, []string{"glm-5.3", "kimi-k3", "qwen-4"}); err != nil {
+		t.Fatal(err)
+	}
+	cmd := m.openModelPicker("")
+	if cmd == nil || len(readModelsCache(cache)) != 3 {
+		t.Fatalf("cmd=%v cache=%v", cmd, readModelsCache(cache))
+	}
+	_, _ = m.Update(modelsLoadedMsg{ids: readModelsCache(cache)})
+	if m.mode != viewModels || len(m.modelChoices) != 3 {
+		t.Fatalf("mode=%v choices=%v", m.mode, m.modelChoices)
+	}
+	m.cursor = 1 // kimi-k3
+	_, cmd = m.Update(modelsRefreshMsg{filter: ""})
+	if cmd == nil {
+		t.Fatal("refresh must start a fetch while the picker is open")
+	}
+	_, _ = m.Update(modelsLoadedMsg{ids: []string{"aaa-1", "glm-5.3", "kimi-k3", "qwen-4"}, refresh: true})
+	if len(m.modelChoices) != 4 || m.modelChoices[m.cursor].id != "kimi-k3" {
+		t.Fatalf("cursor must follow kimi-k3: cursor=%d choices=%v", m.cursor, m.modelChoices)
+	}
+	// Closed picker: no fetch, no resurrection.
+	m.show(viewChat)
+	if _, cmd = m.Update(modelsRefreshMsg{filter: ""}); cmd != nil {
+		t.Fatal("refresh must be skipped once the picker is closed")
+	}
+	_, _ = m.Update(modelsLoadedMsg{ids: []string{"x"}, refresh: true})
+	if m.mode != viewChat {
+		t.Fatalf("mode=%v", m.mode)
 	}
 }

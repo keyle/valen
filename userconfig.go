@@ -19,11 +19,12 @@ import (
 var defaultConfigTOML string
 
 const (
-	userConfigName     = "config.toml"
-	userConfigOrigName = "config-ori.toml"
-	userStateName      = "state.json"
-	userFavouritesName = "favourites.yaml"
-	userAgentsName     = "AGENTS.md"
+	userConfigName      = "config.toml"
+	userConfigOrigName  = "config-ori.toml"
+	userStateName       = "state.json"
+	userFavouritesName  = "favourites.yaml"
+	userModelsCacheName = "models.json"
+	userAgentsName      = "AGENTS.md"
 	// maxUserAgentsBytes caps the sideloaded AGENTS.md so a huge file cannot
 	// blow up every request.
 	maxUserAgentsBytes = 32768
@@ -213,6 +214,59 @@ func favouritesPathFor(statePath string) string {
 		return ""
 	}
 	return filepath.Join(filepath.Dir(statePath), userFavouritesName)
+}
+
+// modelsCachePathFor returns the picker's model-list cache beside the state
+// file, or "" when there is no state path (no caching, like favourites).
+func modelsCachePathFor(statePath string) string {
+	if statePath == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(statePath), userModelsCacheName)
+}
+
+// readModelsCache loads the cached model IDs (a JSON array); any problem
+// yields nil so the picker just fetches live.
+func readModelsCache(path string) []string {
+	if path == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var ids []string
+	if json.Unmarshal(raw, &ids) != nil {
+		return nil
+	}
+	return ids
+}
+
+// saveModelsCache writes the IDs atomically; best effort for the caller.
+func saveModelsCache(path string, ids []string) error {
+	if path == "" || len(ids) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".models-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(raw); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // parseFavouriteLine reads one YAML list item ("- glm-5.3"), tolerating

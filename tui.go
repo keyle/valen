@@ -277,7 +277,18 @@ type modelsLoadedMsg struct {
 	ids    []string
 	err    error
 	filter string
+	// refresh marks a background update of an already-open picker: swap the
+	// catalog in place, keeping search text and cursor.
+	refresh bool
 }
+
+// modelsRefreshMsg fires modelsRefreshDelay after the picker opened from the
+// cache; the fetch only runs if that same picker is still showing.
+type modelsRefreshMsg struct{ filter string }
+
+// modelsRefreshDelay debounces the live fetch when the picker already has
+// cached content, so a quick switch between known models never hits the net.
+const modelsRefreshDelay = 5 * time.Second
 
 // usageMsg carries the OpenCode Go plan quota snapshot into the UI thread.
 type usageMsg struct {
@@ -457,7 +468,7 @@ func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session 
 	ta.Focus()
 
 	search := textinput.New()
-	search.Placeholder = "Filter available models..."
+	search.Placeholder = "ctrl+f to filter models"
 	search.Prompt = ""
 	search.CharLimit = 0
 	search.Width = 52
@@ -1218,7 +1229,7 @@ func (m *tuiModel) show(mode viewMode) {
 	} else {
 		m.input.Blur()
 		if mode == viewModels {
-			m.modelSearch.Focus()
+			m.modelSearch.Blur() // ctrl+f focuses it; j/k/space work until then
 		} else {
 			m.modelSearch.Blur()
 		}
@@ -1562,9 +1573,25 @@ func (m *tuiModel) openModelPicker(filter string) tea.Cmd {
 	m.modelFilter = filter
 	m.modelLoadFilter = filter
 	m.modelSearch.SetValue(filter)
+	// Cached list: open instantly from disk and refresh live after a debounce
+	// (see modelsRefreshMsg), since most opens just switch between known models.
+	if cached := readModelsCache(modelsCachePathFor(m.statePath)); len(cached) > 0 {
+		return tea.Batch(
+			func() tea.Msg { return modelsLoadedMsg{ids: cached, filter: filter} },
+			tea.Tick(modelsRefreshDelay, func(time.Time) tea.Msg { return modelsRefreshMsg{filter: filter} }),
+		)
+	}
+	return m.fetchModelsCmd(filter, false)
+}
+
+// fetchModelsCmd fetches the live catalogs off the UI thread and, when the Go
+// list succeeded, stores them in the cache. refresh marks a background update
+// of an open picker.
+func (m *tuiModel) fetchModelsCmd(filter string, refresh bool) tea.Cmd {
 	cfg := m.cfg
 	goKey := effectiveOpenCodeKey(cfg, m.apiKey)
 	orKey := effectiveOpenRouterKey(cfg)
+	cachePath := modelsCachePathFor(m.statePath)
 	client := m.client
 	if client == nil && goKey != "" {
 		client = newClient(cfg, goKey)
@@ -1592,8 +1619,39 @@ func (m *tuiModel) openModelPicker(filter string) tea.Cmd {
 			orIDs = prefixedOpenRouterFallback()
 		}
 		ids = append(ids, orIDs...)
-		return modelsLoadedMsg{ids: ids, err: err, filter: filter}
+		if err == nil {
+			_ = saveModelsCache(cachePath, ids)
+		}
+		return modelsLoadedMsg{ids: ids, err: err, filter: filter, refresh: refresh}
 	}
+}
+
+// applyModelsRefresh swaps a freshly fetched catalog into the open picker,
+// keeping the search text and the cursor on the same model.
+func (m *tuiModel) applyModelsRefresh(ids []string) {
+	var cursorID string
+	if m.cursor >= 0 && m.cursor < len(m.modelChoices) {
+		cursorID = m.modelChoices[m.cursor].id
+	}
+	ids = append([]string(nil), ids...)
+	sort.Strings(ids)
+	m.modelCatalog = m.modelCatalog[:0]
+	for _, id := range ids {
+		m.modelCatalog = append(m.modelCatalog, modelChoice{id: id, current: id == m.cfg.Model, transport: modelTransport(id)})
+	}
+	m.modelFilter = m.modelSearch.Value()
+	m.filterModelChoices()
+	for i, c := range m.modelChoices {
+		if c.id == cursorID {
+			m.cursor = i
+			break
+		}
+	}
+	if m.cursor >= len(m.modelChoices) {
+		m.cursor = max(len(m.modelChoices)-1, 0)
+	}
+	m.refreshViewport()
+	m.ensureCursorVisible()
 }
 
 // filterModelChoices rebuilds the visible model rows from the full catalog and
@@ -1628,8 +1686,8 @@ func (m *tuiModel) isFavourite(id string) bool {
 }
 
 // toggleFavourite stars or unstars the highlighted model, persists the set
-// and re-sorts the list, keeping the cursor on the same model. Ctrl+F drives
-// it; Enter stays selection.
+// and re-sorts the list, keeping the cursor on the same model. Space drives
+// it (when the search field is unfocused); Enter stays selection.
 func (m *tuiModel) toggleFavourite() {
 	if m.cursor < 0 || m.cursor >= len(m.modelChoices) {
 		return
@@ -2009,9 +2067,22 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case usageTickMsg:
 		return m, tea.Batch(m.fetchQuotaCmd(), usageTick())
 
+	case modelsRefreshMsg:
+		if m.mode != viewModels || msg.filter != m.modelLoadFilter {
+			return m, nil // picker closed or replaced; the next open reschedules
+		}
+		return m, m.fetchModelsCmd(msg.filter, true)
+
 	case modelsLoadedMsg:
 		if msg.filter != m.modelLoadFilter {
 			return m, nil // stale fetch; a newer picker request is in flight
+		}
+		if msg.refresh {
+			// Background update: only a still-open picker, only live data.
+			if m.mode == viewModels && msg.err == nil && len(msg.ids) > 0 {
+				m.applyModelsRefresh(msg.ids)
+			}
+			return m, nil
 		}
 		ids := msg.ids
 		if msg.err != nil || len(ids) == 0 {
@@ -2511,13 +2582,8 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.handleAskKey(s)
 		}
 		if m.mode == viewModels {
-			if strings.TrimSpace(m.modelSearch.Value()) != "" {
-				m.modelSearch.SetValue("")
-				m.modelFilter = ""
-				m.filterModelChoices()
-				m.cursor = 0
-				m.refreshViewport()
-				m.viewport.GotoTop()
+			if m.modelSearch.Focused() {
+				m.modelSearch.Blur() // keep the query, just leave the field
 				return m, nil
 			}
 			m.show(viewChat)
@@ -2711,6 +2777,18 @@ func (m *tuiModel) ensureCursorVisible() {
 
 func (m *tuiModel) handleOverlayKey(msg tea.KeyMsg, s string) (tea.Model, tea.Cmd) {
 	if m.mode == viewModels {
+		focused := m.modelSearch.Focused()
+		if !focused {
+			switch s {
+			case "j":
+				s = "down"
+			case "k":
+				s = "up"
+			case " ":
+				m.toggleFavourite()
+				return m, nil
+			}
+		}
 		switch s {
 		case "up":
 			if m.cursor > 0 {
@@ -2729,10 +2807,7 @@ func (m *tuiModel) handleOverlayKey(msg tea.KeyMsg, s string) (tea.Model, tea.Cm
 		case "enter":
 			return m, m.openSelected()
 		case "ctrl+f":
-			// Ctrl+F stars the highlighted model; Enter keeps selecting.
-			// A printable key would be swallowed before the search box sees
-			// it, so the toggle needs a modifier.
-			m.toggleFavourite()
+			m.modelSearch.Focus()
 			return m, nil
 		case "pgup", "pgdown":
 			if s == "pgup" {
@@ -2740,6 +2815,9 @@ func (m *tuiModel) handleOverlayKey(msg tea.KeyMsg, s string) (tea.Model, tea.Cm
 			} else {
 				m.viewport.PageDown()
 			}
+			return m, nil
+		}
+		if !focused {
 			return m, nil
 		}
 		old := m.modelSearch.Value()
@@ -3038,8 +3116,22 @@ func (m *tuiModel) inputView() string {
 	return style.Render(m.input.View())
 }
 
+// footerDir is the workdir shown in the footer, with $HOME shortened to ~.
+func footerDir() string {
+	dir := getFileRoot()
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if dir == home {
+			return "~"
+		}
+		if strings.HasPrefix(dir, home+string(filepath.Separator)) {
+			return "~" + dir[len(home):]
+		}
+	}
+	return dir
+}
+
 func (m *tuiModel) footerView() string {
-	hint := "/help for keys and commands"
+	hint := footerDir()
 	// The Go plan quota only applies to Go models: on openrouter/… models it
 	// stays hidden and the footer shows the OpenRouter balance instead (when
 	// the credits fetch has landed — plain API keys 403, so the footer stays
@@ -4269,7 +4361,7 @@ func (m *tuiModel) renderModelsList() string {
 
 	var b strings.Builder
 	b.WriteString(searchBox + "\n\n")
-	b.WriteString(metaStyle.Render("Models — ↑/↓ select · enter switches · ctrl+f favourites · esc clears, go back") + "\n\n")
+	b.WriteString(metaStyle.Render("Models — ↑/↓/j/k select · enter switches · space favourites · ctrl+f filter · esc back") + "\n\n")
 	if len(m.modelChoices) == 0 {
 		query := strings.TrimSpace(m.modelFilter)
 		if query == "" {
@@ -4379,7 +4471,7 @@ Keys
   ctrl+o details · ctrl+p/ctrl+m model · ctrl+n new session · ctrl+t thinking level (cycles low→high, wraps) · ctrl+s save · ctrl+q quit · ctrl+c/ctrl+d cancel · clear input · quit
   ↑ on an empty chatbox reloads your last prompt: edit it and enter resends from there
   in lists: ↑↓ move · enter open · esc back
-  /model picker: type to filter · ↑↓ select · enter switches · ctrl+f stars/unstars favourites (kept on top) · esc clears search, then backs
+  /model picker: ↑↓/j/k select · enter switches · space stars/unstars favourites (kept on top) · ctrl+f filters (esc leaves the field, then backs)
 
 Modes
    WORK (green chatbox) — default: the agent can read, edit, write and run commands.
@@ -4401,7 +4493,7 @@ minute and after every turn: dim normally, yellow past 80%, pink at the cap.
 
 Models persist to ~/.config/valen/state.json, so the last switch sticks across runs.
 Favourites live beside it in ~/.config/valen/favourites.yaml (a plain list) and
-show with a ★ at the top of the picker; ctrl+f toggles them there.
+show with a ★ at the top of the picker; space toggles them there.
 Thinking levels depend on the model (see /effort picker): muse-spark takes
 minimal/low/medium/high/xhigh, gpt/grok take low…max, glm/deepseek take
 low/high/max or high/max, kimi-k3 is max-only, toggle models take none/high.

@@ -68,7 +68,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
  ╭───────────────────────────────────╮
  │ Type a message…                   │
  ╰───────────────────────────────────╯
- /help for keys and commands                          5h 90% ↻38m · 7d 36%
+ ~/Code/valen                                         5h 90% ↻38m · 7d 36%
 ```
 
 - Header: ` ✦ valen  ·  <model>  ·  <session title>  ·  alt+m select` — the
@@ -307,7 +307,8 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
   fetches the live catalogs — OpenCode Go (`GET {base_url}/models`), OpenCode
   Zen (`GET https://opencode.ai/zen/v1/models`, same OpenCode key as Go) plus
   OpenRouter (`GET https://openrouter.ai/api/v1/models`) — and opens
-  a picker: ↑↓ move, Enter switches, Space stars/unstars, Esc backs out. The
+  a picker: ↑↓ move, Enter switches, Space stars/unstars, j/k also move, Ctrl+F focuses the search field (ghost hint
+  "ctrl+f to filter models"; Esc unfocuses it, a second Esc backs out). The
   picker search box is
   pinned to the full content width (like the chatbox) so typing never resizes
   it. All three providers list even
@@ -318,11 +319,16 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
   provider prefix (`go/…`, `zen/…`, `openrouter/…`); Go and Zen transports
   (`/chat`, `/responses`, `/messages`) are marked, OpenRouter rows always
   converse over its OpenAI-compatible chat endpoint.
+- The merged list is cached at `~/.config/valen/models.json` (beside
+  `state.json`). With a cache the picker opens instantly from it and, if still
+  open 5 seconds later, fetches live and swaps the catalog in place (search
+  text and cursor row kept). Without one it fetches first, then writes it.
+  No state path means no cache.
 - Favourites are a plain YAML list (`- glm-5.3`, OpenRouter IDs keep their
   `openrouter/…` prefix) at
   `~/.config/valen/favourites.yaml` (`$XDG_CONFIG_HOME/valen/`). Starred
   models sort to the top of the picker with a ★, alphabetically within each
-  group, and the cursor stays on the toggled row. Ctrl+F writes the file;
+  group, and the cursor stays on the toggled row. Space writes the file;
   without a state path (tests, `-config <file>`) favourites are session-only.
 - `/model <filter>` switches directly on an exact or unique-substring match,
   otherwise opens the filtered picker. `/model <known-id>` works offline.

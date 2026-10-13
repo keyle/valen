@@ -106,7 +106,7 @@ func TestTUIUsageMsgAndFooter(t *testing.T) {
 		t.Fatal("usage should survive a failed refresh")
 	}
 	// Narrow terminals fall back to the rolling window only.
-	m.width = 60
+	m.width = 50
 	if footer := m.footerView(); strings.Contains(footer, "30d") {
 		t.Fatalf("narrow footer should drop weekly/monthly:\n%s", footer)
 	}
@@ -210,8 +210,8 @@ func TestTUIFooterHidesGoUsageOnOpenRouter(t *testing.T) {
 	if footer := m.footerView(); strings.Contains(footer, "5h") || strings.Contains(footer, "90%") {
 		t.Fatalf("OpenRouter footer must hide Go usage:\n%s", footer)
 	}
-	if footer := m.footerView(); !strings.Contains(footer, "/help for keys and commands") {
-		t.Fatalf("hint must remain:\n%s", footer)
+	if footer := m.footerView(); !strings.Contains(footer, footerDir()) {
+		t.Fatalf("workdir must remain:\n%s", footer)
 	}
 	// A failed credits refresh keeps the footer clean (or keeps the last
 	// good balance).
