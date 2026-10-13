@@ -20,6 +20,12 @@ tag:
 	next=$$(echo $$current | awk -F. 'BEGIN { OFS = "." } { $$NF = $$NF + 1; print }'); \
 	echo "current tag: $$current"; \
 	echo "next tag:    $$next"; \
+	echo "tidying..."; \
+	go mod tidy || { echo "go mod tidy failed"; exit 1; }; \
+	git diff --quiet go.mod go.sum || { echo "go mod tidy changed go.mod/go.sum: commit them first"; exit 1; }; \
+	echo "linting..."; \
+	test -z "$$(gofmt -l .)" || { echo "gofmt needed:"; gofmt -l .; exit 1; }; \
+	go vet ./... || { echo "vet failed"; exit 1; }; \
 	echo "building..."; \
 	go build ./... || { echo "build failed"; exit 1; }; \
 	echo "testing..."; \
