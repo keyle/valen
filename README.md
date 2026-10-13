@@ -57,9 +57,10 @@ Config is seeded on first run at `~/.config/valen/config.toml`. See
 
 - **Platforms:** macOS and Linux only. Other OSes (including Windows) fail to
   build rather than run shell commands unsandboxed.
-- **Agents:** subagents run in the foreground, one at a time. There are no
-  background or concurrent agents. Only read-only tool calls within a single
-  model turn run in parallel.
+- **Agents:** subagents run in the foreground, nest one level deep, and up to 5
+  `task` calls in one model turn run in parallel. There are no background
+  agents. `write`/`edit` lock per file; `shell` writes are not locked, so
+  parallel tasks should work on separate files.
 - **Shell safety:** the command prompts (`git push`, `rm -r`, `sudo`, ...) are a
   best-effort speed bump. The OS sandbox is the real boundary.
 - **Providers:** OpenCode Go/Zen and OpenRouter only.

@@ -17,14 +17,15 @@ import (
 // 16k per result. A subagent runs the same tool loop in an isolated history
 // and only its final summary folds into the main turn, so research costs one
 // registry-capped tool result instead of rounds × full outputs. Foreground-only:
-// no background execution (deferred); max nesting depth 2.
+// no background execution (deferred); max nesting depth 1. Several task calls
+// in one round run concurrently (cap maxParallelTasks).
 
 const (
 	// taskMaxRounds caps subagent loops so a flailing delegate can't burn
 	// the session's whole round budget.
 	taskMaxRounds = 25
 	// taskMaxDepth caps task-in-task nesting (general delegates only).
-	taskMaxDepth = 2
+	taskMaxDepth = 1
 )
 
 type taskDepthKey struct{}
@@ -62,7 +63,7 @@ func taskSystem(kind string) string {
 func TaskTool(exec func(ctx context.Context, prompt, kind string) (string, error)) Tool {
 	return Tool{
 		Name:        "task",
-		Description: "Delegate a self-contained subtask to a same-model subagent and get back a summary. Only the summary lands in main history, keeping exploration out of the main context. Kinds: explore (read-only research: glob/grep/read/web) for locating code and facts; general (may read, write, edit, run shell) for carrying out one bounded step. Pass a specific prompt with the goal, scope, and what to return. Max nesting depth 2.",
+		Description: "Delegate a self-contained subtask to a same-model subagent and get back a summary. Only the summary lands in main history, keeping exploration out of the main context. Kinds: explore (read-only research: glob/grep/read/web) for locating code and facts; general (may read, write, edit, run shell) for carrying out one bounded step. Pass a specific prompt with the goal, scope, and what to return. Several task calls in one round run in parallel (max 5): give each a distinct read scope or a distinct part of the codebase. Subagents cannot delegate further.",
 		Schema:      json.RawMessage(`{"type":"object","properties":{"description":{"type":"string","description":"short label for the subtask"},"prompt":{"type":"string","description":"self-contained subtask prompt: goal, scope, what to return"},"subagent_type":{"type":"string","description":"explore (default) or general"}},"required":["prompt"]}`),
 		Fn: func(ctx context.Context, args string) (string, error) {
 			var a struct {

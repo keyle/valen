@@ -38,7 +38,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `think.go` | Splits `<think>` blocks out of replies so the UI can collapse them |
 | `tools.go` | Tool contract, ordered registry, builtin loader, output limits, `shell` |
 | `todos.go` | Session plan (`todowrite`/`todoread`, opencode schema, in-memory + session fold) |
-| `task.go` | Foreground-only `task` subagent (explore/general, isolated history, depth ≤2) |
+| `task.go` | Foreground-only `task` subagent (explore/general, isolated history, depth 1) |
 | `sandbox*.go`, `shellgate.go` | Shell sandbox: policy in `sandbox.go`, `sandbox-exec` (macOS), `bwrap` (Linux), other OSes fail to compile; once-per-session prompts for network and destructive commands |
 | `files.go` | File builtins (`read`, `write`, `edit`, `glob`, `grep`): workdir sandbox, outside-access approval, glob matching |
 | `ask.go` | `AskUserQuestion` contract, headless prompting/confirmation, answer formatting |
@@ -211,8 +211,11 @@ backstop stays terminal there.
   No synthetic batching/act/claim nudges or final no-tools recovery rounds
   are inserted. Legacy notices are stripped when entering the loop.
 - Only batches consisting entirely of known read-only builtins (`read`,
-  `glob`, `grep`, `web_search`, `web_fetch`) overlap, with at most 8 running.
-  Any mutating, interactive, stateful, MCP, `task`, or unknown tool makes the
+  `glob`, `grep`, `web_search`, `web_fetch`) and `task` overlap, with at most
+  8 non-task calls and 5 `task` subagents running (the rest queue). `write`
+  and `edit` serialize per canonical path, so parallel subagents cannot lose
+  each other's updates; `shell` writes are not locked (the prompts warn).
+  Any mutating, interactive, stateful, MCP, or unknown tool makes the
   whole batch execute serially in request order. File-access approvals also
   serialize. Parallel `tool_start` events emit in request order;
   `tool_result` events emit as calls complete, matched by call ID. History
@@ -315,7 +318,7 @@ Rules the registry enforces:
 | `edit` | `path`, `oldString`, `newString`, `replaceAll` | Exact-string replace; refuses ambiguous multi-matches unless `replaceAll` |
 | `glob` | `pattern`, `path` | Recursive file list supporting `*`/`?`/`[...]`/`**`; top-level subtrees walk in parallel, results sorted; skips `.git` plus dependency/build dirs (`node_modules`, `target`, `dist`, `build`, `bin`, `vendor`, `.venv`/`venv`, `__pycache__`, `.next`, `out`, `coverage`) |
 | `grep` | `pattern`, `path`, `include` | Go regexp content search as `file:line: text`, sorted by file then line; directory walk collects candidates while file reads/matches run on a bounded worker pool (8); skips dependency/build dirs (same list as `glob`)/binaries/>1 MiB files, capped at 100 matches (max 20 per file, so one noisy file can't starve others) |
-| `task` | `prompt`, `subagent_type` (`explore`/`general`), `description` | Foreground-only subagent inheriting current turn config and `effectiveSystem` plus kind-specific instructions, with isolated history (explore: read-only subset; general: file+shell subset, no ask/todo/task). At most 25 rounds, depth ≤2; only the visible final answer folds into main history. Always registered like `AskUserQuestion` |
+| `task` | `prompt`, `subagent_type` (`explore`/`general`), `description` | Foreground-only subagent inheriting current turn config and `effectiveSystem` plus kind-specific instructions, with isolated history (explore: read-only subset; general: file+shell subset, no ask/todo/task). At most 25 rounds, depth 1 (subagents cannot delegate); several `task` calls in one round run concurrently, at most 5; only the visible final answer folds into main history. Always registered like `AskUserQuestion` |
 | `AskUserQuestion` | `questions[]` | Presents each question with options plus type-your-own, confirms all answers, and returns `User has answered your questions: ...` |
 | `todowrite` | `todos[]` (`content`, `status`: `pending`/`in_progress`/`completed`/`cancelled`, `priority`: `high`/`medium`/`low`) | Replaces the in-memory session plan (opencode schema); the call records fold into the session JSONL, `/clear`/`/new` reset it, resume restores the last plan. The model must call it FIRST before any file reads/edits on 3+ step tasks and update it after each step: one `in_progress` at a time, mark `completed` only after verification |
 | `todoread` | — | Returns the current session plan as JSON (`[]` when empty) |

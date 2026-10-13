@@ -233,7 +233,7 @@ func TestToolBatchCancellationWhileWaiting(t *testing.T) {
 }
 
 func TestToolBatchPotentialWritesStaySerial(t *testing.T) {
-	for _, name := range []string{"write", "edit", "shell", "todowrite", "todoread", "task", "unknown", "server__tool"} {
+	for _, name := range []string{"write", "edit", "shell", "todowrite", "todoread", "unknown", "server__tool"} {
 		t.Run(name, func(t *testing.T) {
 			r := NewRegistry()
 			step := 0

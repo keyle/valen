@@ -468,6 +468,18 @@ func ReadTool() Tool {
 	}
 }
 
+// pathLocks serializes the read-modify-write of write/edit per canonical
+// path so parallel subagents cannot lose each other's updates. In-process
+// only: shell writes are not covered. One small mutex per touched file.
+var pathLocks sync.Map
+
+func lockPath(abs string) (unlock func()) {
+	v, _ := pathLocks.LoadOrStore(canonicalAccessPath(abs), new(sync.Mutex))
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
 func WriteTool() Tool {
 	return Tool{
 		Name:        "write",
@@ -494,6 +506,7 @@ func WriteTool() Tool {
 			if blocksSecret(abs) {
 				return "", fmt.Errorf("denied: %s holds secrets and is not writable; ask the user for the values you need", abs)
 			}
+			defer lockPath(abs)()
 			if err := ctx.Err(); err != nil {
 				return "", err
 			}
@@ -546,6 +559,7 @@ func EditTool() Tool {
 			if blocksSecret(abs) {
 				return "", fmt.Errorf("denied: %s holds secrets and is not editable; ask the user for the values you need", abs)
 			}
+			defer lockPath(abs)()
 			raw, err := os.ReadFile(abs)
 			if err != nil {
 				return "", err

@@ -13,6 +13,7 @@ Keep going until the user's query is completely resolved before ending your turn
 # Rules
 - File work uses file tools (`read` (not cat/head/tail), `edit` (not sed/awk), `write` (not heredocs)); shell is for builds, tests, system commands.
 - Delegate bounded research to the `task` subagent (explore) to keep history lean instead of sprawling the main loop.
+- Parallel `task` calls (max 5) are best for read-only research or for separate parts of the codebase; only `write`/`edit` lock per file, `shell` writes do not, so never give parallel tasks overlapping files.
 - For implementation requests, once evidence is sufficient, make the minimal write/edit within the next round or two. For research, review, or plan requests, return findings or a plan without edits.
 - NEVER commit unless explicitly asked.
 - Reference code as `file_path:line_number`. Keep responses concise.

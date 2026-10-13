@@ -676,6 +676,10 @@ func chatSendMessages(history []openai.ChatCompletionMessage) []openai.ChatCompl
 // many run at once.
 const maxParallelTools = 8
 
+// maxParallelTasks bounds concurrent subagents in one round; extra task calls
+// queue. Each is a full provider loop, so the cap guards rate limits.
+const maxParallelTasks = 5
+
 // loopFingerprint identifies a tool call for repeat detection: same tool
 // with the same (normalized) arguments doing the same work.
 func loopFingerprint(tc openai.ToolCall) string {
@@ -792,8 +796,10 @@ func checkContextBudget(cfg Config, history []openai.ChatCompletionMessage, tool
 	return nil
 }
 
-// Only known read-only builtins may overlap. Mutating, interactive and unknown
-// tools run serially; the registry owns its central gates (including MCP).
+// Only known read-only builtins and task subagents may overlap. Mutating,
+// interactive and unknown tools run serially; the registry owns its central
+// gates (including MCP). Subagent file writes are safe via the per-path lock
+// in write/edit; shell writes are not covered (the prompt says so).
 // The coordinator emits results as completed, but history stays request-ordered.
 func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCall, onEvent func(Event)) []openai.ChatCompletionMessage {
 	if len(calls) == 0 {
@@ -801,7 +807,7 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 	}
 	for _, tc := range calls {
 		switch tc.Function.Name {
-		case "read", "glob", "grep", "web_search", "web_fetch":
+		case "read", "glob", "grep", "web_search", "web_fetch", "task":
 		default:
 			return runToolCallsSerial(ctx, registry, calls, onEvent)
 		}
@@ -823,15 +829,21 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 	results := make(chan result, len(calls))
 	out := make([]openai.ChatCompletionMessage, len(calls))
 	sem := make(chan struct{}, maxParallelTools)
+	taskSem := make(chan struct{}, maxParallelTasks)
 	for i, tc := range calls {
 		go func(i int, tc openai.ToolCall) {
+			// Subagents queue on their own cap and skip the read-tool slots.
+			s := sem
+			if tc.Function.Name == "task" {
+				s = taskSem
+			}
 			select {
-			case sem <- struct{}{}:
+			case s <- struct{}{}:
 			case <-ctx.Done():
 				results <- result{i, "error: " + ctx.Err().Error(), 0}
 				return
 			}
-			defer func() { <-sem }()
+			defer func() { <-s }()
 			t0 := time.Now()
 			var output string
 			if err := ctx.Err(); err != nil {

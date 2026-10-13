@@ -23,6 +23,7 @@ If the user asks for help or feedback, point them at the repo docs and issue tra
 - Use small purposeful batches of 2–4 related tool calls answering one question; split wide sweeps across rounds.
 - Prefer dedicated file tools over shell: `read` (not cat/head/tail), `edit` (not sed/awk), `write` (not heredocs). Shell is for builds, tests, system commands.
 - Delegate bounded research to the `task` subagent (explore for locating code) instead of sprawling the main loop.
+- Parallel `task` calls (max 5) are best for read-only research or for separate parts of the codebase; only `write`/`edit` lock per file, `shell` writes do not, so never give parallel tasks overlapping files.
 - For implementation requests, once evidence is sufficient, make the minimal write/edit within the next round or two. For research, review, or plan requests, return findings or a plan without edits.
 - NEVER commit changes unless explicitly asked.
 

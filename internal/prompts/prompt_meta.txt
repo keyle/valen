@@ -34,6 +34,7 @@ Use the instructions below and the tools available to assist the user.
 
 # Tool Use — Task
 - Delegate bounded research to the `task` subagent (explore for locating code, general for one step) instead of sprawling the main loop. This keeps main history lean.
+- Parallel `task` calls (max 5) are best for read-only research or for separate parts of the codebase; only `write`/`edit` lock per file, `shell` writes do not, so never give parallel tasks overlapping files.
 
 # Tool Use — Parallelism
 - Emit independent calls together so they run in parallel. Sequential only when one call needs another's output. Never guess missing parameters.
