@@ -3134,7 +3134,7 @@ func (m *tuiModel) renderChat() string {
 	committed := m.committedTurns(w)
 	if m.pendingPrompt == "" {
 		if m.lastReply() != "" {
-			committed += "\n\n" + strings.Repeat(" ", max(w-len(copyLabel)-2, 0)) + copyStyle.Render(copyLabel)
+			committed += "\n\n" + strings.Repeat(" ", max(m.contentWidth()-len(copyLabel), 0)) + copyStyle.Render(copyLabel)
 		}
 		return committed
 	}
