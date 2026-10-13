@@ -192,8 +192,8 @@ func TestWritableRootsContents(t *testing.T) {
 }
 
 func TestAncestorDirs(t *testing.T) {
-	got := ancestorDirs([]string{"/Users/n/Code/valen", "/tmp", "/Users/n/go"})
-	want := []string{"/Users", "/Users/n", "/Users/n/Code"}
+	got := ancestorDirs([]string{"/home/user/code/valen", "/tmp", "/home/user/go"})
+	want := []string{"/home", "/home/user", "/home/user/code"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("got %v, want %v", got, want)
 	}

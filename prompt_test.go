@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/keyle/valen/internal/prompts"
 	"github.com/mark3labs/mcp-go/mcp"
-	"valen/internal/prompts"
 )
 
 // effectiveSystem wires Config to the prompts package: family file, env

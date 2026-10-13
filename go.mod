@@ -1,4 +1,4 @@
-module valen
+module github.com/keyle/valen
 
 go 1.27.1
 

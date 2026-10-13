@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/keyle/valen/internal/prompts"
 	"github.com/sashabaranov/go-openai"
-	"valen/internal/prompts"
 )
 
 const (

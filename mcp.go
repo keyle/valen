@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/keyle/valen/internal/prompts"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
-	"valen/internal/prompts"
 )
 
 const (

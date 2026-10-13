@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/keyle/valen/internal/dvlog"
+	"github.com/keyle/valen/internal/guard"
 	"github.com/sashabaranov/go-openai"
-	"valen/internal/dvlog"
-	"valen/internal/guard"
 )
 
 // compaction.go: summary-mode compaction, send-side only (disk JSONL stays

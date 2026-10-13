@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"valen/internal/prompts"
+	"github.com/keyle/valen/internal/prompts"
 )
 
 // files.go: local file builtins (read, write, edit, glob, grep) scoped to a

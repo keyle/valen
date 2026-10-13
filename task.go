@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/keyle/valen/internal/prompts"
 	"github.com/sashabaranov/go-openai"
-	"valen/internal/prompts"
 )
 
 // task.go: foreground-only subagent delegation (opencode-style `task`).

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/keyle/valen/internal/guard"
 	"github.com/sashabaranov/go-openai"
-	"valen/internal/guard"
 )
 
 func compactTestConfig(srvURL string) Config {

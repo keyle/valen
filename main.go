@@ -18,10 +18,10 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/keyle/valen/internal/dvlog"
+	"github.com/keyle/valen/internal/guard"
+	"github.com/keyle/valen/internal/prompts"
 	"github.com/sashabaranov/go-openai"
-	"valen/internal/dvlog"
-	"valen/internal/guard"
-	"valen/internal/prompts"
 )
 
 const (
@@ -45,7 +45,7 @@ var version = "dev"
 // userAgent identifies valen to the OpenCode APIs: an honest SDK string,
 // not a spoofed browser — Go's TLS fingerprint doesn't match Safari anyway,
 // so a Safari UA to an API looks more bot-like, not less.
-var userAgent = "valen/" + version + " (opencode-compatible agent harness)"
+var userAgent = "github.com/keyle/valen/" + version + " (opencode-compatible agent harness)"
 
 // browserUserAgent is only for web_search/web_fetch, where the scraped
 // sites' bot defenses expect a browser.

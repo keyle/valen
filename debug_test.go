@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/keyle/valen/internal/dvlog"
 	"github.com/sashabaranov/go-openai"
-	"valen/internal/dvlog"
 )
 
 // withDvLog redirects the trace for one test and restores it after.

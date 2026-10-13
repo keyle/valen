@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"valen/internal/dvlog"
+	"github.com/keyle/valen/internal/dvlog"
 )
 
 // Shared streaming layer for the three transports.

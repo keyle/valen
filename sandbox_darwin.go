@@ -86,9 +86,9 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 		fmt.Fprintf(&prof, "(allow file-read* (%s (param \"R%d\")))\n", kind, i)
 		defs = append(defs, "-D", fmt.Sprintf("R%d=%s", i, p.ReadOnly[i]))
 	}
-	// Tools like git and go lstat every parent of the workdir (/Users/n, ...).
+	// Tools like git and go lstat every parent of the workdir (/home/user, ...).
 	// Denying $HOME above also denied that metadata, which made
-	// `git worktree add` fail with "Invalid path '/Users/n'". Allow metadata
+	// `git worktree add` fail with "Invalid path '/home/user'". Allow metadata
 	// only (stat, not listing or reading) on the ancestors of writable roots
 	// and of re-allowed read-only files (so /etc/gitconfig is reachable; /etc
 	// itself stays unlistable and /etc/passwd unreadable).

@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/keyle/valen/internal/guard"
 	"github.com/sashabaranov/go-openai"
-	"valen/internal/guard"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -95,7 +95,7 @@ func TestLoadConfigRejectsMissingFile(t *testing.T) {
 }
 
 func TestUserAgentIdentities(t *testing.T) {
-	if !strings.HasPrefix(userAgent, "valen/") || !strings.Contains(userAgent, "opencode") {
+	if !strings.HasPrefix(userAgent, "github.com/keyle/valen/") || !strings.Contains(userAgent, "opencode") {
 		t.Fatalf("API UA must be an honest valen identity: %q", userAgent)
 	}
 	if !strings.Contains(browserUserAgent, "Mozilla") || browserUserAgent == userAgent {

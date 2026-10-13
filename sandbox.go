@@ -269,7 +269,7 @@ func dropBroadRoots(paths []string, home string) []string {
 }
 
 // ancestorDirs returns the sorted, de-duplicated proper ancestors of dirs
-// (excluding "/"), e.g. /Users/n/Code for /Users/n/Code/valen.
+// (excluding "/"), e.g. /home/user/code for /home/user/code/valen.
 func ancestorDirs(dirs []string) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -329,7 +329,7 @@ func hiddenPaths() []string {
 // gitReadOnlyPaths lists git config files the sandbox re-allows for reads
 // only. Git stats these on every invocation (even `git status` in the
 // workdir), and hiding $HOME made git fail with "unable to access
-// '/Users/n/.gitconfig': Operation not permitted". Later SBPL rules win, so
+// '/home/user/.gitconfig': Operation not permitted". Later SBPL rules win, so
 // a literal file-read allow after the HOME deny restores `git` without
 // opening $HOME for writes or listing; on Linux the file is ro-bound over
 // the HOME tmpfs. Credential dirs (~/.ssh) stay hidden.

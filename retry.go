@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/keyle/valen/internal/dvlog"
 	"github.com/sashabaranov/go-openai"
-	"valen/internal/dvlog"
 )
 
 // Round-level retry: a failed model round (any provider error, 4xx included)

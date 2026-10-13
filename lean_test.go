@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/keyle/valen/internal/guard"
 	"github.com/sashabaranov/go-openai"
-	"valen/internal/guard"
 )
 
 // Per-round pruning only reclaims history outside the turn and token shields.
