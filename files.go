@@ -42,7 +42,23 @@ var (
 	approvedMu       sync.Mutex
 	approvedRead     = map[string]bool{}
 	approvedWritable = map[string]bool{}
+	deniedAccess     = map[string]bool{} // "r:"+folder / "w:"+folder
 )
+
+// gate serializes check -> prompt -> record for approvals, so parallel
+// subagents hitting the same unapproved folder or shell label prompt once and
+// the rest reuse the answer (allow or deny). Ctx-aware: a cancelled call
+// stops waiting behind someone else's prompt.
+var gate = make(chan struct{}, 1)
+
+func lockGate(ctx context.Context) (unlock func(), err error) {
+	select {
+	case gate <- struct{}{}:
+		return func() { <-gate }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
 
 // setFileRoot pins the sandbox root and drops prior outside approvals.
 func setFileRoot(dir string) {
@@ -52,6 +68,7 @@ func setFileRoot(dir string) {
 	approvedMu.Lock()
 	approvedRead = map[string]bool{}
 	approvedWritable = map[string]bool{}
+	deniedAccess = map[string]bool{}
 	approvedMu.Unlock()
 	resetShellApprovals()
 }
@@ -350,6 +367,25 @@ func checkFileAccess(ctx context.Context, op, abs string) error {
 	if askPrompter == nil {
 		return fmt.Errorf("denied: %s is outside workdir %s (no interactive prompter to approve it)", abs, root)
 	}
+	unlock, err := lockGate(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	// Another call may have answered while we waited for the gate.
+	if allowed(root, abs) && allowed(root, canon) {
+		return nil
+	}
+	denyKey := "r:" + folder
+	if isWriteOp(op) {
+		denyKey = "w:" + folder
+	}
+	approvedMu.Lock()
+	denied := deniedAccess[denyKey] || (isWriteOp(op) && deniedAccess["r:"+folder])
+	approvedMu.Unlock()
+	if denied {
+		return fmt.Errorf("denied: access to %s was not approved (earlier answer this session); do not retry or work around it", abs)
+	}
 	access := "read"
 	if isWriteOp(op) {
 		access = "read and write"
@@ -378,6 +414,9 @@ func checkFileAccess(ctx context.Context, op, abs string) error {
 		approvedMu.Unlock()
 		return nil
 	}
+	approvedMu.Lock()
+	deniedAccess[denyKey] = true
+	approvedMu.Unlock()
 	return fmt.Errorf("denied: access to %s was not approved", abs)
 }
 

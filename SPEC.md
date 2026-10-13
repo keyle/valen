@@ -327,7 +327,10 @@ File tools and `shell` share one sandbox root: the startup directory,
 `-dir <path>`, or a positional directory in TUI mode
 (`./valen ~/Code/something`). Paths escaping the root pause for approval
 through the active `AskUserQuestion` frontend (one answer covers the whole
-folder, remembered for the session). A read approval grants read only; write
+folder; allow and deny are both remembered for the session, including by
+parallel subagents, which wait on one shared prompt gate and reuse the answer
+instead of re-asking; shell `network`/destructive-label approvals behave the
+same). A read approval grants read only; write
 and edit ask separately and grant read and write. Sibling git worktrees of the
 same repo (`git worktree list`) are in scope and never prompt. Without an
 interactive frontend they are denied with a clear error, so the model can

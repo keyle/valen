@@ -35,11 +35,13 @@ var destructive = []struct {
 var (
 	shellMu       sync.Mutex
 	shellApproved = map[string]bool{} // "network" or a destructive label
+	shellDenied   = map[string]bool{}
 )
 
 func resetShellApprovals() {
 	shellMu.Lock()
 	shellApproved = map[string]bool{}
+	shellDenied = map[string]bool{}
 	shellMu.Unlock()
 }
 
@@ -111,6 +113,20 @@ func approveShell(ctx context.Context, label, command string) error {
 	if askPrompter == nil {
 		return fmt.Errorf("denied: %q needs approval and there is no interactive prompter", label)
 	}
+	unlock, err := lockGate(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	shellMu.Lock()
+	ok, denied := shellApproved[label], shellDenied[label]
+	shellMu.Unlock()
+	if ok {
+		return nil
+	}
+	if denied {
+		return fmt.Errorf("denied: the user did not allow %q earlier this session; do not retry or work around it", label)
+	}
 	what := "run `" + label + "`"
 	if label == "network" {
 		what = "give shell commands network access"
@@ -136,6 +152,9 @@ func approveShell(ctx context.Context, label, command string) error {
 		shellMu.Unlock()
 		return nil
 	}
+	shellMu.Lock()
+	shellDenied[label] = true
+	shellMu.Unlock()
 	return fmt.Errorf("denied: the user did not allow %q; do not retry or work around it", label)
 }
 

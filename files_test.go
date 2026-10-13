@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // requireShellSandbox skips tests that run commands through the real shell
@@ -333,8 +335,13 @@ func TestOutsideAccessAskAllowAndDeny(t *testing.T) {
 		t.Fatalf("deny err=%v", err)
 	}
 
+	// A deny sticks for the session: no re-ask, even if the user would now allow.
 	restore = stubPrompter("Allow", nil)
 	defer restore()
+	if _, err := ReadTool().Fn(ctx, `{"path":`+quoteJSON(outside)+`}`); err == nil || !strings.Contains(err.Error(), "denied") {
+		t.Fatalf("deny must be remembered, err=%v", err)
+	}
+	setFileRoot(getFileRoot()) // new session drops approvals and denials
 	out, err := ReadTool().Fn(ctx, `{"path":`+quoteJSON(outside)+`}`)
 	if err != nil {
 		t.Fatalf("allow err=%v", err)
@@ -422,4 +429,41 @@ func TestShellRunsInFileRoot(t *testing.T) {
 func quoteJSON(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+// TestParallelOutsideAccessPromptsOnce: concurrent calls hitting one
+// unapproved folder ask once and share the answer, allow or deny.
+func TestParallelOutsideAccessPromptsOnce(t *testing.T) {
+	for _, answer := range []string{"Allow", "Deny"} {
+		t.Run(answer, func(t *testing.T) {
+			useTempRoot(t)
+			dir := real(t.TempDir())
+			if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var asked atomic.Int32
+			old := askPrompter
+			askPrompter = func(context.Context, []AskQuestion) ([]string, error) {
+				asked.Add(1)
+				time.Sleep(20 * time.Millisecond)
+				return []string{answer}, nil
+			}
+			defer func() { askPrompter = old }()
+			var wg sync.WaitGroup
+			for range 5 {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					_, err := ReadTool().Fn(context.Background(), `{"path":`+quoteJSON(filepath.Join(dir, "a.txt"))+`}`)
+					if (err == nil) != (answer == "Allow") {
+						t.Errorf("answer=%s err=%v", answer, err)
+					}
+				}()
+			}
+			wg.Wait()
+			if asked.Load() != 1 {
+				t.Fatalf("asked %d times, want 1", asked.Load())
+			}
+		})
+	}
 }
