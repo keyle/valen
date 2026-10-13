@@ -3,7 +3,7 @@
 A lightweight coding-agent harness in a single Go binary, inspired by
 [opencode](https://opencode.ai). It has no server and no runtime dependencies.
 The aim is the same agent loop at a small fraction of the resource footprint:
-about 50 MB of RAM in use.
+about 50 MB of RAM in use, and less than 10% cpu per agent running.
 
 valen has a terminal chat UI and a one-shot headless mode. It talks to
 [OpenCode Go/Zen](https://opencode.ai) and [OpenRouter](https://openrouter.ai)
@@ -64,13 +64,16 @@ Config is seeded on first run at `~/.config/valen/config.toml`. See
   best-effort speed bump. The OS sandbox is the real boundary.
 - **Providers:** OpenCode Go/Zen and OpenRouter only.
 
-This is early software. Review what an agent is allowed to do before pointing
+*This is early software* -- 'works for me'. I've been hacking at it for a while. 
+
+Review what an agent is allowed to do before pointing
 it at anything you care about.
 
 ## Development
 
 ```sh
-gofmt -l . && go vet ./... && go test ./...
+	make
+	make install
 ```
 
 Tests use offline `httptest` fakes.
