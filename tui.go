@@ -3032,13 +3032,17 @@ func (m *tuiModel) View() string {
 
 func (m *tuiModel) headerView() string {
 	title := headerTitleStyle.Render(" ✦ valen")
-	model := displayModelID(m.cfg.Model)
+	// Right edge: the bare model name (provider and vendor prefixes dropped)
+	// and the thinking level. The logo stands alone on the left until a
+	// title or mode tag needs the room.
+	model := modelBaseID(m.cfg.Model)
 	if m.cfg.Thinking != "" {
 		model += " · " + m.cfg.Thinking
 	}
-	// Suffixes after the session label: plan marker and the overlay name.
-	// They are reserved when truncating the label so the header never wraps
-	// onto a second row (which pushes the whole screen down one line).
+	right := headerDimStyle.Render(model)
+	// Suffixes after the logo: plan marker and the overlay name. They are
+	// reserved when truncating the label so the header never wraps onto a
+	// second row (which pushes the whole screen down one line).
 	var tail string
 	if m.cfg.Plan {
 		tail += "  ·  plan"
@@ -3064,24 +3068,26 @@ func (m *tuiModel) headerView() string {
 		tail += "  ·  question"
 	}
 	label := sessionLabel(m.session)
-	var meta string
+	left := title
 	if label != "" {
 		if m.width > 0 {
-			reserved := lipgloss.Width(" ✦ valen") + lipgloss.Width(fmt.Sprintf("  ·  %s  ·  ", model)) + lipgloss.Width(tail)
+			// Reserve the logo, separator, tail, the model at the right, a
+			// one-cell gap and the two-cell right margin.
+			reserved := lipgloss.Width(" ✦ valen") + lipgloss.Width("  ·  ") + lipgloss.Width(tail) + lipgloss.Width(right) + 3
 			// truncateRunes appends "…" past n, so leave one cell for it.
 			label = truncateRunes(label, m.columnWidth()-reserved-1)
 		}
-		meta = headerDimStyle.Render(fmt.Sprintf("  ·  %s  ·  %s", model, label))
-	} else {
-		meta = headerDimStyle.Render(fmt.Sprintf("  ·  %s", model))
+		left += headerDimStyle.Render("  ·  " + label)
 	}
-	line := title + meta + headerDimStyle.Render(tail)
+	line := left + headerDimStyle.Render(tail)
 	if m.width > 0 {
-		// One row, always: clip instead of wrapping.
+		// One row, always: clip instead of wrapping. The model sits flush
+		// right, two cells in, to line up with the footer's right text.
 		w := m.columnWidth()
+		line += strings.Repeat(" ", max(1, w-lipgloss.Width(line)-lipgloss.Width(right)-2)) + right + "  "
 		return lipgloss.NewStyle().Inline(true).MaxWidth(w).Render(line)
 	}
-	return line
+	return line + headerDimStyle.Render("  ·  ") + right
 }
 
 func sessionLabel(s *Session) string {
@@ -3210,43 +3216,27 @@ func footerDir() string {
 
 func (m *tuiModel) footerView() string {
 	hint := footerDir()
-	// The Go plan quota only applies to Go models: on openrouter/… models it
-	// stays hidden and the footer shows the OpenRouter balance instead (when
-	// the credits fetch has landed — plain API keys 403, so the footer stays
-	// clean rather than erroring).
-	if modelProvider(m.cfg.Model) == ProviderOpenRouter {
+	// The quota sits at the right, named by its plan. openrouter/… shows the
+	// OpenRouter balance once the credits fetch lands (plain API keys 403, so
+	// the footer stays clean rather than erroring). zen/… is pay-as-you-go
+	// with no quota, so it shows just its name. Go models show the Go plan
+	// quota.
+	switch modelProvider(m.cfg.Model) {
+	case ProviderOpenRouter:
 		if m.orCredits == nil {
 			return footerStyle.Padding(0, 2).Render(hint)
 		}
-		text := m.orCredits.footerText()
-		avail := 0
-		if m.width > 0 {
-			avail = m.columnWidth() - 4
-			if lipgloss.Width(hint)+lipgloss.Width(text)+5 > avail {
-				return footerStyle.Padding(0, 2).Render(hint)
-			}
-		}
-		line := hint
-		if avail > 0 {
-			line += strings.Repeat(" ", avail-lipgloss.Width(hint)-lipgloss.Width(text)) + footerStyle.Render(text)
-		} else {
-			line += "  " + footerStyle.Render(text)
-		}
-		return footerStyle.Padding(0, 2).Render(line)
+		return m.footerLine(hint, m.orCredits.footerText(), footerStyle)
+	case ProviderZen:
+		return m.footerLine(hint, "Zen", footerStyle)
 	}
-	if m.goUsage == nil || modelProvider(m.cfg.Model) == ProviderZen {
+	if m.goUsage == nil {
 		return footerStyle.Padding(0, 2).Render(hint)
 	}
-	text := m.goUsage.footerText(time.Now())
-	avail := 0
-	if m.width > 0 {
-		avail = m.columnWidth() - 4
-		if lipgloss.Width(hint)+lipgloss.Width(text)+5 > avail {
-			text = fmt.Sprintf("5h %d%%", m.goUsage.Rolling.Percent)
-		}
-		if lipgloss.Width(hint)+lipgloss.Width(text)+5 > avail {
-			return footerStyle.Padding(0, 2).Render(hint)
-		}
+	text := "Go · " + m.goUsage.footerText(time.Now())
+	if m.width > 0 && lipgloss.Width(hint)+lipgloss.Width(text)+5 > m.columnWidth()-4 {
+		// Narrow terminals fall back to the rolling window only.
+		text = fmt.Sprintf("Go · 5h %d%%", m.goUsage.Rolling.Percent)
 	}
 	uStyle := footerStyle
 	switch m.goUsage.usageSev() {
@@ -3255,12 +3245,20 @@ func (m *tuiModel) footerView() string {
 	case "bad":
 		uStyle = errNoticeStyle
 	}
-	line := hint
-	if avail > 0 {
-		line += strings.Repeat(" ", avail-lipgloss.Width(hint)-lipgloss.Width(text)) + uStyle.Render(text)
-	} else {
-		line += "  " + uStyle.Render(text)
+	return m.footerLine(hint, text, uStyle)
+}
+
+// footerLine puts text at the right edge of the column, opposite the hint.
+// When the pair won't fit, only the hint shows.
+func (m *tuiModel) footerLine(hint, text string, st lipgloss.Style) string {
+	if m.width == 0 {
+		return footerStyle.Padding(0, 2).Render(hint + "  " + st.Render(text))
 	}
+	avail := m.columnWidth() - 4
+	if lipgloss.Width(hint)+lipgloss.Width(text)+5 > avail {
+		return footerStyle.Padding(0, 2).Render(hint)
+	}
+	line := hint + strings.Repeat(" ", avail-lipgloss.Width(hint)-lipgloss.Width(text)) + st.Render(text)
 	return footerStyle.Padding(0, 2).Render(line)
 }
 

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func testGoUsage() GoUsage {
@@ -191,6 +193,34 @@ func TestORCreditsRemainingAndFooter(t *testing.T) {
 	}
 	if got := over.footerText(); got != "openrouter $0.00 left" {
 		t.Fatalf("footer text %q", got)
+	}
+}
+
+// TestTUIFooterNamesPlan: the quota is labelled by its plan (Go) and zen/…
+// models show just "Zen" at the right — no quota, nothing to fetch.
+func TestTUIFooterNamesPlan(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.width = 200
+	m.goUsage = &GoUsage{Rolling: UsageWindow{Status: "ok", Percent: 90}}
+	if footer := ansi.Strip(m.footerView()); !strings.Contains(footer, "Go · 5h 90%") {
+		t.Fatalf("Go footer must name the plan before the quota:\n%s", footer)
+	}
+	m.width = 50
+	if footer := ansi.Strip(m.footerView()); !strings.Contains(footer, "Go · 5h 90%") {
+		t.Fatalf("narrow Go footer must keep the plan label:\n%s", footer)
+	}
+
+	cfg := testConfig("https://unused")
+	cfg.Model = "zen/claude-haiku-5-5"
+	z := newTestModel(t, cfg)
+	z.width = 200
+	z.goUsage = &GoUsage{Rolling: UsageWindow{Status: "ok", Percent: 90}}
+	footer := ansi.Strip(z.footerView())
+	if !strings.HasSuffix(strings.TrimRight(footer, " "), "Zen") || strings.Contains(footer, "5h") {
+		t.Fatalf("Zen footer must show only the Zen label:\n%s", footer)
+	}
+	if !strings.Contains(footer, footerDir()) {
+		t.Fatalf("workdir must remain:\n%s", footer)
 	}
 }
 

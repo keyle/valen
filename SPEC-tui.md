@@ -49,7 +49,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 ## UX
 
 ```
- ✦ valen  ·  go/glm-5.3-flash  ·  <session title>
+ ✦ valen  ·  <session title>                          glm-5.3-flash · high
 
   You  15:04
   ┌ summarise the latest go release notes
@@ -68,17 +68,19 @@ tool activity, overlay recall views — all in one `tuiModel` with async
  ╭───────────────────────────────────╮
  │ Type a message…                   │
  ╰───────────────────────────────────╯
- ~/Code/valen                                         5h 90% ↻38m · 7d 36%
+ ~/Code/valen                                  Go · 5h 90% ↻38m · 7d 36%
 ```
 
-- Header: ` ✦ valen  ·  <model>  ·  <session title>` — the
-  session title is the same English name shown in the Sessions view (first
-  prompt, 60 runes), set the moment that prompt is submitted so the header
-  names the session while the first turn is still running. Only an untouched
-  session (no prompt yet) omits the title segment entirely rather than falling
-  back to the `ses-…` id, so the header reads
-  ` ✦ valen  ·  <model>`. The tools count is not shown, and the header carries
-  no key hints (alt+m is listed in `/help`).
+- Header: the ` ✦ valen` logo stands alone on the left until a title is shown:
+  ` ✦ valen  ·  <session title>` — the session title is the same English name
+  shown in the Sessions view (first prompt, 60 runes), set the moment that
+  prompt is submitted so the header names the session while the first turn is
+  still running. Only an untouched session (no prompt yet) omits the title
+  segment entirely rather than falling back to the `ses-…` id. The bare model
+  name and thinking level (`glm-5.3-flash · high`; no `go/`, `zen/` or
+  `openrouter/vendor/` prefix) sit flush at the far right, aligned with the
+  footer's right text. The tools count is not shown, and the header carries no
+  key hints (alt+m is listed in `/help`).
 - Transcript is padded conversation blocks separated by blank lines; no role
   prefixes. `You` (orange; `You (PLAN)` in cyan with a cyan left bar when sent in plan mode) and ` ✦ <model>` (green, leading space so it lines
   up with ` ✦ valen`) head each block.
@@ -130,11 +132,13 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   row also carries loop progress (`· rd 12/300`). Informational notices
   (e.g. the mouse toggle) are transient: the next chatbox edit clears them
   and restores the totals row; errors stay until resolved.
-- Go plan usage (`5h` rolling / `7d` / `30d` percent) sits dim at the right of
-  the footer hint line, refreshed at startup, every minute, and after each
+- Go plan usage (`Go · 5h` rolling / `7d` / `30d` percent) sits dim at the right
+  of the footer hint line, refreshed at startup, every minute, and after each
   turn; yellow past 80%, pink at 100% or rate-limited, with a `↻` reset hint
-  on hot windows. Hidden when `{base_url}/usage` is unavailable (non-Go keys)
-  and on `zen/…` models (pay-as-you-go, no plan quota).
+  on hot windows. The `Go` label names the plan; narrow terminals keep
+  `Go · 5h N%`. Hidden when `{base_url}/usage` is unavailable (non-Go keys).
+  On `zen/…` models the right of the footer shows just `Zen` (pay-as-you-go,
+  no plan quota, nothing fetched).
   On `openrouter/…` models the Go quota stays hidden and the footer shows the
   OpenRouter balance (`OR $X.XX left`) once the credits fetch lands; plain API
   keys 403 on `/credits`, so the footer shows only the hint until then.

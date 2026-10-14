@@ -113,7 +113,7 @@ retries and apply to every call the OpenAI client makes. The `messages` and
 `GET {base_url}/usage` returns the Go plan quota (`rolling` / `weekly` /
 `monthly`, each with `status`, `percent`, `resetsAt`). The TUI polls it at
 startup, once a minute, and after each turn to render the footer; non-200s and
-non-Go keys are ignored so the footer simply stays hidden; it is also hidden on `zen/…` models (pay-as-you-go, no plan quota). On
+non-Go keys are ignored so the footer simply stays hidden; on `zen/…` models (pay-as-you-go, no plan quota) the footer shows just `Zen`. On
 `openrouter/…` models the Go quota stays hidden and the footer shows the
 OpenRouter balance instead (`GET {openrouter_base}/credits` →
 `OR $X.XX left`); plain API keys 403 on that endpoint, so the footer stays

@@ -169,8 +169,34 @@ func TestTUIHeaderShowsTitleOnly(t *testing.T) {
 	if strings.Contains(header, "alt+m") {
 		t.Fatalf("header must not show key hints:\n%s", header)
 	}
-	if !strings.Contains(header, "go/deepseek-v4.1-flash") {
-		t.Fatalf("header must name the provider like the picker (go/…):\n%s", header)
+	if !strings.HasSuffix(strings.TrimRight(header, " "), "deepseek-v4.1-flash") || strings.Contains(header, "go/") {
+		t.Fatalf("header must show the bare model name at the right:\n%s", header)
+	}
+}
+
+// TestTUIHeaderModelFlushRight: the logo stands alone on the left, the bare
+// model and thinking level sit at the far right, and a title or mode tag
+// lands between them.
+func TestTUIHeaderModelFlushRight(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	m.cfg.Model = "openrouter/moonshotai/kimi-k3"
+	m.cfg.Thinking = "max"
+	header := ansi.Strip(m.headerView())
+	if got := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(header), "kimi-k3 · max")); got != "✦ valen" {
+		t.Fatalf("untitled header must be the logo alone on the left, got %q:\n%s", got, header)
+	}
+	if lipgloss.Width(header) != m.columnWidth() {
+		t.Fatalf("header width=%d want %d", lipgloss.Width(header), m.columnWidth())
+	}
+	m.session.Title = "fix the login redirect bug"
+	m.cfg.Plan = true
+	header = ansi.Strip(m.headerView())
+	if !strings.HasPrefix(header, " ✦ valen  ·  fix the login redirect bug  ·  plan") {
+		t.Fatalf("title and plan tag must follow the logo:\n%s", header)
+	}
+	if !strings.HasSuffix(strings.TrimRight(header, " "), "kimi-k3 · max") {
+		t.Fatalf("model must stay at the far right:\n%s", header)
 	}
 }
 
