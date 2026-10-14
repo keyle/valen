@@ -56,7 +56,7 @@ func (m *tuiModel) copyLastReply() {
 		return
 	}
 	clipboardWrite(r)
-	m.notice, m.noticeErr = fmt.Sprintf("Copied last reply (%d chars).", len(r)), false
+	m.notice, m.noticeErr = fmt.Sprintf("Copied last reply (%d bytes).", len(r)), false
 }
 
 // copyClicked reports whether a left press landed on the copy row, which is
