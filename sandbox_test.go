@@ -105,7 +105,7 @@ func TestSandboxReadsOutsideAsk(t *testing.T) {
 		t.Fatal("outside read should need approval")
 	}
 	// Same folder approval as the file tools covers shell too.
-	defer stubPrompter("Allow", nil)()
+	defer stubPrompter(lblAllowSession, nil)()
 	if err := gateShell(context.Background(), "cat "+other, false); err != nil {
 		t.Fatalf("approved folder should pass the gate: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestSandboxFollowsApprovedFolder(t *testing.T) {
 		t.Fatal("should be blocked before approval")
 	}
 	// Same approval path as the file tools: one write answer covers the folder.
-	defer stubPrompter("Allow", nil)()
+	defer stubPrompter(lblAllowSession, nil)()
 	seed := filepath.Join(dir, "seed.txt")
 	if _, err := WriteTool().Fn(context.Background(), `{"path":`+quoteJSON(seed)+`,"content":"s"}`); err != nil {
 		t.Fatalf("approve: %v", err)
@@ -141,7 +141,7 @@ func TestReadApprovalDoesNotGrantWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	restore := stubPrompter("Allow", nil)
+	restore := stubPrompter(lblAllowSession, nil)
 	if _, err := ReadTool().Fn(ctx, `{"path":`+quoteJSON(seed)+`}`); err != nil {
 		t.Fatalf("read approval: %v", err)
 	}
@@ -300,7 +300,7 @@ func TestGateShellOutsideAsksOncePerFolder(t *testing.T) {
 	target := filepath.Join(outsideDir(t), "valen-gate-test-x.txt")
 	asked := 0
 	old := askPrompter
-	askPrompter = func(context.Context, []AskQuestion) ([]string, error) { asked++; return []string{"Allow"}, nil }
+	askPrompter = func(context.Context, []AskQuestion) ([]string, error) { asked++; return []string{lblAllowSession}, nil }
 	defer func() { askPrompter = old }()
 	ctx := context.Background()
 	if err := gateShell(ctx, "echo hi > "+target, false); err != nil {
@@ -460,7 +460,7 @@ func TestGateShellApprovalNamesModel(t *testing.T) {
 	var got AskQuestion
 	askPrompter = func(_ context.Context, qs []AskQuestion) ([]string, error) {
 		got = qs[0]
-		return []string{"Allow"}, nil
+		return []string{lblAllowSession}, nil
 	}
 	t.Cleanup(func() { askPrompter = old })
 	ctx := context.WithValue(context.Background(), turnConfigKey{}, Config{Model: "deepseek-v4.1-flash"})
@@ -476,7 +476,7 @@ func TestGateShellAsksOncePerLabel(t *testing.T) {
 	useTempRoot(t)
 	asked := 0
 	old := askPrompter
-	askPrompter = func(context.Context, []AskQuestion) ([]string, error) { asked++; return []string{"Allow"}, nil }
+	askPrompter = func(context.Context, []AskQuestion) ([]string, error) { asked++; return []string{lblAllowSession}, nil }
 	defer func() { askPrompter = old }()
 	ctx := context.Background()
 	for _, c := range []string{"git push", "git push origin x"} {
@@ -500,7 +500,7 @@ func TestGateShellDeniesWithoutPrompterOrOnDeny(t *testing.T) {
 	if err := gateShell(context.Background(), "rm -rf x", false); err == nil {
 		t.Fatal("no prompter must deny")
 	}
-	defer stubPrompter("Deny", nil)()
+	defer stubPrompter(lblDenySession, nil)()
 	if err := gateShell(context.Background(), "git push", false); err == nil || !strings.Contains(err.Error(), "denied") {
 		t.Fatalf("deny err=%v", err)
 	}
@@ -670,7 +670,7 @@ func TestFileAccessPromptShowsToolCall(t *testing.T) {
 	var got AskQuestion
 	askPrompter = func(_ context.Context, qs []AskQuestion) ([]string, error) {
 		got = qs[0]
-		return []string{"Deny"}, nil
+		return []string{lblDenySession}, nil
 	}
 	t.Cleanup(func() { askPrompter = old })
 

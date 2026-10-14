@@ -230,8 +230,32 @@ func writableRoots() []string {
 		c = append(c, dir)
 	}
 	approvedMu.Unlock()
+	c = append(c, accessDirs(ruleWrite)...) // "FOR ALL SESSIONS" grants
 	c = append(c, siblingWorktrees(root)...)
-	return existingDirs(c)
+	return dropDeniedRoots(existingDirs(c), root)
+}
+
+// dropDeniedRoots removes allowed roots that lie inside a persistently denied
+// folder: deny wins over any allow, session or persistent. The workdir itself
+// is never dropped.
+func dropDeniedRoots(paths []string, root string) []string {
+	deny := accessDirs(ruleDeny)
+	if len(deny) == 0 {
+		return paths
+	}
+	out := paths[:0]
+	for _, p := range paths {
+		drop := false
+		for _, d := range deny {
+			if inApproved(d, p) && p != real(root) {
+				drop = true
+			}
+		}
+		if !drop {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // readableRoots lists folders approved for read this session; writable
@@ -243,7 +267,8 @@ func readableRoots() []string {
 		c = append(c, dir)
 	}
 	approvedMu.Unlock()
-	return existingDirs(c)
+	c = append(c, accessDirs(ruleRead)...)
+	return dropDeniedRoots(existingDirs(c), getFileRoot())
 }
 
 // dropBroadRoots removes implicit roots that equal $HOME or contain it (an
@@ -305,6 +330,9 @@ func hiddenPaths() []string {
 		".local/share/valen", ".bash_history", ".zsh_history", ".zshrc", ".bashrc"} {
 		c = append(c, filepath.Join(home, d))
 	}
+	// Persistent denials (access.toml) hide the folder from the kernel too;
+	// they sit in the hidden list, which is applied after every allow.
+	c = append(c, accessDirs(ruleDeny)...)
 	// Sibling user homes: only the current user's home is denied above, so
 	// other accounts' dirs (and their credentials) would otherwise stay
 	// readable by default. Hide them too, except one that contains the

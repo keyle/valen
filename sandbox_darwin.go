@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 )
 
@@ -69,7 +70,7 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 		homeReal = real(home)
 	}
 	for i, hid := range p.Hidden {
-		if hid == home || hid == homeReal || !withinRoot(home, hid) {
+		if hid == home || hid == homeReal || (!withinRoot(home, hid) && !slices.Contains(accessDirs(ruleDeny), hid)) {
 			continue
 		}
 		fmt.Fprintf(&prof, "(deny file-read* file-write* (subpath (param \"H%d\")))\n", i)

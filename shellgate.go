@@ -18,6 +18,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/keyle/valen/internal/dvlog"
 )
 
 // destructive maps a label (also the remembered key) to a command pattern.
@@ -104,6 +106,11 @@ func shellLooksWrite(command string) bool {
 }
 
 func approveShell(ctx context.Context, label, command string) error {
+	if allow, deny := accessShellRule(label); deny {
+		return fmt.Errorf("denied: %q is blocked by %s; do not retry or work around it", label, accessPathLabel())
+	} else if allow {
+		return nil
+	}
 	shellMu.Lock()
 	ok := shellApproved[label]
 	shellMu.Unlock()
@@ -135,18 +142,23 @@ func approveShell(ctx context.Context, label, command string) error {
 	if name == "" {
 		name = "valen"
 	}
-	answers, err := promptUser(ctx, []AskQuestion{{
-		Question: fmt.Sprintf("Allow %s to %s for the rest of this session? Command: %s", name, what, truncateRunes(command, 200)),
+	choice, err := promptAccess(ctx, AskQuestion{
+		Question: fmt.Sprintf("Allow %s to %s? Command: %s", name, what, truncateRunes(command, 200)),
 		Header:   "Shell",
-		Options: []AskOption{
-			{Label: "Allow", Description: "Permit this for the rest of this session"},
-			{Label: "Deny", Description: "Do not run the command"},
-		},
-	}})
+	}, label, "[shell] allow = "+label, "[shell] deny = "+label)
 	if err != nil {
 		return err
 	}
-	if len(answers) > 0 && strings.Contains(strings.ToLower(answers[0]), "allow") {
+	if choice.always() {
+		rule := ruleShellDeny
+		if choice.allowed() {
+			rule = ruleShellAllow
+		}
+		if err := saveAccessRule(rule, label); err != nil {
+			dvlog.Logf("access: persist %s %s: %v", rule, label, err)
+		}
+	}
+	if choice.allowed() {
 		shellMu.Lock()
 		shellApproved[label] = true
 		shellMu.Unlock()
@@ -216,6 +228,8 @@ func shellSafePrefixes() []string {
 		}
 	}
 	out = append(out, systemReadOnlyPaths()...)
+	out = append(out, accessDirs(ruleRead)...)
+	out = append(out, accessDirs(ruleWrite)...)
 	return out
 }
 
@@ -240,9 +254,11 @@ func shellOutsidePaths(command string) []string {
 		if allowedWithoutPrompt(root, abs) {
 			return
 		}
-		for _, s := range safe {
-			if s != "" && withinRoot(s, abs) {
-				return
+		if !accessDenied(abs) { // a persistent deny must reach checkFileAccess
+			for _, s := range safe {
+				if s != "" && withinRoot(s, abs) {
+					return
+				}
 			}
 		}
 		out = append(out, abs)

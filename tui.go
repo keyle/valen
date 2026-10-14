@@ -83,6 +83,8 @@ var (
 	confirmHintStyle = lipgloss.NewStyle().Foreground(mkGreen).Bold(true)
 	// Favourite marker in the model picker: warm yellow, like a lit star.
 	favStyle = lipgloss.NewStyle().Foreground(mkYellow).Bold(true)
+	// Subject of an access prompt (folder / command): bold yellow.
+	accessSubjectStyle = lipgloss.NewStyle().Foreground(mkYellow).Bold(true)
 	// Model name in picker rows: bright and bold so it reads first while the
 	// provider prefix stays dim.
 	modelNameStyle = lipgloss.NewStyle().Foreground(mkFg).Bold(true)
@@ -675,7 +677,10 @@ func (m *tuiModel) handleAskKey(s string) (tea.Model, tea.Cmd) {
 	switch a.phase {
 	case "pick":
 		overflow := len(a.qs[a.idx].Options) // the "type your own" row
-		rows := len(a.qs[a.idx].Options) + 1
+		rows := overflow + 1
+		if a.qs[a.idx].NoFreeText {
+			rows = overflow // no own row: the cursor never reaches overflow
+		}
 		switch s {
 		case "up", "k":
 			if a.cursor > 0 {
@@ -800,7 +805,11 @@ func (m *tuiModel) renderAsk() string {
 	if q.MultiSelect {
 		b.WriteString(" · multi-select (space toggles)")
 	}
-	b.WriteString("\n\n" + m.wrapPlain(q.Question) + "\n\n")
+	b.WriteString("\n\n" + m.wrapPlain(q.Question) + "\n")
+	for _, h := range q.Highlight {
+		b.WriteString("\n" + accessSubjectStyle.Width(cw).Render(breakLongWords(h, cw)) + "\n")
+	}
+	b.WriteString("\n")
 	if a.phase == "own" {
 		b.WriteString(m.wrapPlain(fmt.Sprintf("Type your answer: %s▏\n\n  enter keeps it · esc back", a.own)))
 		return b.String()
@@ -823,14 +832,16 @@ func (m *tuiModel) renderAsk() string {
 			b.WriteString(m.wrapPlain("  "+row) + "\n")
 		}
 	}
-	ownRow := breakLongWords(fmt.Sprintf("%d. Type your own answer", len(q.Options)+1), cw-2)
-	if a.cursor == len(q.Options) {
-		rendered := selectedStyle.Width(cw).Render(" " + ownRow)
-		a.rowTop = strings.Count(b.String(), "\n")
-		a.rowBottom = a.rowTop + strings.Count(rendered, "\n")
-		b.WriteString(rendered + "\n")
-	} else {
-		b.WriteString(m.wrapPlain("  "+ownRow) + "\n")
+	if !q.NoFreeText {
+		ownRow := breakLongWords(fmt.Sprintf("%d. Type your own answer", len(q.Options)+1), cw-2)
+		if a.cursor == len(q.Options) {
+			rendered := selectedStyle.Width(cw).Render(" " + ownRow)
+			a.rowTop = strings.Count(b.String(), "\n")
+			a.rowBottom = a.rowTop + strings.Count(rendered, "\n")
+			b.WriteString(rendered + "\n")
+		} else {
+			b.WriteString(m.wrapPlain("  "+ownRow) + "\n")
+		}
 	}
 	b.WriteString(m.wrapPlain("↑↓/jk move · enter select · esc cancel") + "\n")
 	if q.MultiSelect {

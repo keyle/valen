@@ -299,6 +299,7 @@ func start() error {
 			return fmt.Errorf("config dir %s: %w", dir, err)
 		}
 		statePath = filepath.Join(dir, userStateName)
+		setAccessFile(filepath.Join(dir, userAccessName))
 	} else if abs, err := filepath.Abs(cfgAbs); err == nil {
 		cfgAbs = abs
 	}

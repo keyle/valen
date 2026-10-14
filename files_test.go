@@ -328,7 +328,7 @@ func TestOutsideAccessAskAllowAndDeny(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	restore := stubPrompter("Deny", nil)
+	restore := stubPrompter(lblDenySession, nil)
 	_, err := ReadTool().Fn(ctx, `{"path":`+quoteJSON(outside)+`}`)
 	restore()
 	if err == nil || !strings.Contains(err.Error(), "denied") {
@@ -336,7 +336,7 @@ func TestOutsideAccessAskAllowAndDeny(t *testing.T) {
 	}
 
 	// A deny sticks for the session: no re-ask, even if the user would now allow.
-	restore = stubPrompter("Allow", nil)
+	restore = stubPrompter(lblAllowSession, nil)
 	defer restore()
 	if _, err := ReadTool().Fn(ctx, `{"path":`+quoteJSON(outside)+`}`); err == nil || !strings.Contains(err.Error(), "denied") {
 		t.Fatalf("deny must be remembered, err=%v", err)
@@ -361,7 +361,7 @@ func TestOutsideApprovalCoversFolder(t *testing.T) {
 	}
 	asked := 0
 	old := askPrompter
-	askPrompter = func(context.Context, []AskQuestion) ([]string, error) { asked++; return []string{"Allow"}, nil }
+	askPrompter = func(context.Context, []AskQuestion) ([]string, error) { asked++; return []string{lblAllowSession}, nil }
 	defer func() { askPrompter = old }()
 	for _, n := range []string{"a.txt", "b.txt"} {
 		if _, err := ReadTool().Fn(context.Background(), `{"path":`+quoteJSON(filepath.Join(dir, n))+`}`); err != nil {
@@ -434,7 +434,7 @@ func quoteJSON(s string) string {
 // TestParallelOutsideAccessPromptsOnce: concurrent calls hitting one
 // unapproved folder ask once and share the answer, allow or deny.
 func TestParallelOutsideAccessPromptsOnce(t *testing.T) {
-	for _, answer := range []string{"Allow", "Deny"} {
+	for _, answer := range []string{lblAllowSession, lblDenySession} {
 		t.Run(answer, func(t *testing.T) {
 			useTempRoot(t)
 			dir := real(t.TempDir())
@@ -455,7 +455,7 @@ func TestParallelOutsideAccessPromptsOnce(t *testing.T) {
 				go func() {
 					defer wg.Done()
 					_, err := ReadTool().Fn(context.Background(), `{"path":`+quoteJSON(filepath.Join(dir, "a.txt"))+`}`)
-					if (err == nil) != (answer == "Allow") {
+					if (err == nil) != (answer == lblAllowSession) {
 						t.Errorf("answer=%s err=%v", answer, err)
 					}
 				}()

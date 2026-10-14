@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -286,4 +287,61 @@ func assertResponsesToolAnswer(t *testing.T, body string) {
 		}
 	}
 	t.Fatalf("tool answer missing from responses input: %s", body)
+}
+
+func TestAskNoFreeTextHidesOwnRow(t *testing.T) {
+	qs := []AskQuestion{{Question: "Allow?", NoFreeText: true, Options: []AskOption{{Label: "Yes"}, {Label: "No"}}}}
+
+	// Headless: no own row printed, number past the last option rejected.
+	var out bytes.Buffer
+	answers, err := headlessAsk(context.Background(), qs, strings.NewReader("3\n2\ny\n"), &out)
+	if err != nil || len(answers) != 1 || answers[0] != "No" {
+		t.Fatalf("answers=%q err=%v", answers, err)
+	}
+	if strings.Contains(out.String(), "Type your own") || !strings.Contains(out.String(), "enter number(s) 1–2") {
+		t.Fatalf("own row leaked: %q", out.String())
+	}
+
+	// TUI: no own row rendered, cursor stops at the last option, enter answers.
+	m := newTUIModel(Config{Model: "m"}, nil, nil, nil)
+	reply := make(chan askReply, 1)
+	m.ask = &askState{qs: qs, picks: []map[int]bool{{}}, ownText: make([]string, 1), phase: "pick", reply: reply}
+	m.mode = viewAsk
+	if strings.Contains(m.renderAsk(), "Type your own") {
+		t.Fatalf("own row rendered: %q", m.renderAsk())
+	}
+	_, _ = m.handleAskKey("down")
+	_, _ = m.handleAskKey("down") // clamped at No
+	_, _ = m.handleAskKey("enter")
+	if m.ask.phase != "review" {
+		t.Fatalf("phase=%q, enter at last option must answer, not open own", m.ask.phase)
+	}
+	if got := m.askAnswers(); got[0] != "No" {
+		t.Fatalf("answers=%q", got)
+	}
+
+	// Default questions keep the row.
+	m.ask = &askState{qs: askFixtureQuestions()[:1], picks: []map[int]bool{{}}, ownText: make([]string, 1), phase: "pick", reply: reply}
+	if !strings.Contains(m.renderAsk(), "Type your own") {
+		t.Fatal("model question lost its own row")
+	}
+}
+
+func TestAskHighlightSubject(t *testing.T) {
+	qs := []AskQuestion{{Question: "Allow read?", Highlight: []string{"/tmp/secret-dir"}, NoFreeText: true, Options: []AskOption{{Label: "Yes"}}}}
+	var out bytes.Buffer
+	if _, err := headlessAsk(context.Background(), qs, strings.NewReader("1\ny\n"), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "\n  /tmp/secret-dir\n") {
+		t.Fatalf("headless subject missing: %q", out.String())
+	}
+	m := newTUIModel(Config{Model: "m"}, nil, nil, nil)
+	m.ask = &askState{qs: qs, picks: []map[int]bool{{}}, ownText: make([]string, 1), phase: "pick", reply: make(chan askReply, 1)}
+	if got := ansi.Strip(m.renderAsk()); !strings.Contains(got, "\n/tmp/secret-dir") {
+		t.Fatalf("TUI subject missing: %q", got)
+	}
+	if accessSubjectStyle.GetBold() != true || accessSubjectStyle.GetForeground() != mkYellow {
+		t.Fatal("subject style must be bold yellow")
+	}
 }

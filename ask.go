@@ -26,6 +26,13 @@ type AskQuestion struct {
 	Header      string      `json:"header,omitempty"`
 	MultiSelect bool        `json:"multiSelect,omitempty"`
 	Options     []AskOption `json:"options"`
+	// Highlight lists subjects to emphasize, each on its own line under the
+	// question: TUI renders bold yellow, headless plain. Access prompts use it
+	// so the affected folder/command is unmistakable. Not in the tool schema.
+	Highlight []string `json:"highlight,omitempty"`
+	// NoFreeText hides the "type your own answer" row: access questions are a
+	// fixed choice. Model-driven questions keep it (zero value false).
+	NoFreeText bool `json:"-"`
 }
 
 // AskFunc collects answers for model-driven questions. Exactly one is
@@ -152,6 +159,9 @@ func headlessOne(ctx context.Context, br *bufio.Reader, w io.Writer, q *AskQuest
 		label = q.Question
 	}
 	fmt.Fprintf(w, "\n? %s\n", q.Question)
+	for _, h := range q.Highlight {
+		fmt.Fprintf(w, "  %s\n", h)
+	}
 	if label != q.Question && q.Header != "" {
 		fmt.Fprintf(w, "(%s)\n", label)
 	}
@@ -162,8 +172,11 @@ func headlessOne(ctx context.Context, br *bufio.Reader, w io.Writer, q *AskQuest
 			fmt.Fprintf(w, "  %d. %s\n", j+1, o.Label)
 		}
 	}
-	own := len(q.Options) + 1
-	fmt.Fprintf(w, "  %d. Type your own answer\n", own)
+	own := 0 // 0: no free-text row
+	if !q.NoFreeText {
+		own = len(q.Options) + 1
+		fmt.Fprintf(w, "  %d. Type your own answer\n", own)
+	}
 	if q.MultiSelect {
 		fmt.Fprint(w, "choose comma-separated numbers: ")
 	} else {
@@ -227,18 +240,23 @@ func askOwn(br *bufio.Reader, w io.Writer, label string) (string, error) {
 }
 
 // parsePicks turns a comma-separated list of option numbers into picks. An
-// "own" pick is only valid alone in multi-select mode.
+// "own" pick is only valid alone in multi-select mode; own 0 means there is
+// no free-text row.
 func parsePicks(line string, options, own int) ([]int, error) {
+	hi := options
+	if own > hi {
+		hi = own
+	}
 	var out []int
 	for _, part := range strings.Split(line, ",") {
 		n, err := strconv.Atoi(strings.TrimSpace(part))
-		if err != nil || n < 1 || n > own {
-			return nil, fmt.Errorf("enter number(s) 1–%d", own)
+		if err != nil || n < 1 || n > hi {
+			return nil, fmt.Errorf("enter number(s) 1–%d", hi)
 		}
 		out = append(out, n)
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("enter number(s) 1–%d", own)
+		return nil, fmt.Errorf("enter number(s) 1–%d", hi)
 	}
 	return out, nil
 }

@@ -93,8 +93,9 @@ func localAgentsSection(dir string) string {
 // ensureUserConfig creates dir if needed and seeds it on first run:
 // config.toml (user-owned, never overwritten) and config-ori.toml, a
 // pristine copy of the shipped default (refreshed when the binary's
-// default changes, so users can diff after an upgrade). It returns the
-// config.toml path.
+// default changes, so users can diff after an upgrade) and access.toml (the
+// persistent access decisions, seeded empty once). It returns the config.toml
+// path.
 func ensureUserConfig(dir string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
@@ -112,6 +113,9 @@ func ensureUserConfig(dir string) (string, error) {
 		if err := os.WriteFile(oriPath, []byte(defaultConfigTOML), 0o644); err != nil {
 			return "", err
 		}
+	}
+	if err := seedAccessFile(dir); err != nil {
+		return "", err
 	}
 	return cfgPath, nil
 }

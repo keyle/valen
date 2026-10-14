@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/keyle/valen/internal/dvlog"
 	"github.com/keyle/valen/internal/prompts"
 )
 
@@ -249,12 +250,16 @@ func approvedDirs(m map[string]bool) []string {
 func isWriteOp(op string) bool { return op == "write" || op == "edit" }
 
 // allowedWithoutPrompt reports read access without asking: inside the root or
-// a sibling worktree, or any folder approved for read or write this session.
+// a sibling worktree, or any folder approved for read or write (this session
+// or in access.toml) and not denied there.
 // Both the lexical path and its symlink-resolved canonical must pass; callers
 // check both.
 func allowedWithoutPrompt(root, abs string) bool {
 	if inRootOrWorktree(root, abs) {
 		return true
+	}
+	if accessDenied(abs) { // persistent deny beats every session allow
+		return false
 	}
 	for _, dir := range approvedDirs(approvedRead) {
 		if inApproved(dir, abs) {
@@ -266,7 +271,7 @@ func allowedWithoutPrompt(root, abs string) bool {
 			return true
 		}
 	}
-	return false
+	return accessMatch(ruleRead, abs) || accessMatch(ruleWrite, abs)
 }
 
 // allowedWriteWithoutPrompt reports write access without asking: inside the
@@ -276,12 +281,15 @@ func allowedWriteWithoutPrompt(root, abs string) bool {
 	if inRootOrWorktree(root, abs) {
 		return true
 	}
+	if accessDenied(abs) {
+		return false
+	}
 	for _, dir := range approvedDirs(approvedWritable) {
 		if inApproved(dir, abs) {
 			return true
 		}
 	}
-	return false
+	return accessMatch(ruleWrite, abs)
 }
 
 // blocksSecret reports whether reading/writing abs would touch a secret
@@ -364,6 +372,9 @@ func checkFileAccess(ctx context.Context, op, abs string) error {
 		outside = canon
 	}
 	folder := accessFolder(outside)
+	if accessDenied(folder) || accessDenied(abs) || accessDenied(canon) {
+		return fmt.Errorf("denied: access to %s is blocked by %s; do not retry or work around it", abs, accessPathLabel())
+	}
 	if askPrompter == nil {
 		return fmt.Errorf("denied: %s is outside workdir %s (no interactive prompter to approve it)", abs, root)
 	}
@@ -386,26 +397,28 @@ func checkFileAccess(ctx context.Context, op, abs string) error {
 	if denied {
 		return fmt.Errorf("denied: access to %s was not approved (earlier answer this session); do not retry or work around it", abs)
 	}
-	access := "read"
+	access, kind := "read", "read"
 	if isWriteOp(op) {
-		access = "read and write"
+		access, kind = "read and write", "write"
 	}
 	question := fmt.Sprintf("Allow %s of %s? This grants %s access to all of folder %s. Workdir is %s.", op, abs, access, folder, root)
 	if call := toolCallFrom(ctx); call != "" {
 		question += "\nRequested by: " + call
 	}
-	answers, err := promptUser(ctx, []AskQuestion{{
-		Question: question,
-		Header:   "File access",
-		Options: []AskOption{
-			{Label: "Allow", Description: "Permit this folder for the rest of this session"},
-			{Label: "Deny", Description: "Keep the sandbox as is"},
-		},
-	}})
+	choice, err := promptAccess(ctx, AskQuestion{Question: question, Header: "File access"}, folder, fmt.Sprintf("%s = %s", kind, folder), "deny = "+folder)
 	if err != nil {
 		return fmt.Errorf("permission prompt failed: %w", err)
 	}
-	if len(answers) > 0 && strings.Contains(strings.ToLower(answers[0]), "allow") {
+	if choice.always() { // persist first, then book the session maps below
+		rule := ruleDeny
+		if choice.allowed() {
+			rule = kind
+		}
+		if err := saveAccessRule(rule, folder); err != nil {
+			dvlog.Logf("access: persist %s %s: %v", rule, folder, err)
+		}
+	}
+	if choice.allowed() {
 		approvedMu.Lock()
 		approvedRead[folder] = true
 		if isWriteOp(op) {

@@ -2,16 +2,16 @@
 
 ## Phase 1 — access prompt UX (no persistence yet)
 
-- [ ] 1. `AskQuestion` gains `Highlight []string` + `NoFreeText bool`
+- [x] 1. `AskQuestion` gains `Highlight []string` + `NoFreeText bool`
   (`ask.go`). TUI `renderAsk`/`handleAskKey` (`tui.go:669,777`) skip the own row
   and render `Highlight` bold yellow (`accessSubjectStyle`, `mkYellow`);
   headless `headlessOne`/`parsePicks` (`ask.go:149,231`) make `own` optional.
   `TestAskNoFreeTextHidesOwnRow`, `TestAskHighlightSubject` (TUI + headless).
-- [ ] 2. `access.go`: choice constants/labels + exact-label parse (fail closed
+- [x] 2. `access.go`: choice constants/labels + exact-label parse (fail closed
   to deny), `promptAccess` (forces `NoFreeText`, 4 options) and `confirmAccess`
   (single yes/no, default yes). `TestAccessChoiceParsing`,
   `TestAccessConfirmDefaultsYes`.
-- [ ] 3. Route `checkFileAccess` (`files.go:350-420`) and `approveShell`
+- [x] 3. Route `checkFileAccess` (`files.go:350-420`) and `approveShell`
   (`shellgate.go:106-159`) through `promptAccess`; underline the subject: file
   folder vs write mode, or the shell command/capability. Keep session maps and
   messages. Update `TestGateShellApprovalNamesModel`,
@@ -19,12 +19,12 @@
 
 ## Phase 2 — persistent access.toml
 
-- [ ] 4. `~/.config/valen/access.toml` store: `loadAccessRules` (cached) +
+- [x] 4. `~/.config/valen/access.toml` store: `loadAccessRules` (cached) +
   `saveAccessRule` (atomic tmp+rename, dedupe, sorted); expand `~/`, `real()`
   paths. Seed a commented empty file in `ensureUserConfig`
   (`userconfig.go:98`), never overwrite. `TestAccessTomlRoundTrip`,
   `TestAccessTomlSeedOnce`.
-- [ ] 5. Apply always-decisions end to end: persist then book the session map;
+- [x] 5. Apply always-decisions end to end: persist then book the session map;
   consult persistent rules in `allowedWithoutPrompt` /
   `allowedWriteWithoutPrompt` (`files.go:255,275`), `writableRoots` /
   `readableRoots` / `hiddenPaths` (`sandbox.go:215,239,296`),
@@ -32,7 +32,7 @@
   session and persistent allow; secrets still win over everything.
   `TestAccessDenyWinsOverAllow`, `TestAccessAlwaysWidensSandbox`,
   `TestGateShellAllSessionsPersist`.
-- [ ] 6. Confirm-`No` downgrades to the session outcome; `--config <file>` runs
+- [x] 6. Confirm-`No` downgrades to the session outcome; `--config <file>` runs
   keep access.toml session-only (no user config dir). `TestAccessConfirmNoDowngrades`.
 
 ## Phase 3 — seeded roots + capabilities
