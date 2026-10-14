@@ -776,11 +776,11 @@ func TestChatCacheIncrementalMatchesFull(t *testing.T) {
 	}
 }
 
-// TestTUICommittedTrimCollapsesReasoningKeepsPromptAndTools pins the scrollback
-// budget contract: once a turn alone exceeds max_lines, its reasoning and
-// reply bodies collapse but the user prompt and tool rows (priority content)
-// survive, and the result is bounded.
-func TestTUICommittedTrimCollapsesReasoningKeepsPromptAndTools(t *testing.T) {
+// TestTUICommittedTrimCollapsesReasoningKeepsPromptReplyAndTools pins the
+// scrollback budget contract: once a turn alone exceeds max_lines, its
+// reasoning collapses while the user prompt, tool rows and the full reply
+// survive. Replies are never cut, even past the budget.
+func TestTUICommittedTrimCollapsesReasoningKeepsPromptReplyAndTools(t *testing.T) {
 	limit := 30
 	m := newTestModel(t, testConfig("https://unused"))
 	m.cfg.TUI.MaxLines = &limit
@@ -805,16 +805,15 @@ func TestTUICommittedTrimCollapsesReasoningKeepsPromptAndTools(t *testing.T) {
 	if strings.Contains(out, "reasoning line 199") {
 		t.Fatalf("reasoning body must be trimmed past the budget:\n%s", out)
 	}
-	if got := strings.Count(out, "\n") + 1; got > limit {
-		t.Fatalf("transcript %d lines exceeds budget %d:\n%s", got, limit, out)
-	}
-	for _, want := range []string{"pristine user request", "read", "foo.go", "trimmed"} {
-		if !strings.Contains(out, want) {
+	// Glamour wraps and styles the reply, so compare on whitespace-collapsed plain text.
+	plain := strings.Join(strings.Fields(ansi.Strip(out)), " ")
+	for _, want := range []string{"pristine user request", "read", "foo.go", "trimmed", "reply line 0 ", "reply line 39"} {
+		if !strings.Contains(plain, want) {
 			t.Fatalf("priority content %q missing from compact transcript:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "reply line 39") {
-		t.Fatalf("reply body must collapse under budget:\n%s", out)
+	if strings.Contains(plain, "more lines") {
+		t.Fatalf("reply must never be cut in the scrollback:\n%s", out)
 	}
 }
 

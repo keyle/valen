@@ -119,12 +119,13 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 - Replies render as markdown via glamour (Monokai style, wrapped to viewport).
 - The committed scrollback is bounded by `[tui] max_lines` (default `1000`;
   `0` disables). Past the budget, the newest turn stays full while it fits;
-  older turns collapse their reasoning to a `N chars trimmed` header and
-  their reply to its first 8 lines, then the oldest turns drop behind a
-  `… N earlier turn(s) trimmed — ctrl+h for history` row. User prompts and
-  tool rows are never trimmed, so the cap only removes in-between reasoning
-  — the viewport stays cheap without losing what was asked or run. History
-  on disk is untouched; ctrl+h and the recall/detail views expand everything.
+  older turns collapse their reasoning to a `N chars trimmed` header, then
+  the oldest turns drop behind a `… N earlier turn(s) trimmed — ctrl+h for
+  history` row. User prompts, tool rows and replies are never cut, so the
+  cap only removes in-between reasoning (and, past that, whole old turns) —
+  the viewport stays cheap without truncating what was asked, run, or said.
+  History on disk is untouched; ctrl+h and the recall/detail views expand
+  everything.
 - Errors render as a pink `✗ <friendly>` block; details in Errors view.
 - Session totals render once, in the status row above the chatbox, in
   thousands (`N turns · win W/B · ↑P ↓C`, e.g. `3 turns · win 45k/300k ·

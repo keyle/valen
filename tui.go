@@ -217,8 +217,8 @@ type pendingTool struct {
 }
 
 // chatTurnRender caches one committed turn's rendered forms for the scrollback
-// budget: the full render and a lazily-built compact one (reasoning/reply
-// bodies collapsed) used when the transcript is over max_lines. Line counts
+// budget: the full render and a lazily-built compact one (reasoning collapsed)
+// used when the transcript is over max_lines. Line counts
 // ride along so assembling the budget stays O(turns), not O(rendered bytes).
 type chatTurnRender struct {
 	full         string
@@ -3513,10 +3513,8 @@ func (m *tuiModel) renderTurn(t *Turn, w int) string {
 }
 
 // renderTurnCompact is the scrollback form used once the transcript is over
-// the max_lines budget: reasoning and reply bodies collapse to a bounded head.
-// The user prompt and tool lines (the priority content) render unchanged, so
-// trimming only ever removes the in-between reasoning, never what the user
-// said or what the agent ran.
+// the max_lines budget: reasoning collapses to a header. The user prompt, tool
+// lines and the reply render unchanged, so trimming never cuts a response.
 func (m *tuiModel) renderTurnCompact(t *Turn, w int) string {
 	return m.renderTurnMode(t, w, true)
 }
@@ -3580,12 +3578,8 @@ func (m *tuiModel) renderTurnMode(t *Turn, w int, compact bool) string {
 	}
 
 	if t.Reply != "" {
-		reply := t.Reply
-		if compact {
-			reply = compactReply(reply)
-		}
 		aHead := asstHeadStyle.Render(" ✦ " + m.cfg.Model)
-		aBody := asstBodyStyle.Width(bodyW).Render(breakLongWords(m.renderMarkdown(reply), bodyW-1))
+		aBody := asstBodyStyle.Width(bodyW).Render(breakLongWords(m.renderMarkdown(t.Reply), bodyW-1))
 		parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, aHead, "", aBody))
 	}
 
@@ -4120,21 +4114,6 @@ func indexRune(r []rune, c rune) int {
 		}
 	}
 	return -1
-}
-
-// compactReplyMaxLines caps the markdown head kept in a compacted turn. The
-// tail marker tells the user the full reply is still in history (ctrl+h).
-const compactReplyMaxLines = 8
-
-// compactReply truncates a reply to its first compactReplyMaxLines lines for
-// the budgeted scrollback. Short replies pass through untouched.
-func compactReply(s string) string {
-	total := strings.Count(s, "\n") + 1
-	if total <= compactReplyMaxLines {
-		return s
-	}
-	head := strings.Join(strings.Split(s, "\n")[:compactReplyMaxLines], "\n")
-	return fmt.Sprintf("%s\n… %d more lines — ctrl+h for history", head, total-compactReplyMaxLines)
 }
 
 func (m *tuiModel) historyItems() []historyItem {

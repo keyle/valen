@@ -122,7 +122,7 @@ type CompactionConfig struct {
 // when a question appears or a turn finishes.
 // MaxLines nil means the 1000-line default; 0 or less disables trimming.
 // When the rendered committed transcript exceeds the cap, older turns
-// collapse their reasoning/reply bodies (user prompts and tool lines stay)
+// collapse their reasoning (prompts, tool lines and replies stay whole)
 // and, if needed, the oldest turns drop from scrollback. History on disk
 // stays lossless and the recall views still expand everything.
 type TUIConfig struct {
@@ -132,7 +132,7 @@ type TUIConfig struct {
 
 // defaultTUIMaxLines bounds the rendered committed transcript so the
 // viewport never re-parses an ever-growing scrollback (the TUI slowdown
-// after long sessions). Reasoning collapses first; prompts/tools survive.
+// after long sessions). Reasoning collapses first; prompts/tools/replies survive.
 const defaultTUIMaxLines = 1000
 
 // tuiMaxLines is the transcript line budget: the default when unset, else

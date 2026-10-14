@@ -69,10 +69,10 @@ thinking = "high"
                                 # Long sessions otherwise rebuild an ever-
                                 # growing scrollback every ~60ms and slow the
                                 # TUI down. Over budget, older turns collapse
-                                # their reasoning then reply bodies (user
-                                # prompts and tool lines are kept; a "… N
-                                # earlier turns trimmed" row marks any dropped
-                                # turns). Disk history stays lossless and
+                                # their reasoning (prompts, tool lines and
+                                # replies are never cut; a "… N earlier turns
+                                # trimmed" row marks any dropped turns). Disk
+                                # history stays lossless and
                                 # ctrl+h/recall views still expand everything.
                                 # 0 (or less) disables trimming.
 # sound = true                  # ring the terminal bell when a question appears or a
