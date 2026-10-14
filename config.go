@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/keyle/valen/internal/guard"
@@ -85,6 +86,22 @@ type CompactionConfig struct {
 type TUIConfig struct {
 	MaxLines *int  `toml:"max_lines"`
 	Sound    *bool `toml:"sound"`
+	// SelectScrollMs paces the drag auto-scroll: one viewport line per
+	// interval. <= 0 means the 150ms default.
+	SelectScrollMs int `toml:"select_scroll_ms"`
+}
+
+// defaultSelectScrollMs paces the transcript selection drag auto-scroll.
+const defaultSelectScrollMs = 150
+
+// tuiSelScrollInterval is the drag auto-scroll tick: the configured
+// select_scroll_ms, else 150ms.
+func tuiSelScrollInterval(cfg Config) time.Duration {
+	ms := cfg.TUI.SelectScrollMs
+	if ms <= 0 {
+		ms = defaultSelectScrollMs
+	}
+	return time.Duration(ms) * time.Millisecond
 }
 
 // defaultTUIMaxLines bounds the rendered committed transcript so the

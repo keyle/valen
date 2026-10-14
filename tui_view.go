@@ -88,7 +88,11 @@ func (m *tuiModel) View() string {
 	}
 	header := m.headerView()
 	status := m.statusView()
-	parts := []string{header, m.viewport.View(), status}
+	vp := m.viewport.View()
+	if m.mode == viewChat {
+		vp = m.highlightSelection(vp)
+	}
+	parts := []string{header, vp, status}
 	// The picker views (sessions and models) are navigation surfaces: the
 	// chatbox and quota footer don't apply there, but the ready/working
 	// status stays so the session state remains visible.

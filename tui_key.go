@@ -329,20 +329,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.applySlot(key)
 	}
 	switch s {
-	case "alt+m":
-		// Selection toggle: reporting on (default) keeps wheel-scroll
-		// with bypass-modifier drag-select; off disables terminal
-		// reporting so a plain drag selects + copies natively.
-		m.mouseOff = !m.mouseOff
-		if m.mouseOff {
-			m.notice = "Mouse off — drag selects + copies natively (wheel paused) · alt+m re-enables"
-			m.noticeErr = false
-			return m, tea.DisableMouse
-		}
-		m.notice = "Mouse on — wheel scrolls · shift+drag (opt+drag in iTerm/Terminal) selects + copies"
-		m.noticeErr = false
-		return m, tea.EnableMouseCellMotion
-	case "ctrl+g":
+	case "ctrl+h", "ctrl+g":
 		m.show(viewHelp)
 		return m, nil
 	case "ctrl+r":

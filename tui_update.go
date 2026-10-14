@@ -672,20 +672,21 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
-		// With reporting toggled off (alt+m) there is nothing to scroll:
-		// the terminal keeps drags for native selection, so stray
-		// reports are ignored instead of moving the viewport.
-		if m.mouseOff {
-			return m, nil
-		}
 		if m.copyClicked(msg) {
 			m.copyLastReply()
 			return m, nil
 		}
+		if m.mode == viewChat {
+			if handled, cmd := m.handleMouseSelection(msg); handled {
+				return m, cmd
+			}
+		}
 		// Wheel (and clicks) go to the viewport in every mode: in chat
 		// the textarea would swallow them and the scrollback would never
 		// move. Scrolling away from the bottom pauses autoscroll;
-		// scrolling back to the bottom resumes it.
+		// scrolling back to the bottom resumes it. Any stale selection is
+		// dropped: its line indexes would no longer line up.
+		m.clearSelection()
 		var vcmd tea.Cmd
 		m.viewport, vcmd = m.viewport.Update(msg)
 		if m.mode == viewChat {
@@ -695,6 +696,13 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, vcmd)
 		}
 		return m, tea.Batch(cmds...)
+
+	case selScrollMsg:
+		if !m.selAtScrollEdge() || !m.selScrollStep() {
+			m.selScrollTicking = false
+			return m, nil
+		}
+		return m, m.selScrollTick()
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)

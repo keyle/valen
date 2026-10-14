@@ -231,12 +231,15 @@ func TestLoadConfigInputTable(t *testing.T) {
 }
 
 func TestLoadConfigTUITable(t *testing.T) {
-	cfg, err := loadConfig(writeConfig(t, "model = \"m\"\n[tui]\nmax_lines = 250\n"))
+	cfg, err := loadConfig(writeConfig(t, "model = \"m\"\n[tui]\nmax_lines = 250\nselect_scroll_ms = 80\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := tuiMaxLines(cfg); got != 250 {
 		t.Fatalf("max_lines = %d, want 250", got)
+	}
+	if got := tuiSelScrollInterval(cfg); got != 80*time.Millisecond {
+		t.Fatalf("select_scroll_ms = %v, want 80ms", got)
 	}
 	// Unset keeps the 1000-line default; explicit 0 disables trimming.
 	cfg2, err := loadConfig(writeConfig(t, "model = \"m\"\n"))
@@ -245,6 +248,17 @@ func TestLoadConfigTUITable(t *testing.T) {
 	}
 	if got := tuiMaxLines(cfg2); got != 1000 {
 		t.Fatalf("default max_lines = %d, want 1000", got)
+	}
+	if got := tuiSelScrollInterval(cfg2); got != 150*time.Millisecond {
+		t.Fatalf("default select_scroll_ms = %v, want 150ms", got)
+	}
+	// A non-positive cadence falls back to the default.
+	cfg4, err := loadConfig(writeConfig(t, "model = \"m\"\n[tui]\nselect_scroll_ms = 0\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tuiSelScrollInterval(cfg4); got != 150*time.Millisecond {
+		t.Fatalf("zero select_scroll_ms = %v, want 150ms", got)
 	}
 	cfg3, err := loadConfig(writeConfig(t, "model = \"m\"\n[tui]\nmax_lines = 0\n"))
 	if err != nil {
@@ -462,72 +476,13 @@ func TestTUIWheelDebrisSwallowed(t *testing.T) {
 	}
 }
 
-// TestTUIMouseToggleSelection: alt+m flips terminal mouse reporting so both
-// workflows work. Reporting on (default): wheel scrolls, bypass-modifier
-// drag (shift-drag, opt-drag in iTerm2/Terminal.app) selects. Reporting
-// off: plain drag selects + copies natively, wheel reports are ignored.
-func TestTUIMouseToggleSelection(t *testing.T) {
-	m := newTestModel(t, testConfig("https://unused"))
-	altM := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m"), Alt: true}
-	if got := altM.String(); got != "alt+m" {
-		t.Fatalf("test key should render as alt+m, got %q", got)
-	}
-	mm, cmd := m.Update(altM)
-	m = mm.(*tuiModel)
-	if cmd == nil {
-		t.Fatal("alt+m must disable terminal mouse reporting")
-	}
-	if !m.mouseOff {
-		t.Fatal("alt+m must set mouseOff")
-	}
-	if !strings.Contains(m.notice, "drag selects") {
-		t.Fatalf("notice should point at plain-drag selection: %q", m.notice)
-	}
-	if got := m.input.Value(); got != "" {
-		t.Fatalf("alt+m leaked into input: %q", got)
-	}
-
-	// Wheel reports are ignored while off: the viewport must not move.
-	for i := 0; i < 10; i++ {
-		m.session.Turns = append(m.session.Turns, Turn{
-			At:     time.Now(),
-			Prompt: fmt.Sprintf("question %d with padding to fill lines", i),
-			Reply:  fmt.Sprintf("answer %d with padding to fill lines", i),
-		})
-	}
-	m.viewport.Width = 80
-	m.viewport.Height = 10
-	m.pinBottom()
-	top := m.viewport.YOffset
-	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
-	if m.viewport.YOffset != top {
-		t.Fatalf("wheel must not scroll while mouse is off: yoff=%d top=%d", m.viewport.YOffset, top)
-	}
-
-	// Toggling back re-enables reporting and wheel scroll.
-	mm, cmd = m.Update(altM)
-	m = mm.(*tuiModel)
-	if cmd == nil || m.mouseOff {
-		t.Fatal("second alt+m must re-enable mouse reporting")
-	}
-	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
-	if m.viewport.YOffset >= top {
-		t.Fatalf("wheel up did not scroll after re-enable: yoff=%d top=%d", m.viewport.YOffset, top)
-	}
-}
-
 // TestTUITransientNoticeClearsOnTyping: informational (yellow) status
 // notices restore the turns/token row on the next chatbox edit, while
 // errors stay sticky.
 func TestTUITransientNoticeClearsOnTyping(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
-	altM := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m"), Alt: true}
-	mm, _ := m.Update(altM)
-	m = mm.(*tuiModel)
-	if m.notice == "" || m.noticeErr {
-		t.Fatalf("mouse toggle must set an informational notice, got %q err=%v", m.notice, m.noticeErr)
-	}
-	mm, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	m.notice, m.noticeErr = "informational", false
+	mm, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
 	m = mm.(*tuiModel)
 	if m.notice != "" {
 		t.Fatalf("typing must clear the informational notice, got %q", m.notice)
@@ -650,6 +605,26 @@ func TestTUIColonQQuits(t *testing.T) {
 		}
 		if _, ok := cmd().(tea.QuitMsg); !ok {
 			t.Fatalf("%q: expected QuitMsg", in)
+		}
+	}
+}
+
+// TestTUIHelpKey: ctrl+h (and the ctrl+g alias) open the help view from the
+// chat, and the table documents the bindings.
+func TestTUIHelpKey(t *testing.T) {
+	for _, kt := range []tea.KeyType{tea.KeyCtrlH, tea.KeyCtrlG} {
+		m := newTestModel(t, testConfig("https://unused"))
+		mm, _ := m.Update(tea.KeyMsg{Type: kt})
+		m = mm.(*tuiModel)
+		if m.mode != viewHelp {
+			t.Fatalf("key %v: mode=%v, want help", kt, m.mode)
+		}
+	}
+	m := newTestModel(t, testConfig("https://unused"))
+	help := m.renderHelp()
+	for _, want := range []string{"ctrl+h · ctrl+g", "this help", "/compact", "PLAN (cyan chatbox)", "select_scroll_ms"} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("help missing %q:\n%s", want, help)
 		}
 	}
 }

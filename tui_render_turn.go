@@ -137,7 +137,7 @@ func (m *tuiModel) assembleCommitted(maxLines int) string {
 	}
 	var b strings.Builder
 	if start > 0 {
-		b.WriteString(metaStyle.Render(fmt.Sprintf("… %d earlier turn(s) trimmed — ctrl+h for history", start)))
+		b.WriteString(metaStyle.Render(fmt.Sprintf("… %d earlier turn(s) trimmed — ctrl+r for history", start)))
 		b.WriteString("\n\n\n")
 	}
 	for i := start; i < n; i++ {

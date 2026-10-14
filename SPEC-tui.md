@@ -107,7 +107,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   otherwise `floor`/`nitro`/`exacto`) trails the thinking level
   (`kimi-k3 · high · nitro`) and is shown only on OpenRouter models — Go and
   Zen ignore routing. The tools count is not shown, and the header carries no
-  key hints (alt+m is listed in `/help`).
+  key hints (shortcuts are listed in `/help`).
 - Transcript is padded conversation blocks separated by blank lines; no role
   prefixes. `You` (orange; `You (PLAN)` in cyan with a cyan left bar when sent in plan mode) and ` ✦ <model>` (green, leading space so it lines
   up with ` ✦ valen`) head each block.
@@ -147,11 +147,11 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 - The committed scrollback is bounded by `[tui] max_lines` (default `1000`;
   `0` disables). Past the budget, the newest turn stays full while it fits;
   older turns collapse their reasoning to a `N chars trimmed` header, then
-  the oldest turns drop behind a `… N earlier turn(s) trimmed — ctrl+h for
+  the oldest turns drop behind a `… N earlier turn(s) trimmed — ctrl+r for
   history` row. User prompts, tool rows and replies are never cut, so the
   cap only removes in-between reasoning (and, past that, whole old turns) —
   the viewport stays cheap without truncating what was asked, run, or said.
-  History on disk is untouched; ctrl+h and the recall/detail views expand
+  History on disk is untouched; ctrl+r and the recall/detail views expand
   everything.
 - Errors render as a pink `✗ <friendly>` block; details in Errors view.
 - Session totals render once, in the status row above the chatbox, in
@@ -187,16 +187,30 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   narrow terminal or a missing field just drops that part.
 - Autoscroll follows new turns while pinned to the bottom; PgUp/PgDn or the
   mouse wheel scrolls the transcript, which pauses autoscroll until scrolled
-  back to the bottom (a new submit or committed turn re-pins). Mouse reporting
-  is on by default so the wheel scrolls; shift+mouse drag (the terminal
-  bypass modifier: shift in most terminals, opt in iTerm2/Terminal.app) selects +
-  copies without toggling. alt+m toggles plain-drag selection: reporting
-  off means a plain drag selects + copies natively (wheel paused) until
-  alt+m re-enables it. Split mouse
+  back to the bottom (a new submit or committed turn re-pins). A plain
+  left-drag over the transcript selects text in-app: motion extends the
+  selection (reverse-video highlighted, re-asserted after each syntax/markdown
+  colour reset so the whole span stays lit, not just the first word), and
+  release copies it to the
+  clipboard via OSC 52 and reports `Copied N bytes to clipboard.` in the status
+  bar. Dragging to the top or bottom row auto-scrolls the transcript one line
+  per `[tui] select_scroll_ms` (default 150ms; extending the selection to the
+  revealed rows) until the drag
+  leaves the edge or the transcript ends. Copy is computed from the ANSI-stripped, display-width-aware line
+  content with leading border/padding and trailing width padding trimmed, so a
+  drag on a wide terminal no longer copies columns of spaces. Shift+drag is
+  ignored (left to the terminal's native bypass modifier), and scrolling clears
+  any active selection. Mouse reporting
+  is on by default so the wheel scrolls. Split mouse
   reports misparsed as key runes (rapid wheeling across TTY reads) are
   held for reassembly and never typed: a completed `[<…M` report drops,
   anything else releases as typing; genuine wheel input still arrives as
   mouse events. Only pasted or typed chars may reach the input box.
+- Link text in the transcript (glamour renders a markdown link as its text plus
+  the resolved URL) opens on ctrl+left-click via the platform opener (`open` on
+  macOS, `xdg-open` elsewhere); only http(s) URLs open, and a ctrl+click on
+  non-link text is a no-op. ctrl is used rather than alt because
+  iTerm2/Terminal.app bind Option to native selection bypass.
 - After a finished turn with a reply, an underlined dim `copy response` row, right-aligned, ends the
   transcript; a left click on it (or `/copy`) writes the last reply's markdown
   source to the clipboard via OSC 52 (needs terminal support; works over ssh).
@@ -436,10 +450,11 @@ the full height, starts at its heading and scrolls to follow the selected option
 | Esc | cancel run / clear input / back | back to chat |
 | Ctrl+C / Ctrl+D | cancel (busy) / quit (idle) | quit |
 | Ctrl+J / Alt+Enter / Shift+Enter | newline in input (shift+enter where the terminal supports it) | — |
-| PgUp/PgDn / wheel | scroll transcript (pauses autoscroll until back at bottom) | scroll view |
-| Shift+drag (Opt+drag in iTerm/Terminal) | native drag-select + copy (wheel keeps scrolling) | same |
+| PgUp/PgDn / wheel | scroll transcript (pauses autoscroll until back at bottom; clears any selection) | scroll view |
+| Drag (left) over transcript | in-app select, auto-copy on release (status shows bytes); drag to top/bottom edge auto-scrolls | same |
+| Shift+drag (Opt+drag in iTerm/Terminal) | terminal's native drag-select + copy (not intercepted) | same |
+| Ctrl+click a link | open http(s) URL in the browser | same |
 | Click `copy response` (right edge, under last reply) / `/copy` | copy last reply via OSC 52 | — |
-| Alt+M | toggle plain-drag selection (mouse reporting off: drag selects, wheel paused) | — |
 | Ctrl+G | help | help |
 | Ctrl+R / Ctrl+L / Ctrl+U / Ctrl+X | history / sessions / tools / errors | same |
 | Ctrl+Y | cycle OpenRouter routing: none → floor → nitro → exacto, wraps (silent no-op on Go/Zen) | same |

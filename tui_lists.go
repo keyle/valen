@@ -395,55 +395,105 @@ func (m *tuiModel) renderEffortList() string {
 }
 func (m *tuiModel) renderHelp() string {
 	return emptyStyle.Width(m.contentWidth()).Render(`Conversation first: your message shows instantly, the reply streams into the same thread.
+`) + "\n" + helpBody()
+}
 
-Keys
-  enter send · tab swaps work/plan mode (cyan box = plan) · shift+enter/alt+enter/ctrl+j newline · esc cancel/back · pgup/pgdn/wheel scroll
-  wheel/pgup pauses autoscroll until you reach the bottom again
-   shift+mouse drag selects text (opt+drag in iTerm/Terminal) and copies natively, wheel stays on · alt+m toggles plain-drag selection (wheel paused while off)
-  ctrl+g help · ctrl+r history · ctrl+l sessions · ctrl+u tools · ctrl+x errors · ctrl+o thinking display
-  ctrl+b details · ctrl+p/ctrl+m model · ctrl+n new session · ctrl+t thinking level · ctrl+y routing (cycles none→floor→nitro→exacto) · ctrl+s save · ctrl+q quit · ctrl+c/ctrl+d cancel · clear input · quit
-  ↑ on an empty chatbox reloads your last prompt: edit it and enter resends from there
-  favourite slots: alt+1…alt+9, alt+0 switch to the model + thinking + routing saved in that slot · alt+shift+1…0 saves the current triple there
-  in lists: ↑↓ move · enter open · esc back
-  /model picker: ↑↓/j/k select · enter switches · space stars/unstars favourites (kept on top, works while filtering) · ctrl+f filters (esc leaves the field, then backs)
+// helpKeyStyle paints the shortcut column of the help tables.
+var helpKeyStyle = lipgloss.NewStyle().Foreground(mkCyan).Bold(true)
 
-Modes
-   WORK (green chatbox) — default: the agent can read, edit, write and run commands.
-   PLAN (cyan chatbox) — read-only: the agent investigates and replies with a plan; write/edit/shell/MCP are blocked, task is explore-only.
-   Switch with tab or /plan (or start with -plan). Scrollback labels each message "You (PLAN)" in cyan or plain "You" in orange.
+// helpTable renders key → action rows, padding the left column to the widest
+// entry so the actions line up.
+func helpTable(rows [][2]string) string {
+	w := 0
+	for _, r := range rows {
+		if n := lipgloss.Width(r[0]); n > w {
+			w = n
+		}
+	}
+	var b strings.Builder
+	for _, r := range rows {
+		b.WriteString("  " + helpKeyStyle.Render(r[0]))
+		b.WriteString(strings.Repeat(" ", w-lipgloss.Width(r[0])) + "  ")
+		b.WriteString(r[1] + "\n")
+	}
+	return b.String()
+}
 
-Commands
-   /help /history /sessions (/resume) /tools /errors /think /save /copy /clear /new /plan /quit (or :q)
-   /copy — copy the last reply to the clipboard (OSC 52); clicking the underlined "copy response" under it does the same
-   /compact (/summarize) — prune + summarize older history with the cheap model; disk log untouched
-   /plan (or tab) — toggle plan mode: read-only investigation, the reply is the plan (write/edit/shell/MCP blocked, task explore-only)
-   /model [filter] — list models with provider prefixes (go/…, zen/…, openrouter/…) and switch (ctrl+p/ctrl+m does the same); missing keys report on pick/send, never block boot
-  /effort [level] — thinking level for the current model (/thinking is an alias)
-  /route [none|floor|nitro|exacto] — OpenRouter provider routing (ctrl+y cycles); a no-op on Go/Zen
+func helpBody() string {
+	var b strings.Builder
+	b.WriteString(metaStyle.Render("Keys") + "\n")
+	b.WriteString(helpTable([][2]string{
+		{"enter", "send the prompt"},
+		{"shift+enter · alt+enter · ctrl+j", "insert a newline"},
+		{"tab", "switch work/plan mode (cyan box = plan)"},
+		{"esc", "cancel the turn, clear input, or go back"},
+		{"↑ ↓", "move in lists"},
+		{"↑ (empty chatbox)", "reload the last prompt"},
+		{"pgup · pgdn · wheel", "scroll (wheel/pgup pauses autoscroll until you reach the bottom)"},
+		{"drag / shift+drag", "select transcript text (copies on release; shift+drag keeps native selection)"},
+		{"ctrl+h · ctrl+g", "this help"},
+		{"ctrl+r", "history"},
+		{"ctrl+l", "sessions"},
+		{"ctrl+u", "tools"},
+		{"ctrl+x", "errors"},
+		{"ctrl+o", "toggle thinking display"},
+		{"ctrl+b", "toggle details"},
+		{"ctrl+p · ctrl+m", "model picker"},
+		{"ctrl+n", "new session"},
+		{"ctrl+t", "cycle thinking level"},
+		{"ctrl+y", "cycle OpenRouter routing (none→floor→nitro→exacto)"},
+		{"ctrl+s", "save the transcript"},
+		{"ctrl+q", "quit"},
+		{"ctrl+c · ctrl+d", "cancel the turn · quit"},
+		{"ctrl+f", "filter in the model picker"},
+		{"alt+1…alt+0", "jump to a favourite slot"},
+		{"alt+shift+1…0", "save model+thinking+routing to a slot"},
+	}))
+	b.WriteString("\n" + metaStyle.Render("Modes") + "\n")
+	b.WriteString(helpTable([][2]string{
+		{"WORK", "green chatbox — the agent reads, edits, writes and runs commands"},
+		{"PLAN (cyan chatbox)", "read-only — replies with a plan; write/edit/shell/MCP blocked, task explore-only"},
+	}))
+	b.WriteString("  switch with tab or /plan (or start with -plan); scrollback labels each message \"You (PLAN)\" in cyan.\n")
 
-When the model calls AskUserQuestion: ↑↓/jk move · enter select · space toggles multi-select · type your own when needed · enter confirms.
+	b.WriteString("\n" + metaStyle.Render("Commands") + "\n")
+	b.WriteString(helpTable([][2]string{
+		{"/help", "this help (/h, /?)"},
+		{"/history", "browse tool and command activity"},
+		{"/sessions", "resume a saved session (/resume, /continue)"},
+		{"/tools", "full tool output"},
+		{"/errors", "error log"},
+		{"/model [filter]", "list and switch models (provider-prefixed)"},
+		{"/effort [level]", "thinking level for the current model (/thinking)"},
+		{"/route", "OpenRouter provider routing; a no-op on Go/Zen"},
+		{"/plan", "toggle plan mode (same as tab)"},
+		{"/compact", "prune + summarize older history (/summarize)"},
+		{"/copy", "copy the last reply to the clipboard"},
+		{"/save", "save the transcript"},
+		{"/new", "start a fresh session"},
+		{"/clear", "clear the input"},
+		{"/quit", "quit (also :q)"},
+	}))
+	b.WriteString("  /model picker: ↑↓/j/k select · enter switches · space stars a favourite · ctrl+f filters.\n")
+	b.WriteString("  /copy also by clicking the underlined \"copy response\" under the reply.\n")
 
-Go plan usage (5h rolling / 7d / 30d) shows in the footer, refreshed each
-minute and after every turn: dim normally, yellow past 80%, pink at the cap.
-
-Models persist to ~/.config/valen/state.json, so the last switch sticks across runs.
-Favourites live beside it in ~/.config/valen/favourites.yaml (a plain list) and
-show with a ★ at the top of the picker; space toggles them there.
-Favourite slots (10, like weapon slots) live in ~/.config/valen/slots.yaml: pick a
-model + thinking level, press alt+shift+<1-9,0> to store it, then alt+<1-9,0> jumps
-back to it. Terminals need Option/Alt sent as Meta (macOS Terminal: "Use Option as
-Meta key"; iTerm2: Left Option key = Esc+).
-Thinking levels depend on the model (see /effort picker): muse-spark takes
-minimal/low/medium/high/xhigh, gpt/grok take low…max, glm/deepseek take
-low/high/max or high/max, kimi-k3 is max-only, toggle models take none/high.
-Unset thinking means the provider default. ctrl+t cycles the list low→high
-and wraps to low; unknown models learn valid levels from the provider 400
-and cache them on disk.
-
-Thinking is shown by default (ctrl+o hides). Tools render inline; ctrl+u shows full output.
-
-Chatbox chrome lives in config.toml [input]: blink=false parks the block
-cursor steady (no blink), height=N sets the box lines (default 3, blinking on).`) + "\n"
+	b.WriteString("\n" + metaStyle.Render("Notes") + "\n")
+	b.WriteString(`  AskUserQuestion: ↑↓/jk move · enter select · space toggles multi-select · type your own · enter confirms.
+`)
+	b.WriteString(`  Go plan usage (5h / 7d / 30d) shows in the footer: dim, yellow past 80%, pink at the cap.
+`)
+	b.WriteString(`  State lives in ~/.config/valen/state.json (models), favourites.yaml (★ at the top of the picker) and slots.yaml.
+`)
+	b.WriteString(`  Slots need Option/Alt sent as Meta (macOS Terminal: "Use Option as Meta key"; iTerm2: Left Option = Esc+).
+`)
+	b.WriteString(`  Thinking levels depend on the model (see /effort); ctrl+t cycles low→high and wraps.
+`)
+	b.WriteString(`  Thinking shows by default (ctrl+o hides); tools render inline, ctrl+u shows full output.
+`)
+	b.WriteString(`  Chatbox chrome: config.toml [input] blink=false parks the cursor steady, height=N sets the box lines.
+  Selecting text: drag to select (auto-copies on release); dragging past the top/bottom edge auto-scrolls one line per [tui] select_scroll_ms (default 150ms).
+  shift+drag keeps the terminal's own selection; ctrl+click opens a link.`)
+	return b.String()
 }
 func (m *tuiModel) renderDetail() string {
 	return m.wrapPlain("‹ "+m.detailTitle+" · esc back ›") + "\n\n" + m.wrapPlain(m.detailBody) + "\n"

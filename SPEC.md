@@ -35,6 +35,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `tui_key.go` | Key/mouse/CSI parsing and handling (`handleKey`, overlays, esc/ctrl/mouse-hold) |
 | `tui_view.go` | Chrome rendering: `View`, header/status/footer/input, viewport + chat |
 | `tui_render_turn.go` | Conversation rendering: committed-turn assembly/trim, turn headers, durations, copy helpers |
+| `tui_select.go` | Transcript drag selection: ANSI-stripped cell grid, copy trimming, reverse-video highlight, ctrl+click link opening |
 | `tui_render_tool.go` | Tool rendering: summaries, edit/write diffs, tool + pending lines |
 | `tui_stream.go` | Streaming text assembly (`appendStream*`, thinking deltas, round breaks) |
 | `tui_lists.go` | Recall/picker/help/session list rendering and item builders |
@@ -93,7 +94,7 @@ and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
 | `temperature` | float | unset | Pointer semantics: unset omits the field, `0.0` sends zero |
 | `max_tokens` | int | `16384` | Explicit output cap on all three transports (`max_tokens` on Chat/Messages, `max_output_tokens` on Responses); positive configured values are honored without a floor |
 | `compaction` | table | `auto=true, keep_tokens=15000, buffer=10%, thinking=medium` | Summary-mode, send-side only (prior disk records remain intact): `auto` prunes and summarizes before send and retries once after provider context overflow; `keep_tokens` is a soft whole-turn tail target, always protecting the entire current turn; `buffer` headroom below `max_context_tokens`; `model` summarizer override (empty = session model); `thinking` independent of top-level effort (default `medium` when accepted, cheapest fallback per model) |
-| `[tui]` | table | `max_lines=1000`, `sound=true` | Transcript rendering (TUI only). `max_lines` bounds the rendered committed scrollback so the viewport never re-parses an ever-growing transcript (the slowdown after long sessions). Over budget, older turns collapse their reasoning (user prompts, tool lines and replies are kept whole, never cut), then drop oldest-first behind a `… N earlier turn(s) trimmed` row; disk history stays lossless and ctrl+h/recall views still expand everything. `0` disables trimming. `sound` (default `true`) rings the terminal bell (BEL) when a question appears or a turn finishes (not on cancel); `false` mutes it |
+| `[tui]` | table | `max_lines=1000`, `sound=true`, `select_scroll_ms=150` | Transcript rendering (TUI only). `max_lines` bounds the rendered committed scrollback so the viewport never re-parses an ever-growing transcript (the slowdown after long sessions). Over budget, older turns collapse their reasoning (user prompts, tool lines and replies are kept whole, never cut), then drop oldest-first behind a `… N earlier turn(s) trimmed` row; disk history stays lossless and ctrl+h/recall views still expand everything. `0` disables trimming. `sound` (default `true`) rings the terminal bell (BEL) when a question appears or a turn finishes (not on cancel); `false` mutes it. `select_scroll_ms` (default `150`) paces the selection drag auto-scroll: one viewport line per interval while dragging past the top/bottom edge |
 | `[sandbox]` | table | `allow`, `deny`, `allow_bind`, `ipc_allow` (all unset = built-in defaults) | Shell sandbox policy (see "Shell sandbox"); declared before `[input]` |
 | `[input]` | table | `blink=true, height=3` | Chatbox chrome (TUI only): block-cursor blink plus input box height in lines |
 | `tools` | string[] | empty | Subset of `shell`, `web_search`, `web_fetch`, `read`, `write`, `edit`, `glob`, `grep`, `AskUserQuestion`, `todowrite`, `todoread`. `AskUserQuestion` plus `todowrite`/`todoread` plus `task` are also registered automatically when absent, so model-driven questions, the session plan, and subagent delegation work in every frontend |
@@ -561,13 +562,15 @@ deterministic. Tools are registered as
   type-your-own, confirmation/edit, the TUI overlay state machine, and one
   `AskUserQuestion` round trip per transport (`tool`, `tool_result`,
   `function_call_output`).
-- `tui_test.go`, `tui_render_test.go`, `tui_key_test.go`, `tui_view_test.go` —
+- `tui_test.go`, `tui_render_test.go`, `tui_key_test.go`, `tui_view_test.go`,
+  `tui_select_test.go` —
   the Bubble Tea UI offline: model/session lifecycle, slash commands and
   named sessions; committed-turn trim, tool/thinking rendering and streaming
   assembly (`tui_render_test.go`); key/mouse/CSI handling, overlays,
   autoscroll and input-`[tui]` config tables (`tui_key_test.go`); layout,
   status rows, favourite slots and routing footer/session-cost metadata
-  (`tui_view_test.go`).
+  (`tui_view_test.go`); drag selection, padding-trimmed copy, highlight and
+  ctrl+click links (`tui_select_test.go`).
 - `todos_test.go` — `todowrite`/`todoread` round trip (opencode schema),
   validation rejects, empty/reset, restore-from-turns, scrollback checklist
   formatting (glyphs, args shape, cap tail, non-todo fallback);
@@ -589,7 +592,7 @@ deterministic. Tools are registered as
 
 ```sh
 export OPENCODE_API_KEY=...
-go run .                              # fullscreen TUI (ctrl+g for keys)
+go run .                              # fullscreen TUI (ctrl+h for keys)
 go run . ~/Code/something             # TUI rooted at another folder
 go run . -dir ~/Code/something        # same, explicit (also works headless)
 go run . -p "..."                     # one-shot answer on stdout

@@ -426,13 +426,13 @@ type tuiModel struct {
 	// stale flush timers.
 	mouseHold    []tea.KeyMsg
 	mouseHoldGen int
-	// mouseOff is the alt+m selection toggle. Reporting stays on by default
-	// so the wheel always scrolls; the bypass modifier (shift in most
-	// terminals; opt in iTerm2/Terminal.app) drag-selects + copies without
-	// toggling. With mouseOff set, terminal reporting is disabled via
-	// tea.DisableMouse so a plain drag selects natively (wheel paused)
-	// until alt+m re-enables it.
-	mouseOff bool
+	// sel is the in-app transcript drag selection. A plain left-drag selects
+	// and release auto-copies; shift+drag is left to the terminal's native
+	// bypass; ctrl+click opens a link. See tui_select.go.
+	sel selection
+	// selScrollTicking tracks the drag auto-scroll loop so motion bursts don't
+	// spawn duplicate tickers. See tui_select.go.
+	selScrollTicking bool
 
 	width  int
 	height int
@@ -624,6 +624,7 @@ func (m *tuiModel) show(mode viewMode) {
 	}
 	m.mode = mode
 	m.cursor = 0
+	m.clearSelection()
 	m.viewport.Height = m.viewportHeight()
 	if mode == viewChat {
 		m.input.Focus()
