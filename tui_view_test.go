@@ -569,7 +569,7 @@ func TestRoutingFooterMetadata(t *testing.T) {
 	}
 	m.orSpent, m.orSpentSet = 0.0034, true
 	got := ansi.Strip(m.footerView())
-	for _, want := range []string{"openrouter $12.34 left", "Infermatic", "42 t/s", "in $0.10/out $0.40/M", "sess $0.0034"} {
+	for _, want := range []string{"openrouter $12.34 left", "Infermatic", "42 TPS", "in $0.10/out $0.40/M", "$0.0034 used"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("footer %q missing %q", got, want)
 		}
@@ -582,13 +582,13 @@ func TestRoutingFooterMetadata(t *testing.T) {
 	if strings.Contains(got, "Infermatic") || strings.Contains(got, "/M") {
 		t.Fatalf("missing metadata must drop: %q", got)
 	}
-	if !strings.Contains(got, "42 t/s") {
+	if !strings.Contains(got, "42 TPS") {
 		t.Fatalf("tps should survive: %q", got)
 	}
 
 	// Nothing to add leaves the plain balance.
 	m.orMeta = nil
-	if got := ansi.Strip(m.footerView()); !strings.Contains(got, "left") || strings.Contains(got, "t/s") {
+	if got := ansi.Strip(m.footerView()); !strings.Contains(got, "left") || strings.Contains(got, "TPS") {
 		t.Fatalf("empty metadata footer=%q", got)
 	}
 
@@ -596,7 +596,7 @@ func TestRoutingFooterMetadata(t *testing.T) {
 	m.width, m.viewport.Width = 24, 24
 	m.orMeta = &ORMeta{Provider: "Infermatic", TPS: 42}
 	m.orPricing = map[string]orPricing{"openrouter/moonshotai/kimi-k3": {prompt: 0.0000001, completion: 0.0000004}}
-	if got := ansi.Strip(m.footerView()); strings.Contains(got, "Infermatic") || strings.Contains(got, "/M") || strings.Contains(got, "sess") {
+	if got := ansi.Strip(m.footerView()); strings.Contains(got, "Infermatic") || strings.Contains(got, "/M") || strings.Contains(got, "used") {
 		t.Fatalf("narrow footer must yield the suffix: %q", got)
 	}
 }
@@ -615,7 +615,7 @@ func TestRoutingSessionCostAccumulates(t *testing.T) {
 	if got := formatCost(m.orSpent); got != "$0.0022" {
 		t.Fatalf("session spend = %s, want $0.0022", got)
 	}
-	if got := ansi.Strip(m.footerView()); !strings.Contains(got, "sess $0.0022") {
+	if got := ansi.Strip(m.footerView()); !strings.Contains(got, "$0.0022 used") {
 		t.Fatalf("footer %q missing session cost", got)
 	}
 
@@ -640,7 +640,7 @@ func TestRoutingSessionCostWithoutBalance(t *testing.T) {
 	m.orCredits = nil
 	m.orSpent, m.orSpentSet = 0.5, true
 	got := ansi.Strip(m.footerView())
-	if !strings.Contains(got, "sess $0.50") {
+	if !strings.Contains(got, "$0.50 used") {
 		t.Fatalf("footer %q missing session cost without balance", got)
 	}
 	if strings.Contains(got, "left") {

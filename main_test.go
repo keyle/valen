@@ -494,7 +494,7 @@ func TestChatSendMessagesKeepsReads(t *testing.T) {
 }
 
 // TestRunToolCallsParallel verifies one round's independent calls overlap:
-// 3×~100ms must finish well under the 350ms sequential sum, with history and
+// 3×~30-50ms must finish well under the 110ms sequential sum, with history and
 // completion events live even when the first call is slowest.
 func TestRunToolCallsParallel(t *testing.T) {
 	r := NewRegistry()
@@ -503,9 +503,9 @@ func TestRunToolCallsParallel(t *testing.T) {
 		d    time.Duration
 		out  string
 	}{
-		{"read", 150 * time.Millisecond, "A"},
-		{"glob", 100 * time.Millisecond, "B"},
-		{"grep", 100 * time.Millisecond, "C"},
+		{"read", 50 * time.Millisecond, "A"},
+		{"glob", 30 * time.Millisecond, "B"},
+		{"grep", 30 * time.Millisecond, "C"},
 	} {
 		if err := r.Add(sleepTool(tc.name, tc.d, tc.out)); err != nil {
 			t.Fatal(err)
@@ -521,8 +521,8 @@ func TestRunToolCallsParallel(t *testing.T) {
 	msgs := runToolCalls(context.Background(), r, calls, func(ev Event) { events = append(events, ev) })
 	elapsed := time.Since(start)
 
-	if elapsed >= 300*time.Millisecond {
-		t.Fatalf("expected parallel overlap, took %v (sequential sum is 350ms)", elapsed)
+	if elapsed >= 80*time.Millisecond {
+		t.Fatalf("expected parallel overlap, took %v (sequential sum is 110ms)", elapsed)
 	}
 	if len(msgs) != 3 {
 		t.Fatalf("messages=%d", len(msgs))
@@ -561,9 +561,9 @@ func TestRunToolCallsMCPSerial(t *testing.T) {
 		d    time.Duration
 		out  string
 	}{
-		{"slow__x", 200 * time.Millisecond, "X"},
-		{"slow__y", 200 * time.Millisecond, "Y"},
-		{"fast__z", 200 * time.Millisecond, "Z"},
+		{"slow__x", 50 * time.Millisecond, "X"},
+		{"slow__y", 50 * time.Millisecond, "Y"},
+		{"fast__z", 50 * time.Millisecond, "Z"},
 	} {
 		if err := r.Add(sleepTool(tc.name, tc.d, tc.out)); err != nil {
 			t.Fatal(err)
@@ -575,7 +575,7 @@ func TestRunToolCallsMCPSerial(t *testing.T) {
 	}
 	start := time.Now()
 	msgs := runToolCalls(context.Background(), r, same, nil)
-	if elapsed := time.Since(start); elapsed < 400*time.Millisecond {
+	if elapsed := time.Since(start); elapsed < 90*time.Millisecond {
 		t.Fatalf("same-server calls must serialize, took %v", elapsed)
 	}
 	if len(msgs) != 2 || msgs[0].Content != "X" || msgs[1].Content != "Y" {
@@ -588,7 +588,7 @@ func TestRunToolCallsMCPSerial(t *testing.T) {
 	}
 	start = time.Now()
 	msgs = runToolCalls(context.Background(), r, mixed, nil)
-	if elapsed := time.Since(start); elapsed < 400*time.Millisecond {
+	if elapsed := time.Since(start); elapsed < 90*time.Millisecond {
 		t.Fatalf("unknown cross-server calls must serialize, took %v", elapsed)
 	}
 	if len(msgs) != 2 || msgs[0].Content != "X" || msgs[1].Content != "Z" {

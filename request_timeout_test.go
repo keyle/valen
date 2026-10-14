@@ -23,7 +23,7 @@ func TestRequestDeadlineIncludesBody(t *testing.T) {
 			}))
 			defer srv.Close()
 			req, _ := http.NewRequest(http.MethodPost, srv.URL, strings.NewReader(`{}`))
-			resp, err := clientDoWithRetryTimeout(context.Background(), srv.Client(), req, 50*time.Millisecond)
+			resp, err := clientDoWithRetryTimeout(context.Background(), srv.Client(), req, 20*time.Millisecond)
 			if err != nil {
 				t.Fatal(err)
 			}

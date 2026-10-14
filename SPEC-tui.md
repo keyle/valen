@@ -173,8 +173,9 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   until then.
   When OpenRouter reports it, the balance is followed by best-effort turn
   metadata: the serving provider, throughput, per-million input/output rates and
-  the session's cumulative billed cost (`openrouter $X.XX left · Infermatic · 42 t/s ·
-  in $0.10/out $0.40/M · sess $0.0034`).
+  the session's cumulative billed cost (`openrouter $X.XX left · Infermatic · 42 TPS ·
+  in $0.10/out $0.40/M · $0.0034 used`); the cost label is just "$X used", the
+  session scope being implicit.
   The provider name and billed cost come from the response (top-level
   `provider`, `usage.cost`); rates come from the model catalog's
   `pricing.prompt`/`pricing.completion`; throughput is measured locally from the

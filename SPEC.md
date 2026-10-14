@@ -145,7 +145,8 @@ body or last SSE usage chunk, the catalog's `pricing.prompt`/`completion`
 rates, locally-timed throughput (completion tokens over the first-to-last
 content delta, no extra request), and the session's cumulative billed cost
 (`usage.cost` summed across turns and tool-loop rounds; shown as
-`sess $X.XXXX`, four decimals below a cent). The session total is measured
+`$X.XXXX used`, four decimals below a cent, with the session scope implicit).
+The session total is measured
 locally, so it renders without a balance and resets on a new/resumed session.
 
 Transport is selected per model by `modelTransport` (live Go table, Oct 2

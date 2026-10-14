@@ -24,6 +24,7 @@ func TestMain(m *testing.M) {
 		return
 	}
 	roundRetryBase, roundRetryMax = time.Millisecond, 2*time.Millisecond
+	retryBackoff = []time.Duration{time.Millisecond, 2 * time.Millisecond}
 	// Keep picker tests offline: unreachable Zen means the curated fallback.
 	zenBaseURL = "http://127.0.0.1:1"
 	os.Exit(m.Run())

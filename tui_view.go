@@ -324,14 +324,14 @@ func (m *tuiModel) orMetaSuffix() string {
 			parts = append(parts, p)
 		}
 		if m.orMeta.TPS > 0 {
-			parts = append(parts, fmt.Sprintf("%.0f t/s", m.orMeta.TPS))
+			parts = append(parts, fmt.Sprintf("%.0f TPS", m.orMeta.TPS))
 		}
 	}
 	if p, ok := m.orPricing[m.cfg.Model]; ok {
 		parts = append(parts, fmt.Sprintf("in $%.2f/out $%.2f/M", p.prompt*1e6, p.completion*1e6))
 	}
 	if m.orSpentSet {
-		parts = append(parts, "sess "+formatCost(m.orSpent))
+		parts = append(parts, formatCost(m.orSpent)+" used")
 	}
 	if len(parts) == 0 {
 		return ""
