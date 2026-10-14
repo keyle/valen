@@ -3049,8 +3049,8 @@ func (m *tuiModel) View() string {
 func (m *tuiModel) headerView() string {
 	title := headerTitleStyle.Render(" ✦ valen")
 	// Right edge: the bare model name (provider and vendor prefixes dropped)
-	// and the thinking level. The logo stands alone on the left until a
-	// title or mode tag needs the room.
+	// and the thinking level. The logo carries the version on the left until
+	// a session title replaces it.
 	model := modelBaseID(m.cfg.Model)
 	if m.cfg.Thinking != "" {
 		model += " · " + m.cfg.Thinking
@@ -3094,6 +3094,8 @@ func (m *tuiModel) headerView() string {
 			label = truncateRunes(label, m.columnWidth()-reserved-1)
 		}
 		left += headerDimStyle.Render("  ·  " + label)
+	} else {
+		left += headerDimStyle.Render(" " + version)
 	}
 	line := left + headerDimStyle.Render(tail)
 	if m.width > 0 {
@@ -3312,7 +3314,7 @@ func (m *tuiModel) renderChat() string {
 	if m.session == nil || len(m.session.Turns) == 0 {
 		m.chatCache, m.chatCacheTurns = nil, 0
 		if m.pendingPrompt == "" {
-			return emptyStyle.Render("valen " + version)
+			return ""
 		}
 	}
 	committed := m.committedTurns(w)

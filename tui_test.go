@@ -174,7 +174,7 @@ func TestTUIHeaderShowsTitleOnly(t *testing.T) {
 	}
 }
 
-// TestTUIHeaderModelFlushRight: the logo stands alone on the left, the bare
+// TestTUIHeaderModelFlushRight: the logo and version sit on the left, the bare
 // model and thinking level sit at the far right, and a title or mode tag
 // lands between them.
 func TestTUIHeaderModelFlushRight(t *testing.T) {
@@ -183,8 +183,8 @@ func TestTUIHeaderModelFlushRight(t *testing.T) {
 	m.cfg.Model = "openrouter/moonshotai/kimi-k3"
 	m.cfg.Thinking = "max"
 	header := ansi.Strip(m.headerView())
-	if got := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(header), "kimi-k3 · max")); got != "✦ valen" {
-		t.Fatalf("untitled header must be the logo alone on the left, got %q:\n%s", got, header)
+	if got := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(header), "kimi-k3 · max")); got != "✦ valen "+version {
+		t.Fatalf("untitled header must be the logo and version on the left, got %q:\n%s", got, header)
 	}
 	if lipgloss.Width(header) != m.columnWidth() {
 		t.Fatalf("header width=%d want %d", lipgloss.Width(header), m.columnWidth())
@@ -730,8 +730,24 @@ func TestTUIDefaultSystemHintsAgents(t *testing.T) {
 	if strings.Contains(got, "AGENTS.md") || strings.Contains(got, "Ask anything") {
 		t.Fatalf("empty chat should be a simple label, got:\n%s", got)
 	}
-	if !strings.Contains(got, "valen "+version) {
-		t.Fatalf("empty chat should show the version label, got:\n%s", got)
+	if header := ansi.Strip(m.headerView()); !strings.Contains(header, "valen "+version) {
+		t.Fatalf("blank session header should show the version beside the logo, got:\n%s", header)
+	}
+}
+
+// TestTUIHeaderVersionUntilTitled: the version sits beside the logo while the
+// session is unnamed and drops out once a title replaces it.
+func TestTUIHeaderVersionUntilTitled(t *testing.T) {
+	old := version
+	version = "1.2.3"
+	defer func() { version = old }()
+	m := newTestModel(t, testConfig("https://unused"))
+	if header := ansi.Strip(m.headerView()); !strings.HasPrefix(header, " ✦ valen 1.2.3") {
+		t.Fatalf("untitled header must show the version beside the logo:\n%s", header)
+	}
+	m.session.Title = "fix the login redirect bug"
+	if header := ansi.Strip(m.headerView()); strings.Contains(header, "1.2.3") {
+		t.Fatalf("titled header must drop the version:\n%s", header)
 	}
 }
 
