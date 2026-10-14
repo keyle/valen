@@ -74,6 +74,7 @@ and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
 | `max_tokens` | int | `16384` | Explicit output cap on all three transports (`max_tokens` on Chat/Messages, `max_output_tokens` on Responses); positive configured values are honored without a floor |
 | `compaction` | table | `auto=true, keep_tokens=15000, buffer=10%, thinking=medium` | Summary-mode, send-side only (prior disk records remain intact): `auto` prunes and summarizes before send and retries once after provider context overflow; `keep_tokens` is a soft whole-turn tail target, always protecting the entire current turn; `buffer` headroom below `max_context_tokens`; `model` summarizer override (empty = session model); `thinking` independent of top-level effort (default `medium` when accepted, cheapest fallback per model) |
 | `[tui]` | table | `max_lines=1000`, `sound=true` | Transcript rendering (TUI only). `max_lines` bounds the rendered committed scrollback so the viewport never re-parses an ever-growing transcript (the slowdown after long sessions). Over budget, older turns collapse their reasoning (user prompts, tool lines and replies are kept whole, never cut), then drop oldest-first behind a `… N earlier turn(s) trimmed` row; disk history stays lossless and ctrl+h/recall views still expand everything. `0` disables trimming. `sound` (default `true`) rings the terminal bell (BEL) when a question appears or a turn finishes (not on cancel); `false` mutes it |
+| `[sandbox]` | table | `allow`, `deny`, `allow_bind`, `ipc_allow` (all unset = built-in defaults) | Shell sandbox policy (see "Shell sandbox"); declared before `[input]` |
 | `[input]` | table | `blink=true, height=3` | Chatbox chrome (TUI only): block-cursor blink plus input box height in lines |
 | `tools` | string[] | empty | Subset of `shell`, `web_search`, `web_fetch`, `read`, `write`, `edit`, `glob`, `grep`, `AskUserQuestion`, `todowrite`, `todoread`. `AskUserQuestion` plus `todowrite`/`todoread` plus `task` are also registered automatically when absent, so model-driven questions, the session plan, and subagent delegation work in every frontend |
 | `mcp` | table[] | empty | Each entry needs `name` + `cmd`; optional `args`, `env` |
@@ -330,7 +331,7 @@ through the active `AskUserQuestion` frontend (one answer covers the whole
 folder; allow and deny are both remembered for the session, including by
 parallel subagents, which wait on one shared prompt gate and reuse the answer
 instead of re-asking; shell `network`/destructive-label approvals behave the
-same). A read approval grants read only; write
+same; see "Access prompts" below). A read approval grants read only; write
 and edit ask separately and grant read and write. Sibling git worktrees of the
 same repo (`git worktree list`) are in scope and never prompt. Without an
 interactive frontend they are denied with a clear error, so the model can
@@ -340,8 +341,9 @@ explain and ask.
 `eval`, `$(...)` and scripts cannot escape it:
 
 - **Writes** only in the workdir, sibling git worktrees, folders approved for
-  write this session, the private temp dir and tool caches (`~/go`, `~/.cache`,
-  `~/.npm`, `~/.cargo`, the user cache dir). Shared `/tmp` and `$HOME` are not
+  write (this session or in `access.toml`), the private temp dir and tool caches
+  (`~/go`, `~/.cache`, `~/.npm`, `~/.cargo`, `~/fvm`, `~/.fvm`, `~/.pub-cache`,
+  `~/.rustup`, `~/.gradle`, the user cache dir). Shared `/tmp` and `$HOME` are not
   writable by default: explicit use asks once per folder via `shellgate.go`,
   like `git push` does. Environment-derived roots that would re-expose `$HOME`
   (`GOCACHE=$HOME`, a `TMPDIR` above the home dir) are ignored.
@@ -362,13 +364,79 @@ explain and ask.
 - **Environment**: secret-looking variables (`*_KEY`, `*_TOKEN`, passwords,
   DSNs, `DATABASE_URL`, ...) are stripped from the `sh -c` child, so
   `printenv`/`env` cannot leak valen's own keys or the user's exported secrets.
-- **Network off** (loopback egress works; binding a listener is denied) unless
-  the call sets `network: true`;
+- **Network off** (loopback egress and, on macOS, loopback bind work; see
+  below) unless the call sets `network: true`;
   the user is asked once per session.
 - **Ask once per session** before `git push`, `git reset --hard`, `git clean`,
   `rm -r` and `sudo`, and once per folder before explicit outside-workdir
   paths (`/tmp/...`, `/etc/passwd`, `~/...`) (`shellgate.go`). Text matching
   is best-effort; the sandbox is the boundary.
+
+Built-in writable roots also include the toolchain dirs `~/fvm`, `~/.fvm`,
+`~/.pub-cache`, `~/.rustup` and `~/.gradle` (never prompt). Two narrow
+capabilities replace the all-or-nothing `network` toggle, both default on:
+
+- **Loopback bind**: with network off, listening on `localhost` is allowed so
+  `go test ./...` (httptest) needs no egress grant. macOS only
+  (`(allow network-bind (local ip "localhost:*"))`); bubblewrap's private netns
+  has `lo` down, so on Linux use `network: true`. Off with
+  `[sandbox] allow_bind = []`.
+- **IPC sockets**: connecting to the docker unix sockets (`/var/run/docker.sock`,
+  `~/.colima/default/docker.sock`, `~/.colima/docker.sock`,
+  `~/.docker/run/docker.sock`) is allowed by exact path (testcontainers, sqlc);
+  the socket's folder stays hidden. Replace or disable with
+  `[sandbox] ipc_allow`.
+
+The optional `[sandbox]` table in `config.toml` (before `[input]`) tunes this:
+`allow` (extra rw roots), `deny` (extra hidden paths, win over every allow),
+`allow_bind`, `ipc_allow`. Omitted keys keep the defaults; relative paths and
+non-loopback bind addresses are rejected at load.
+
+Platform differences (same policy in `sandbox.go`, different enforcement):
+
+- **Loopback bind**: macOS only; ignored on Linux (use `network: true`).
+- **Denied or hidden folders**: macOS denies the path, so access fails with
+  "Operation not permitted"; Linux masks it (empty tmpfs for a dir, `/dev/null`
+  for a file), so it looks empty or missing. The `[sandbox: …]` hint matches
+  `Operation not permitted` / `Read-only file system`, so on Linux it fires for
+  blocked writes but not for reads of a masked folder.
+- **IPC sockets**: re-allowed by exact path after every deny/mask on both
+  platforms, so a socket inside a denied folder stays reachable.
+- **`.env` files**: Linux masks the ones that exist at command start; macOS
+  also matches by name regex.
+- **Status**: the Linux path (`sandbox_linux.go`: mask order, socket bind,
+  denied-folder hiding) has no coverage; the sandbox-exec and bwrap tests skip
+  where nesting is blocked. Parity is by design, not yet verified.
+
+### Access prompts and `access.toml`
+
+Every folder or shell-capability approval is one fixed 4-choice question (no
+free-text row; the folder or command is shown on its own line, bold yellow in
+the TUI): `Grant access this session`, `Grant access FOR ALL SESSIONS`,
+`Deny access this session`, `Deny access FOR ALL SESSIONS`. An all-sessions
+answer is followed by a yes/no confirm (default yes) naming the rule and
+`~/.config/valen/access.toml`; `No` downgrades to the session outcome; an unrecognized answer
+fails closed to deny-this-session. With `-config <file>` there is
+no user config dir, so all-sessions acts as session-only.
+
+`access.toml` (seeded empty, hand-editable, written atomically, deduplicated and
+sorted):
+
+```toml
+read  = []   # read-only forever
+write = []   # read + write forever
+deny  = []   # blocked forever (read and write)
+[shell]
+allow = []   # network, git push, rm -r, sudo, ...
+deny  = []
+```
+
+Folders are absolute (`~/` expands) and prefix-matched. Precedence: secrets
+(`.env*`, credential dirs) always blocked; then `deny` (this file, `[sandbox]
+deny`, or this session) beats any allow; then `read`/`write`/session approvals.
+Rules apply at once to the file tools, the shell gate and the kernel policy
+(a denied folder is hidden from shell). A malformed file grants nothing and is
+never overwritten.
 
 macOS uses `sandbox-exec` (Seatbelt); Linux needs `bwrap` (bubblewrap) on PATH,
 else `shell` errors with an install hint. Other OSes do not compile
@@ -405,6 +473,7 @@ deterministic. Tools are registered as
   and tool list serialization, temperature omission).
 - `tools_test.go` — ordering, name validation, unknown tools, truncation,
   argument normalization, shell success/exit-code/empty-command paths.
+- `access_test.go` — 4-choice access prompt + confirm, `access.toml` round-trip, deny-wins, seeded roots, loopback bind / ipc / `[sandbox]` policy
 - `files_test.go` — workdir split, sandbox containment, `read`/`write`/`edit`
   round trip and error paths, `glob`/`grep` results, outside-access
   allow/deny via a stubbed prompter, shell running in the file root.

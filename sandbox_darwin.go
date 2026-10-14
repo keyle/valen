@@ -75,6 +75,13 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 		}
 		fmt.Fprintf(&prof, "(deny file-read* file-write* (subpath (param \"H%d\")))\n", i)
 	}
+	// IPC sockets (docker) live under $HOME, often inside a credential dir
+	// (~/.docker): re-allow the socket literal after the re-deny above. Only
+	// the socket itself, never its folder.
+	for i, s := range p.IPCPaths {
+		fmt.Fprintf(&prof, "(allow file-read* file-write* (literal (param \"I%d\")))\n", i)
+		defs = append(defs, "-D", fmt.Sprintf("I%d=%s", i, s))
+	}
 	// Git stats its configs on every run; re-allow reads only (writes stay
 	// denied) after the $HOME and /etc denies so `git status` works under the
 	// sandbox. A directory allow is a subpath (read its contents), a file one a
@@ -93,7 +100,7 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 	// only (stat, not listing or reading) on the ancestors of writable roots
 	// and of re-allowed read-only files (so /etc/gitconfig is reachable; /etc
 	// itself stays unlistable and /etc/passwd unreadable).
-	roots := append(append([]string{}, p.Writable...), p.ReadOnly...)
+	roots := append(append(append([]string{}, p.Writable...), p.ReadOnly...), p.IPCPaths...)
 	for i, a := range ancestorDirs(roots) {
 		fmt.Fprintf(&prof, "(allow file-read-metadata (literal (param \"A%d\")))\n", i)
 		defs = append(defs, "-D", fmt.Sprintf("A%d=%s", i, a))
@@ -104,6 +111,15 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 		// in-sandbox server (or an httptest-style test) cannot bind unless
 		// network is on; only loopback egress works here.
 		prof.WriteString("(deny network*)\n(allow network* (remote ip \"localhost:*\"))\n")
+		// Loopback bind/listen is its own capability: `go test` binds an
+		// httptest port and needs no egress.
+		if p.AllowBind {
+			prof.WriteString("(allow network-bind (local ip \"localhost:*\"))\n")
+		}
+		// Docker-style unix sockets: connect to the exact path only.
+		for i := range p.IPCPaths {
+			fmt.Fprintf(&prof, "(allow network* (remote unix-socket (path-literal (param \"I%d\"))))\n", i)
+		}
 	}
 	// .env files anywhere, except templates (keep in sync with isSecretFile).
 	// Both reads and writes are denied: secrets must not leak out or be

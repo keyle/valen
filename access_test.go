@@ -458,3 +458,191 @@ func TestAccessDenyOrderedAfterAllowsInProfile(t *testing.T) {
 		t.Fatal("re-deny must come after the read allows (later rules win)")
 	}
 }
+
+// useSandboxConfig installs a [sandbox] table for one test.
+func useSandboxConfig(t *testing.T, c SandboxConfig) {
+	t.Helper()
+	setSandboxConfig(c)
+	t.Cleanup(func() { setSandboxConfig(SandboxConfig{}) })
+}
+
+func TestSandboxSeededToolchainRoots(t *testing.T) {
+	useTempRoot(t)
+	home := real(t.TempDir())
+	t.Setenv("HOME", home)
+	var want []string
+	for _, d := range []string{"fvm", ".fvm", ".pub-cache", ".rustup", ".gradle", "go"} {
+		p := filepath.Join(home, d)
+		if err := os.Mkdir(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, p)
+	}
+	other := filepath.Join(home, "Documents")
+	if err := os.Mkdir(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	w, safe := writableRoots(), shellSafePrefixes()
+	for _, p := range want {
+		if !contains(w, p) || !contains(safe, p) {
+			t.Errorf("%s must be a writable root and a safe prefix", p)
+		}
+	}
+	if contains(w, other) || contains(safe, other) || contains(w, home) {
+		t.Errorf("unseeded home dirs must stay closed: %v", w)
+	}
+	// A persistent deny still beats the seeded root.
+	useAccessFile(t)
+	if err := saveAccessRule(ruleDeny, want[0]); err != nil {
+		t.Fatal(err)
+	}
+	if contains(writableRoots(), want[0]) {
+		t.Errorf("deny must win over a seeded root")
+	}
+}
+
+// sbProfile builds the Darwin profile text for p (no kernel needed).
+func sbProfile(t *testing.T, p sandboxPolicy) string {
+	t.Helper()
+	if runtime.GOOS != "darwin" {
+		t.Skip("SBPL profile text is Darwin-only")
+	}
+	_, args, err := sandboxArgv("true", p)
+	if err != nil {
+		t.Skip(err)
+	}
+	return args[1]
+}
+
+func TestSandboxAllowBindProfile(t *testing.T) {
+	const rule = `(allow network-bind (local ip "localhost:*"))`
+	on := sbProfile(t, sandboxPolicy{AllowBind: true})
+	if i, j := strings.Index(on, "(deny network*)"), strings.Index(on, rule); i < 0 || j < i {
+		t.Fatalf("bind allow must follow the network deny:\n%s", on)
+	}
+	if off := sbProfile(t, sandboxPolicy{}); strings.Contains(off, "network-bind") {
+		t.Fatalf("bind must stay denied by default:\n%s", off)
+	}
+	if net := sbProfile(t, sandboxPolicy{Network: true, AllowBind: true}); strings.Contains(net, "(deny network*)") {
+		t.Fatal("network on needs no deny")
+	}
+}
+
+// bindProbe asks a sandboxed python to bind a loopback port.
+const bindProbe = `python3 -c "import socket;s=socket.socket();s.bind(('127.0.0.1',0));s.listen();print('bound')"`
+
+func TestSandboxAllowBindLoopback(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("loopback bind with egress off needs Seatbelt; on Linux use network: true")
+	}
+	useTempRoot(t)
+	if out := shNet(t, bindProbe, true); out != "bound" {
+		t.Skipf("python3 unavailable or cannot bind here: %q", out)
+	}
+	if out := sh(t, bindProbe); out != "bound" {
+		t.Fatalf("loopback bind must work with network off by default: %q", out)
+	}
+}
+
+func TestSandboxAllowBindOff(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Linux never allows bind with network off (covered by TestSandboxNetworkOffByDefault)")
+	}
+	useTempRoot(t)
+	useSandboxConfig(t, SandboxConfig{AllowBind: []string{}})
+	if allowBind() {
+		t.Fatal("allow_bind = [] must switch the default off")
+	}
+	if out := shNet(t, bindProbe, true); out != "bound" {
+		t.Skipf("python3 unavailable or cannot bind here: %q", out)
+	}
+	if out := sh(t, bindProbe); strings.Contains(out, "bound") {
+		t.Fatalf("bind must be blocked when allow_bind is empty: %q", out)
+	}
+}
+
+func TestSandboxDockerSocketReallowed(t *testing.T) {
+	sock := filepath.Join(real(t.TempDir()), "docker.sock")
+	if err := os.WriteFile(sock, nil, 0o600); err != nil { // a plain file is enough for the policy text
+		t.Fatal(err)
+	}
+	useSandboxConfig(t, SandboxConfig{IPCAllow: []string{sock}})
+	if got := ipcPaths(); len(got) != 1 || got[0] != sock {
+		t.Fatalf("ipcPaths=%v", got)
+	}
+	if runtime.GOOS == "linux" {
+		_, args, err := sandboxArgv("true", sandboxPolicy{IPCPaths: ipcPaths()})
+		if err != nil {
+			t.Skip(err)
+		}
+		if !strings.Contains(strings.Join(args, " "), "--bind "+sock+" "+sock) {
+			t.Fatalf("socket must be bound in: %v", args)
+		}
+		return
+	}
+	prof := sbProfile(t, sandboxPolicy{IPCPaths: ipcPaths()})
+	for _, rule := range []string{
+		`(allow network* (remote unix-socket (path-literal (param "I0"))))`,
+		`(allow file-read* file-write* (literal (param "I0")))`,
+	} {
+		if !strings.Contains(prof, rule) {
+			t.Fatalf("missing %s:\n%s", rule, prof)
+		}
+	}
+	// The file re-allow must follow the $HOME/credential denies.
+	if strings.Index(prof, `(literal (param "I0"))`) < strings.Index(prof, "(allow file-read*") {
+		t.Fatal("socket allow must come after the denies")
+	}
+	// A persistent deny of its folder drops the socket.
+	useAccessFile(t)
+	if err := saveAccessRule(ruleDeny, filepath.Dir(sock)); err != nil {
+		t.Fatal(err)
+	}
+	if got := ipcPaths(); len(got) != 0 {
+		t.Fatalf("denied folder must drop the socket: %v", got)
+	}
+}
+
+func TestSandboxConfigOverrides(t *testing.T) {
+	// Defaults: bind on, docker sockets considered.
+	if !allowBind() {
+		t.Fatal("bind defaults on")
+	}
+	extra, hidden := real(t.TempDir()), real(t.TempDir())
+	useTempRoot(t)
+	useSandboxConfig(t, SandboxConfig{Allow: []string{extra}, Deny: []string{hidden}})
+	if !contains(writableRoots(), extra) || !contains(accessDirs(ruleWrite), extra) {
+		t.Errorf("[sandbox] allow must widen the writable roots")
+	}
+	if !contains(hiddenPaths(), hidden) || !accessDenied(hidden) {
+		t.Errorf("[sandbox] deny must hide the folder")
+	}
+	if err := (SandboxConfig{Allow: []string{"rel/dir"}}).validate(); err == nil {
+		t.Error("relative allow must be rejected")
+	}
+	if err := (SandboxConfig{AllowBind: []string{"8.8.8.8"}}).validate(); err == nil {
+		t.Error("non-loopback bind must be rejected")
+	}
+	if err := (SandboxConfig{AllowBind: []string{"127.0.0.1", "::1"}, IPCAllow: []string{"~/x.sock"}}).validate(); err != nil {
+		t.Errorf("valid config rejected: %v", err)
+	}
+	// The table loads from config.toml and unknown keys stay an error.
+	dir := t.TempDir()
+	write := func(body string) string {
+		p := filepath.Join(dir, "c.toml")
+		if err := os.WriteFile(p, []byte("model = \"glm-5.3\"\n"+body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	cfg, err := loadConfig(write("[sandbox]\nallow = [\"/opt/homebrew\"]\nallow_bind = []\n"))
+	if err != nil || cfg.Sandbox.Allow[0] != "/opt/homebrew" || cfg.Sandbox.AllowBind == nil {
+		t.Fatalf("cfg=%+v err=%v", cfg.Sandbox, err)
+	}
+	if _, err := loadConfig(write("[sandbox]\nbogus = 1\n")); err == nil {
+		t.Error("unknown [sandbox] key must fail strict loading")
+	}
+	if _, err := loadConfig(write("[sandbox]\nallow = [\"rel\"]\n")); err == nil {
+		t.Error("relative path must fail loading")
+	}
+}

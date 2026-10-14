@@ -100,6 +100,7 @@ type Config struct {
 	MCPServers  []MCPServer      `toml:"mcp"`
 	Compaction  CompactionConfig `toml:"compaction"`
 	TUI         TUIConfig        `toml:"tui"`
+	Sandbox     SandboxConfig    `toml:"sandbox"`
 	Input       InputConfig      `toml:"input"`
 }
 
@@ -227,6 +228,9 @@ func loadConfig(path string) (Config, error) {
 	}
 	cfg.Compaction = normalizeCompactionConfig(cfg.Compaction, contextBudget(cfg))
 	cfg.Input.Height = inputHeight(cfg)
+	if err := cfg.Sandbox.validate(); err != nil {
+		return cfg, err
+	}
 	if cfg.SessionID == "" {
 		cfg.SessionID = newSessionID()
 	}
@@ -342,6 +346,7 @@ func start() error {
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
+	setSandboxConfig(cfg.Sandbox)
 	if statePath != "" {
 		cfg = applyUserState(cfg, statePath)
 	}

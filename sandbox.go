@@ -20,12 +20,15 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 )
 
 // sharedTmp is the shared scratch dir shell may use without asking.
@@ -40,7 +43,95 @@ type sandboxPolicy struct {
 	Hidden       []string // existing files/dirs shell cannot read or write
 	SystemHidden []string // system paths shell cannot read (approvable via folder approval)
 	Network      bool
+	AllowBind    bool     // loopback bind/listen even with Network off (Darwin only)
+	IPCPaths     []string // existing unix sockets (docker) shell may connect to
 }
+
+// SandboxConfig mirrors the optional [sandbox] table. A nil list keeps the
+// built-in default; an empty one (`[]`) switches that default off.
+type SandboxConfig struct {
+	Allow     []string `toml:"allow"`      // extra read+write roots
+	Deny      []string `toml:"deny"`       // extra hidden paths; win over every allow
+	AllowBind []string `toml:"allow_bind"` // loopback addresses; default on
+	IPCAllow  []string `toml:"ipc_allow"`  // unix sockets; replaces the docker defaults
+}
+
+var sandboxCfg atomic.Pointer[SandboxConfig]
+
+// setSandboxConfig installs the [sandbox] table, resolving its paths once.
+func setSandboxConfig(c SandboxConfig) {
+	c.Allow, c.Deny, c.IPCAllow = normPaths(c.Allow), normPaths(c.Deny), normPaths(c.IPCAllow)
+	sandboxCfg.Store(&c)
+}
+
+func sandboxConf() SandboxConfig {
+	if c := sandboxCfg.Load(); c != nil {
+		return *c
+	}
+	return SandboxConfig{}
+}
+
+// normPaths resolves ~/ and symlinks; nil stays nil (default), the rest is non-nil.
+func normPaths(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	out := []string{}
+	for _, p := range in {
+		if n := normalizeAccessPath(p); n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// validate rejects relative paths and non-loopback bind addresses.
+func (c SandboxConfig) validate() error {
+	for _, l := range [][]string{c.Allow, c.Deny, c.IPCAllow} {
+		for _, p := range l {
+			if p != "~" && !strings.HasPrefix(p, "~/") && !filepath.IsAbs(p) {
+				return fmt.Errorf("sandbox: path %q must be absolute or start with ~/", p)
+			}
+		}
+	}
+	for _, a := range c.AllowBind {
+		if ip := net.ParseIP(a); a != "localhost" && (ip == nil || !ip.IsLoopback()) {
+			return fmt.Errorf("sandbox: allow_bind %q is not a loopback address", a)
+		}
+	}
+	return nil
+}
+
+// allowBind: loopback listeners are on unless allow_bind = [].
+func allowBind() bool {
+	b := sandboxConf().AllowBind
+	return b == nil || len(b) > 0
+}
+
+// ipcPaths lists the existing unix sockets shell may connect to (docker by
+// default: colima, Docker Desktop, the system socket), minus denied folders.
+func ipcPaths() []string {
+	list := sandboxConf().IPCAllow
+	if list == nil {
+		list = []string{"/var/run/docker.sock"}
+		if home, _ := os.UserHomeDir(); home != "" {
+			for _, s := range []string{".colima/default/docker.sock", ".colima/docker.sock", ".docker/run/docker.sock"} {
+				list = append(list, filepath.Join(home, s))
+			}
+		}
+	}
+	var out []string
+	for _, p := range list {
+		if p = real(p); !accessDenied(p) {
+			out = append(out, p)
+		}
+	}
+	return existing(out, false)
+}
+
+// homeToolDirs are the $HOME toolchain/cache dirs shell may write and that
+// never prompt. They stay subject to dropBroadRoots.
+var homeToolDirs = []string{"go", ".cache", ".npm", ".cargo", "fvm", ".fvm", ".pub-cache", ".rustup", ".gradle"}
 
 // isSecretFile reports whether name is a .env file that holds secrets.
 // Templates (.env.example, .sample, .template) stay readable.
@@ -123,7 +214,7 @@ func findSecretFiles(root string) []string {
 
 // sandboxHint is appended to a failed command's output when it looks like a
 // sandbox denial, so the model knows what to do instead of retrying blindly.
-const sandboxHint = "[sandbox: shell may only write inside the workdir, sibling git worktrees, approved folders, /tmp, the private temp dir and tool caches ($HOME is blocked). To get another folder, call glob or read on it (the user is asked once per folder), then re-run.]"
+const sandboxHint = "[sandbox: shell may only write inside the workdir, sibling git worktrees, approved folders, /tmp, the private temp dir and tool caches ($HOME is blocked, as is any folder in access.toml deny). To get another folder, call glob or read on it (the user is asked once per folder), then re-run.]"
 
 // looksSandboxDenied matches the errno texts a blocked write produces:
 // EPERM from Seatbelt, EROFS from bubblewrap's read-only mounts.
@@ -150,6 +241,7 @@ func sandboxCommand(ctx context.Context, command string, network bool) (*exec.Cm
 		Root: getFileRoot(), Writable: writableRoots(), Readable: readableRoots(),
 		ReadOnly: append(gitReadOnlyPaths(), systemReadOnlyPaths()...),
 		Hidden:   hiddenPaths(), SystemHidden: systemHiddenPaths(), Network: network,
+		AllowBind: allowBind(), IPCPaths: ipcPaths(),
 	})
 	if err != nil {
 		return nil, err
@@ -220,7 +312,7 @@ func writableRoots() []string {
 		c = append(c, cd)
 	}
 	if home != "" {
-		for _, d := range []string{"go", ".cache", ".npm", ".cargo"} {
+		for _, d := range homeToolDirs {
 			c = append(c, filepath.Join(home, d))
 		}
 	}

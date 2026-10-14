@@ -54,6 +54,13 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 	for _, r := range p.ReadOnly {
 		args = append(args, "--ro-bind", r, r)
 	}
+	// Unix sockets (docker) are filesystem objects, so they connect across the
+	// private netns; bind the socket back over any mask. Loopback *bind* has
+	// no bwrap equivalent (lo is down in the netns): AllowBind is ignored
+	// here, use network: true.
+	for _, s := range p.IPCPaths {
+		args = append(args, "--bind", s, s)
+	}
 	// bwrap has no patterns: mask the .env files that exist right now.
 	for _, f := range findSecretFiles(p.Root) {
 		args = append(args, maskArgs(f)...)

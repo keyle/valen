@@ -277,8 +277,17 @@ func loadAccessLocked() *accessRules {
 // accessDirs returns a copy of one folder-rule list.
 func accessDirs(kind string) []string {
 	accessMu.Lock()
-	defer accessMu.Unlock()
-	return append([]string(nil), *loadAccessLocked().list(kind)...)
+	out := append([]string(nil), *loadAccessLocked().list(kind)...)
+	accessMu.Unlock()
+	// [sandbox] allow/deny in config.toml act as standing rules too, so the
+	// file gate, shell gate and kernel policy all honor them.
+	switch c := sandboxConf(); kind {
+	case ruleWrite:
+		out = append(out, c.Allow...)
+	case ruleDeny:
+		out = append(out, c.Deny...)
+	}
+	return out
 }
 
 // accessMatch reports whether abs lies inside any folder of the kind.

@@ -37,29 +37,35 @@
 
 ## Phase 3 — seeded roots + capabilities
 
-- [ ] 7. Add `fvm`, `.fvm`, `.pub-cache`, `.rustup`, `.gradle` to the `$HOME`
+- [x] 7. Add `fvm`, `.fvm`, `.pub-cache`, `.rustup`, `.gradle` to the `$HOME`
   loop in `writableRoots` (`sandbox.go:223`) and `shellSafePrefixes`
   (`shellgate.go:211`); still subject to `dropBroadRoots`.
   `TestSandboxSeededToolchainRoots`.
-- [ ] 8. `sandboxPolicy.AllowBind`: Darwin adds
+- [x] 8. `sandboxPolicy.AllowBind`: Darwin adds
   `(allow network-bind (local ip "localhost:*"))` after `(deny network*)`
   (`sandbox_darwin.go:100`); Linux honored only where bwrap can (else document
   `network: true`). `TestSandboxAllowBindLoopback` (skip where unsupported),
   `TestSandboxAllowBindOff` still blocks.
-- [ ] 9. `sandboxPolicy.IPCPaths` for the docker sockets (colima + Desktop):
+- [x] 9. `sandboxPolicy.IPCPaths` for the docker sockets (colima + Desktop):
   re-allow rw literal + ancestor metadata after the `$HOME` deny (Darwin) /
   bind (Linux). `TestSandboxDockerSocketReallowed`.
-- [ ] 10. Optional `[sandbox]` config table (`allow/deny/allow_bind/ipc_allow`)
+- [x] 10. Optional `[sandbox]` config table (`allow/deny/allow_bind/ipc_allow`)
   placed before `[input]` (which must stay the last table, `config.toml:81`);
   `SandboxConfig` on `Config` (`main.go:75`); empty = built-in defaults;
   `TestSandboxConfigOverrides`.
 
 ## Phase 4 — docs + gate
 
-- [ ] 11. Docs together: `SPEC.md` (prompt options, access.toml schema, bind/ipc
+- [x] 11. Docs together: `SPEC.md` (prompt options, access.toml schema, bind/ipc
   capabilities), `config.toml` comments (`:90-103`), `sandboxHint`
   (`sandbox.go:126`).
-- [ ] 12. Gate: `gofmt -l .` clean, `go vet ./...` green, targeted
+- [x] 12. Gate: `gofmt -l .` clean, `go vet ./...` green, targeted
   `go test -run 'TestAccess|TestSandbox|TestGateShell|TestAsk' .` then full
   `go test ./...` (`network=true` for the existing loopback fixtures); `-race`
   on the approval map + rule cache.
+- [ ] 13. Verify outside a nested sandbox: on Linux (with `bwrap`) run
+  `go test -run 'TestAccess|TestSandbox|TestGateShell' .` and check denied-folder
+  masking, the docker socket bind (after masks) and `.env` masking; on macOS run
+  the skipped `TestAccessDenyHidesFolderFromShell`,
+  `TestSandboxAllowBindLoopback`, `TestSandboxAllowBindOff`. Then update the
+  "Platform differences" note in `SPEC.md` ("Shell sandbox").

@@ -78,6 +78,16 @@ thinking = "high"
 # sound = true                  # ring the terminal bell when a question appears or a
                                 # turn finishes (not on cancel); false mutes it.
 
+[sandbox]                       # shell sandbox policy (optional; every key has a built-in default).
+# allow = ["/opt/homebrew"]     # extra read+write roots, on top of the built-ins (workdir, /tmp,
+                                # ~/go ~/.cache ~/.npm ~/.cargo ~/fvm ~/.fvm ~/.pub-cache ~/.rustup ~/.gradle).
+# deny = []                     # extra hidden paths; win over every allow. Secrets are always hidden.
+# allow_bind = ["127.0.0.1", "::1"]  # loopback listeners with network off (default on, so `go test` works).
+                                # [] turns it off. macOS only: on Linux use network: true.
+# ipc_allow = ["~/.colima/default/docker.sock", "/var/run/docker.sock"]  # unix sockets shell may connect
+                                # to (default: the docker sockets of colima, Docker Desktop, the system).
+                                # [] turns it off. A folder decision lives in access.toml, not here.
+
 # NOTE: [input] must stay the last table in this file. In TOML every key
 # after a [table] header belongs to that table, so top-level keys placed
 # below it decode as input.* and fail strict loading.

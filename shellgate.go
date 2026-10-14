@@ -220,7 +220,7 @@ func shellSafePrefixes() []string {
 		out = append(out, real(cd))
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		for _, d := range []string{"go", ".cache", ".npm", ".cargo"} {
+		for _, d := range homeToolDirs {
 			out = append(out, real(filepath.Join(home, d)))
 		}
 		if gc := os.Getenv("GOCACHE"); gc != "" {
