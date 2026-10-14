@@ -1,0 +1,65 @@
+# Tasks: access
+
+## Phase 1 — access prompt UX (no persistence yet)
+
+- [ ] 1. `AskQuestion` gains `Highlight []string` + `NoFreeText bool`
+  (`ask.go`). TUI `renderAsk`/`handleAskKey` (`tui.go:669,777`) skip the own row
+  and render `Highlight` bold yellow (`accessSubjectStyle`, `mkYellow`);
+  headless `headlessOne`/`parsePicks` (`ask.go:149,231`) make `own` optional.
+  `TestAskNoFreeTextHidesOwnRow`, `TestAskHighlightSubject` (TUI + headless).
+- [ ] 2. `access.go`: choice constants/labels + exact-label parse (fail closed
+  to deny), `promptAccess` (forces `NoFreeText`, 4 options) and `confirmAccess`
+  (single yes/no, default yes). `TestAccessChoiceParsing`,
+  `TestAccessConfirmDefaultsYes`.
+- [ ] 3. Route `checkFileAccess` (`files.go:350-420`) and `approveShell`
+  (`shellgate.go:106-159`) through `promptAccess`; underline the subject: file
+  folder vs write mode, or the shell command/capability. Keep session maps and
+  messages. Update `TestGateShellApprovalNamesModel`,
+  `TestSandbox*` prompter stubs to the new labels.
+
+## Phase 2 — persistent access.toml
+
+- [ ] 4. `~/.config/valen/access.toml` store: `loadAccessRules` (cached) +
+  `saveAccessRule` (atomic tmp+rename, dedupe, sorted); expand `~/`, `real()`
+  paths. Seed a commented empty file in `ensureUserConfig`
+  (`userconfig.go:98`), never overwrite. `TestAccessTomlRoundTrip`,
+  `TestAccessTomlSeedOnce`.
+- [ ] 5. Apply always-decisions end to end: persist then book the session map;
+  consult persistent rules in `allowedWithoutPrompt` /
+  `allowedWriteWithoutPrompt` (`files.go:255,275`), `writableRoots` /
+  `readableRoots` / `hiddenPaths` (`sandbox.go:215,239,296`),
+  `shellSafePrefixes` (`shellgate.go:201`) and `approveShell`. Deny wins over
+  session and persistent allow; secrets still win over everything.
+  `TestAccessDenyWinsOverAllow`, `TestAccessAlwaysWidensSandbox`,
+  `TestGateShellAllSessionsPersist`.
+- [ ] 6. Confirm-`No` downgrades to the session outcome; `--config <file>` runs
+  keep access.toml session-only (no user config dir). `TestAccessConfirmNoDowngrades`.
+
+## Phase 3 — seeded roots + capabilities
+
+- [ ] 7. Add `fvm`, `.fvm`, `.pub-cache`, `.rustup`, `.gradle` to the `$HOME`
+  loop in `writableRoots` (`sandbox.go:223`) and `shellSafePrefixes`
+  (`shellgate.go:211`); still subject to `dropBroadRoots`.
+  `TestSandboxSeededToolchainRoots`.
+- [ ] 8. `sandboxPolicy.AllowBind`: Darwin adds
+  `(allow network-bind (local ip "localhost:*"))` after `(deny network*)`
+  (`sandbox_darwin.go:100`); Linux honored only where bwrap can (else document
+  `network: true`). `TestSandboxAllowBindLoopback` (skip where unsupported),
+  `TestSandboxAllowBindOff` still blocks.
+- [ ] 9. `sandboxPolicy.IPCPaths` for the docker sockets (colima + Desktop):
+  re-allow rw literal + ancestor metadata after the `$HOME` deny (Darwin) /
+  bind (Linux). `TestSandboxDockerSocketReallowed`.
+- [ ] 10. Optional `[sandbox]` config table (`allow/deny/allow_bind/ipc_allow`)
+  placed before `[input]` (which must stay the last table, `config.toml:81`);
+  `SandboxConfig` on `Config` (`main.go:75`); empty = built-in defaults;
+  `TestSandboxConfigOverrides`.
+
+## Phase 4 — docs + gate
+
+- [ ] 11. Docs together: `SPEC.md` (prompt options, access.toml schema, bind/ipc
+  capabilities), `config.toml` comments (`:90-103`), `sandboxHint`
+  (`sandbox.go:126`).
+- [ ] 12. Gate: `gofmt -l .` clean, `go vet ./...` green, targeted
+  `go test -run 'TestAccess|TestSandbox|TestGateShell|TestAsk' .` then full
+  `go test ./...` (`network=true` for the existing loopback fixtures); `-race`
+  on the approval map + rule cache.
