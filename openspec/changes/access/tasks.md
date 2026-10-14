@@ -69,3 +69,27 @@
   the skipped `TestAccessDenyHidesFolderFromShell`,
   `TestSandboxAllowBindLoopback`, `TestSandboxAllowBindOff`. Then update the
   "Platform differences" note in `SPEC.md` ("Shell sandbox").
+
+## Phase 5 — review fixes (post-implementation)
+
+- [x] 14. Deny wins inside the workdir: `allowedWithoutPrompt` /
+  `allowedWriteWithoutPrompt` (`files.go`) check the persistent deny before the
+  workdir/worktree shortcut, so the file gate matches the kernel.
+  `TestAccessDenyInsideWorkdirNotBypassed`.
+- [x] 15. `allow_bind` addresses are honored: `sandboxPolicy.BindAddrs`
+  replaces the bool, one `(allow network-bind (local ip "<addr>:*"))` per
+  loopback address (`sandbox_darwin.go`); `bindAddrs()` defaults to `localhost`
+  and re-filters loopback. `TestSandboxAllowBindProfile`,
+  `TestSandboxBindAddrsConfig`.
+- [x] 16. Headless confirm defaults yes: `AskQuestion.DefaultFirst` makes an
+  empty Enter pick row 0. `TestAccessConfirmHeadlessDefaultsYes`.
+- [x] 17. Session-only prompts (`-config <file>`) offer just the two session
+  choices instead of all-sessions labels that act session-only.
+  `TestAccessSessionOnlyWithoutFile`.
+- [x] 18. Cancelling the confirm (esc / headless "n") downgrades like `No`
+  instead of erroring: `errAskDismissed` sentinel. `TestAccessConfirmDismissDowngrades`.
+- [x] 19. `$HOME` is never a writable root: `dropBroadRoots` runs after the
+  session/persistent grants too (`sandbox.go`), so a broad grant can't re-bind
+  home. `TestSandboxBroadGrantNeverBindsHome`.
+- [x] 20. `accessDirs(ruleRead)` also carries `[sandbox] allow` (it is rw).
+

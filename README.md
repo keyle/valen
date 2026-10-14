@@ -19,9 +19,10 @@ models and runs the tool loop locally.
 - Foreground `task` subagents with isolated history, up to 5 in parallel
 - Summary-style auto-compaction (on by default, `/compact` for manual)
 - Session logs (JSONL) and resume
-- Live model and reasoning-effort switching (`/model`, `/effort`)
-- Favourite slots: `alt+1`…`alt+0` jump to a saved model + thinking level,
-  `alt+shift+1`…`0` stores the current one (`~/.config/valen/slots.yaml`;
+- Live model, reasoning-effort and OpenRouter routing switching (`/model`,
+  `/effort`, `/route` or ctrl+y cycles none/floor/nitro/exacto)
+- Favourite slots: `alt+1`…`alt+0` jump to a saved model + thinking level +
+  routing, `alt+shift+1`…`0` stores the current one (`~/.config/valen/slots.yaml`;
   the terminal must send Option/Alt as Meta). See `/help`.
 - Shell sandbox: macOS `sandbox-exec`, Linux `bubblewrap`. It blocks writes
   outside the workdir, hides credential files and `.env` secrets, scrubs

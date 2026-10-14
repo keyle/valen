@@ -73,33 +73,39 @@ func parseAccessChoice(answers []string) accessChoice {
 	return accessDenySession
 }
 
-// promptAccess asks the 4-choice question about subject (the folder or
-// command, shown highlighted). allowRule/denyRule name what an "all sessions"
-// grant/deny would write; for those the user is asked once more to confirm,
-// and declining downgrades to the session-scoped outcome instead of persisting.
+// promptAccess asks the access question about subject (the folder or command,
+// shown highlighted): the fixed 4-choice grant/deny x this-session/all-sessions
+// decision, or just the two session choices when there is no rules file
+// (session-only). allowRule/denyRule name what an "all sessions" grant/deny
+// would write; for those the user is asked once more to confirm, and declining
+// downgrades to the session-scoped outcome instead of persisting.
 func promptAccess(ctx context.Context, q AskQuestion, subject, allowRule, denyRule string) (accessChoice, error) {
 	q.NoFreeText = true
 	q.Highlight = []string{subject}
-	always := "writes " + accessPathLabel()
-	if !accessPersistent() {
-		always = "no access.toml here (-config run): acts as this session only"
-	}
+	// Without a rules file (tests, `-config <file>`), a decision can only be
+	// session-scoped: offer just the two session choices instead of an
+	// all-sessions label that would silently act as session-only.
+	persist := accessPersistent()
 	q.Options = []AskOption{
 		{Label: lblAllowSession, Description: "this session only"},
-		{Label: lblAllowAlways, Description: always},
 		{Label: lblDenySession, Description: "this session only"},
-		{Label: lblDenyAlways, Description: always},
+	}
+	if persist {
+		always := "writes " + accessPathLabel()
+		q.Options = []AskOption{
+			{Label: lblAllowSession, Description: "this session only"},
+			{Label: lblAllowAlways, Description: always},
+			{Label: lblDenySession, Description: "this session only"},
+			{Label: lblDenyAlways, Description: always},
+		}
 	}
 	answers, err := promptUser(ctx, []AskQuestion{q})
 	if err != nil {
 		return accessDenySession, err
 	}
 	c := parseAccessChoice(answers)
-	if !c.always() {
+	if !persist || !c.always() {
 		return c, nil
-	}
-	if !accessPersistent() {
-		return c.session(), nil
 	}
 	rule := denyRule
 	if c.allowed() {
@@ -116,20 +122,25 @@ func promptAccess(ctx context.Context, q AskQuestion, subject, allowRule, denyRu
 }
 
 // confirmAccess is the "are you sure?" for an all-sessions decision: a single
-// yes/no, default yes (first row), that names the exact rule and its file.
-// Only an exact "Yes" confirms; anything else declines.
+// yes/no, default yes (first row; an empty headless Enter picks it), that names
+// the exact rule and its file. Only an exact "Yes" confirms; anything else
+// declines, and a dismissal (esc / headless "n") declines rather than erroring.
 func confirmAccess(ctx context.Context, rule string) (bool, error) {
 	answers, err := promptUser(ctx, []AskQuestion{{
-		Question:   fmt.Sprintf("Write this rule to %s?", accessPathLabel()),
-		Header:     "Are you sure?",
-		Highlight:  []string{rule},
-		NoFreeText: true,
+		Question:     fmt.Sprintf("Write this rule to %s?", accessPathLabel()),
+		Header:       "Are you sure?",
+		Highlight:    []string{rule},
+		NoFreeText:   true,
+		DefaultFirst: true,
 		Options: []AskOption{
 			{Label: lblConfirmYes, Description: "persist it for all future sessions"},
 			{Label: lblConfirmNo, Description: "keep it to this session only"},
 		},
 	}})
 	if err != nil {
+		if errors.Is(err, errAskDismissed) {
+			return false, nil // esc / "n": treat like No (session only)
+		}
 		return false, err
 	}
 	return len(answers) > 0 && answers[0] == lblConfirmYes, nil
@@ -280,9 +291,10 @@ func accessDirs(kind string) []string {
 	out := append([]string(nil), *loadAccessLocked().list(kind)...)
 	accessMu.Unlock()
 	// [sandbox] allow/deny in config.toml act as standing rules too, so the
-	// file gate, shell gate and kernel policy all honor them.
+	// file gate, shell gate and kernel policy all honor them. `allow` grants
+	// read and write, so it feeds both folder lists.
 	switch c := sandboxConf(); kind {
-	case ruleWrite:
+	case ruleRead, ruleWrite:
 		out = append(out, c.Allow...)
 	case ruleDeny:
 		out = append(out, c.Deny...)

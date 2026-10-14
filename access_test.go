@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -51,6 +52,7 @@ func TestAccessChoiceParsing(t *testing.T) {
 }
 
 func TestAccessPromptShape(t *testing.T) {
+	useAccessFile(t)
 	asked := scriptAccess(t, lblAllowSession)
 	c, err := promptAccess(context.Background(), AskQuestion{Question: "Allow?", Header: "File access"}, "/some/dir", "write = /some/dir", "deny = /some/dir")
 	if err != nil || c != accessAllowSession {
@@ -105,6 +107,39 @@ func TestAccessConfirmNoDowngrades(t *testing.T) {
 	scriptAccess(t, lblAllowAlways, "sure")
 	if c, _ := promptAccess(context.Background(), AskQuestion{Question: "q"}, "/d", "r", "r"); c != accessAllowSession {
 		t.Errorf("garbage confirm: c=%v", c)
+	}
+}
+
+// TestAccessConfirmHeadlessDefaultsYes: an empty headless Enter at the confirm
+// picks the first option (Yes), matching the TUI's pre-selected row.
+func TestAccessConfirmHeadlessDefaultsYes(t *testing.T) {
+	qs := []AskQuestion{{
+		Question: "Write this rule?", NoFreeText: true, DefaultFirst: true,
+		Options: []AskOption{{Label: lblConfirmYes}, {Label: lblConfirmNo}},
+	}}
+	var out bytes.Buffer
+	answers, err := headlessAsk(context.Background(), qs, strings.NewReader("\ny\n"), &out)
+	if err != nil || len(answers) != 1 || answers[0] != lblConfirmYes {
+		t.Fatalf("answers=%q err=%v: empty Enter must confirm Yes", answers, err)
+	}
+}
+
+// TestAccessConfirmDismissDowngrades: cancelling the confirm (esc / headless
+// "n") must behave like No, downgrading to the session outcome, not error out.
+func TestAccessConfirmDismissDowngrades(t *testing.T) {
+	useAccessFile(t)
+	old := askPrompter
+	calls := 0
+	askPrompter = func(context.Context, []AskQuestion) ([]string, error) {
+		if calls++; calls == 1 {
+			return []string{lblAllowAlways}, nil
+		}
+		return nil, errAskDismissed
+	}
+	t.Cleanup(func() { askPrompter = old })
+	c, err := promptAccess(context.Background(), AskQuestion{Question: "q"}, "/d", "write = /d", "deny = /d")
+	if err != nil || c != accessAllowSession {
+		t.Fatalf("c=%v err=%v: dismissing the confirm must downgrade to session allow", c, err)
 	}
 }
 
@@ -231,13 +266,17 @@ func TestAccessTomlSeedOnce(t *testing.T) {
 
 func TestAccessSessionOnlyWithoutFile(t *testing.T) {
 	setAccessFile("")
-	asked := scriptAccess(t, lblAllowAlways)
+	asked := scriptAccess(t, lblAllowSession)
 	c, err := promptAccess(context.Background(), AskQuestion{Question: "q"}, "/d", "write = /d", "deny = /d")
 	if err != nil || c != accessAllowSession {
 		t.Fatalf("c=%v err=%v: -config runs must stay session-only", c, err)
 	}
 	if len(*asked) != 1 {
 		t.Fatalf("no confirm without a file, asked %d", len(*asked))
+	}
+	q := (*asked)[0]
+	if len(q.Options) != 2 || q.Options[0].Label != lblAllowSession || q.Options[1].Label != lblDenySession {
+		t.Fatalf("session-only prompt must offer only the session choices: %+v", q.Options)
 	}
 	if err := saveAccessRule(ruleWrite, "/d"); err != nil {
 		t.Fatalf("save without file must be a no-op: %v", err)
@@ -276,6 +315,38 @@ func TestAccessDenyWinsOverAllow(t *testing.T) {
 	}
 	if contains(writableRoots(), dir) || contains(readableRoots(), dir) {
 		t.Fatal("denied dir must not stay an allowed root")
+	}
+}
+
+// TestAccessDenyInsideWorkdirNotBypassed proves a persistent deny also covers
+// paths inside the workdir: the file gate must not short-circuit on the workdir
+// (or a sibling worktree) before consulting access.toml, or the kernel hides the
+// folder from shell while read/write still reach it.
+func TestAccessDenyInsideWorkdirNotBypassed(t *testing.T) {
+	root := useTempRoot(t)
+	useAccessFile(t)
+	sub := filepath.Join(root, "denied-sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sub = real(sub)
+	if err := saveAccessRule(ruleDeny, sub); err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(sub, "a.txt")
+	if allowedWithoutPrompt(root, f) || allowedWriteWithoutPrompt(root, f) {
+		t.Fatal("deny inside the workdir must beat the workdir shortcut")
+	}
+	asked := scriptAccess(t) // any prompt fails the test below
+	err := checkFileAccess(context.Background(), "read", f)
+	if err == nil || !strings.Contains(err.Error(), "access.toml") {
+		t.Fatalf("err=%v, want persistent-deny error", err)
+	}
+	if len(*asked) != 0 {
+		t.Fatal("a persistently denied folder must not prompt")
+	}
+	if !contains(hiddenPaths(), sub) {
+		t.Fatalf("deny inside workdir missing from hiddenPaths: %v", hiddenPaths())
 	}
 }
 
@@ -466,6 +537,33 @@ func useSandboxConfig(t *testing.T, c SandboxConfig) {
 	t.Cleanup(func() { setSandboxConfig(SandboxConfig{}) })
 }
 
+func TestSandboxBroadGrantNeverBindsHome(t *testing.T) {
+	useTempRoot(t)
+	home := real(t.TempDir())
+	t.Setenv("HOME", home)
+	useAccessFile(t)
+	if err := saveAccessRule(ruleWrite, home); err != nil {
+		t.Fatal(err)
+	}
+	approvedMu.Lock()
+	approvedWritable[home] = true
+	approvedMu.Unlock()
+	if contains(writableRoots(), home) {
+		t.Fatalf("home must never be a writable root, however granted: %v", writableRoots())
+	}
+	// A subdir of home stays grantable: only home and its ancestors are dropped.
+	sub := filepath.Join(home, "proj")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveAccessRule(ruleWrite, sub); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(writableRoots(), sub) {
+		t.Fatalf("a normal subdir grant must stay writable: %v", writableRoots())
+	}
+}
+
 func TestSandboxSeededToolchainRoots(t *testing.T) {
 	useTempRoot(t)
 	home := real(t.TempDir())
@@ -515,15 +613,15 @@ func sbProfile(t *testing.T, p sandboxPolicy) string {
 }
 
 func TestSandboxAllowBindProfile(t *testing.T) {
-	const rule = `(allow network-bind (local ip "localhost:*"))`
-	on := sbProfile(t, sandboxPolicy{AllowBind: true})
+	rule := `(local ip "127.0.0.1:*")`
+	on := sbProfile(t, sandboxPolicy{BindAddrs: []string{"127.0.0.1"}})
 	if i, j := strings.Index(on, "(deny network*)"), strings.Index(on, rule); i < 0 || j < i {
-		t.Fatalf("bind allow must follow the network deny:\n%s", on)
+		t.Fatalf("bind allow must follow the network deny and name the address:\n%s", on)
 	}
 	if off := sbProfile(t, sandboxPolicy{}); strings.Contains(off, "network-bind") {
 		t.Fatalf("bind must stay denied by default:\n%s", off)
 	}
-	if net := sbProfile(t, sandboxPolicy{Network: true, AllowBind: true}); strings.Contains(net, "(deny network*)") {
+	if net := sbProfile(t, sandboxPolicy{Network: true, BindAddrs: []string{"127.0.0.1"}}); strings.Contains(net, "(deny network*)") {
 		t.Fatal("network on needs no deny")
 	}
 }
@@ -550,7 +648,7 @@ func TestSandboxAllowBindOff(t *testing.T) {
 	}
 	useTempRoot(t)
 	useSandboxConfig(t, SandboxConfig{AllowBind: []string{}})
-	if allowBind() {
+	if len(bindAddrs()) != 0 {
 		t.Fatal("allow_bind = [] must switch the default off")
 	}
 	if out := shNet(t, bindProbe, true); out != "bound" {
@@ -558,6 +656,17 @@ func TestSandboxAllowBindOff(t *testing.T) {
 	}
 	if out := sh(t, bindProbe); strings.Contains(out, "bound") {
 		t.Fatalf("bind must be blocked when allow_bind is empty: %q", out)
+	}
+}
+
+func TestSandboxBindAddrsConfig(t *testing.T) {
+	useSandboxConfig(t, SandboxConfig{AllowBind: []string{"127.0.0.1", "::1", "8.8.8.8"}})
+	if got := bindAddrs(); len(got) != 2 || got[0] != "127.0.0.1" || got[1] != "::1" {
+		t.Fatalf("bindAddrs=%v, want the two loopback addresses (non-loopback dropped)", got)
+	}
+	useSandboxConfig(t, SandboxConfig{AllowBind: []string{}})
+	if got := bindAddrs(); len(got) != 0 {
+		t.Fatalf("empty allow_bind must disable bind: %v", got)
 	}
 }
 
@@ -605,8 +714,8 @@ func TestSandboxDockerSocketReallowed(t *testing.T) {
 
 func TestSandboxConfigOverrides(t *testing.T) {
 	// Defaults: bind on, docker sockets considered.
-	if !allowBind() {
-		t.Fatal("bind defaults on")
+	if len(bindAddrs()) == 0 || !contains(bindAddrs(), "localhost") {
+		t.Fatal("bind defaults on (localhost)")
 	}
 	extra, hidden := real(t.TempDir()), real(t.TempDir())
 	useTempRoot(t)

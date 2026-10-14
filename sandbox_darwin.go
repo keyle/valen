@@ -112,9 +112,10 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 		// network is on; only loopback egress works here.
 		prof.WriteString("(deny network*)\n(allow network* (remote ip \"localhost:*\"))\n")
 		// Loopback bind/listen is its own capability: `go test` binds an
-		// httptest port and needs no egress.
-		if p.AllowBind {
-			prof.WriteString("(allow network-bind (local ip \"localhost:*\"))\n")
+		// httptest port and needs no egress. One rule per configured loopback
+		// address (default "localhost", `[sandbox] allow_bind`).
+		for _, a := range p.BindAddrs {
+			fmt.Fprintf(&prof, "(allow network-bind (local ip \"%s:*\"))\n", a)
 		}
 		// Docker-style unix sockets: connect to the exact path only.
 		for i := range p.IPCPaths {

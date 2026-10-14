@@ -19,6 +19,11 @@ tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "g
 # OPENCODE_API_KEY / OPENROUTER_API_KEY. Set a value here to override.
 opencode_key = ""
 openrouter_key = ""
+# OpenRouter routing variants (openrouter/… models only; ignored on Go/Zen):
+# routing = "floor"           # "" none (default load balancing) | floor
+#                             # (cheapest) | nitro (fastest tps) | exacto
+#                             # (quality-first tool use). Sent as a model-slug
+#                             # suffix. Cycle live with ctrl+y or /route.
 # Second provider, OpenRouter: /model lists openrouter/<vendor>/<model>
 # (recent flagships while offline). A send without a key reports
 # "OpenRouter key not found" instead of failing boot.
@@ -81,9 +86,10 @@ thinking = "high"
 [sandbox]                       # shell sandbox policy (optional; every key has a built-in default).
 # allow = ["/opt/homebrew"]     # extra read+write roots, on top of the built-ins (workdir, /tmp,
                                 # ~/go ~/.cache ~/.npm ~/.cargo ~/fvm ~/.fvm ~/.pub-cache ~/.rustup ~/.gradle).
+                                # ~ itself is never writable (home confinement stays).
 # deny = []                     # extra hidden paths; win over every allow. Secrets are always hidden.
-# allow_bind = ["127.0.0.1", "::1"]  # loopback listeners with network off (default on, so `go test` works).
-                                # [] turns it off. macOS only: on Linux use network: true.
+# allow_bind = ["127.0.0.1", "::1"]  # loopback bind addresses allowed with network off (default: localhost,
+                                # so `go test` works). [] turns bind off. macOS only: on Linux use network: true.
 # ipc_allow = ["~/.colima/default/docker.sock", "/var/run/docker.sock"]  # unix sockets shell may connect
                                 # to (default: the docker sockets of colima, Docker Desktop, the system).
                                 # [] turns it off. A folder decision lives in access.toml, not here.

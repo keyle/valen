@@ -249,17 +249,20 @@ func approvedDirs(m map[string]bool) []string {
 // isWriteOp reports whether a checkFileAccess op changes the filesystem.
 func isWriteOp(op string) bool { return op == "write" || op == "edit" }
 
-// allowedWithoutPrompt reports read access without asking: inside the root or
-// a sibling worktree, or any folder approved for read or write (this session
-// or in access.toml) and not denied there.
-// Both the lexical path and its symlink-resolved canonical must pass; callers
-// check both.
+// allowedWithoutPrompt reports read access without asking: any folder approved
+// for read or write (this session or in access.toml) and inside the root or a
+// sibling worktree, unless persistently denied. A persistent deny is checked
+// first and beats every allow, workdir included. Both the lexical path and its
+// symlink-resolved canonical must pass; callers check both.
 func allowedWithoutPrompt(root, abs string) bool {
+	// Persistent deny beats every allow, including the workdir shortcut:
+	// otherwise the kernel hides a denied folder from shell but read/write
+	// still reach it through the file tools.
+	if accessDenied(abs) {
+		return false
+	}
 	if inRootOrWorktree(root, abs) {
 		return true
-	}
-	if accessDenied(abs) { // persistent deny beats every session allow
-		return false
 	}
 	for _, dir := range approvedDirs(approvedRead) {
 		if inApproved(dir, abs) {
@@ -274,15 +277,16 @@ func allowedWithoutPrompt(root, abs string) bool {
 	return accessMatch(ruleRead, abs) || accessMatch(ruleWrite, abs)
 }
 
-// allowedWriteWithoutPrompt reports write access without asking: inside the
-// root or a sibling worktree, or a folder approved specifically for write or
-// edit this session. A read-only approval does not count.
+// allowedWriteWithoutPrompt reports write access without asking: a folder
+// approved specifically for write or edit this session (a read-only approval
+// does not count), or inside the root or a sibling worktree — unless
+// persistently denied (checked first, workdir included).
 func allowedWriteWithoutPrompt(root, abs string) bool {
-	if inRootOrWorktree(root, abs) {
-		return true
-	}
 	if accessDenied(abs) {
 		return false
+	}
+	if inRootOrWorktree(root, abs) {
+		return true
 	}
 	for _, dir := range approvedDirs(approvedWritable) {
 		if inApproved(dir, abs) {

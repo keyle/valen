@@ -27,7 +27,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `internal/guard` | Repeat-limit default and stripping of legacy ephemeral notices; execution policy lives in `runModelTurn` |
 | `internal/dvlog` | Debug-verbose trace (`-dv`/`-dvlog`): timestamped round/tool/size log, off by default |
 | `tui.go` | Bubble Tea chat UI: padded conversation, instant echo, recall views, Monokai theme |
-| `models.go` | OpenCode Go/Zen/OpenRouter catalogs: live lists, transport maps, thinking levels, config persist |
+| `models.go` | OpenCode Go/Zen/OpenRouter catalogs: live lists, transport maps, thinking levels, OpenRouter routing variants, config persist |
 | `messages.go` | Anthropic `/messages` transport: wire format, thinking, tool loop |
 | `responses.go` | OpenAI `/responses` transport (stateless): wire format, reasoning, tool loop |
 | `stream.go` | Shared streaming layer: raw POST, SSE scanner, unary-JSON fallback |
@@ -45,14 +45,14 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `search.go` | `web_search` (DuckDuckGo HTML) and `web_fetch` (HTML → text) |
 | `mcp.go` | stdio MCP client lifecycle, tool registration, result flattening |
 | `config.toml` | Default configuration, embedded in the binary and seeded to `~/.config/valen/` on first run |
-| `userconfig.go` | Config dir (`$XDG_CONFIG_HOME/valen`, else `~/.config/valen`): first-run seeding, `config-ori.toml`, `state.json` (last model/thinking) |
+| `userconfig.go` | Config dir (`$XDG_CONFIG_HOME/valen`, else `~/.config/valen`): first-run seeding, `config-ori.toml`, `state.json` (last model/thinking/routing) |
 
 ## Config location
 
 Config lives in `~/.config/valen/` (`$XDG_CONFIG_HOME/valen/`), created on
 first run: `config.toml` (yours; never overwritten), `config-ori.toml` (pristine
 copy of the shipped default, refreshed on upgrade so you can diff), and
-`state.json` (ephemeral state written by valen: last model/thinking). Sessions
+`state.json` (ephemeral state written by valen: last model/thinking/routing). Sessions
 and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
 `-config <file>` uses that file only: no seeding and no state overlay.
 
@@ -62,6 +62,7 @@ and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
 | --- | --- | --- | --- |
 | `model` | string | — | **required.** Model ID, e.g. `glm-5.3-flash`, `kimi-k3`, `zen/claude-haiku-5-5`, or `openrouter/moonshotai/kimi-k3`. The `zen/` prefix selects OpenCode Zen (`https://opencode.ai/zen/v1`, same OpenCode key as Go; transport chosen per model: gpt/grok/muse → responses; claude and qwen3.5–3.8 plus/flash (all qwen except qwen3.8-max) → messages; qwen3.8-max and the rest → chat; Gemini models are not supported); the `openrouter/` prefix selects the OpenRouter provider (needs its key, below); bare IDs ride OpenCode Go. Switch live with `/model` (ctrl+p); persisted to `config.toml` |
 | `thinking` | string | empty (provider default) | Reasoning level, per-model (see `/effort` picker): muse-spark `minimal`/`low`/`medium`/`high`/`xhigh`, gpt/grok `low`…`max` (+`none` on gpt), glm/deepseek `low`/`high`/`max` or `high`/`max`, kimi-k3 `max` only, toggle models `none`/`high`, fixed no-control models omit. Switch live with `/effort` (`/thinking` alias) or ctrl+t (cycles low→high, wraps); persisted to `config.toml`. Unknown models fall back to the full vocabulary until a 400 teaches the valid list, cached at `$XDG_DATA_HOME/valen/thinking_levels.json` |
+| `routing` | string | empty (`none`) | OpenRouter provider-routing variant, sent as a model-slug suffix: `floor` (cheapest; `provider.sort: "price"`), `nitro` (fastest throughput; `provider.sort: "throughput"`), `exacto` (quality-first tool-use sorting), or empty/`none` (OpenRouter's default load balancing). Switch live with `/route [none\|floor\|nitro\|exacto]` or ctrl+y (cycles none → floor → nitro → exacto, wraps); a **silent no-op on Go/Zen**. Persisted to `state.json` alongside `thinking` and stored in favourite slots; ignored on non-OpenRouter models |
 | `opencode_key` | string | empty | OpenCode API key itself, shared by Go and Zen. Empty falls back to the `OPENCODE_API_KEY` env var. Missing keys never fail boot — the TUI still opens and `/model` lists all providers; picking or sending with a Go/Zen model and no key says "OpenCode API key not found" |
 | `openrouter_key` | string | empty | OpenRouter API key itself. Empty falls back to the `OPENROUTER_API_KEY` env var. Second provider: `/model` always lists OpenRouter models (`openrouter/<vendor>/<model>`, fallback when offline) served via OpenRouter's OpenAI-compatible chat endpoint. Picking or sending with an `openrouter/…` model and no key says "OpenRouter key not found" |
 | `session_id` | string | `ses-<unixnano>` | Stable per conversation; sent as `x-opencode-session` |
@@ -118,7 +119,11 @@ non-Go keys are ignored so the footer simply stays hidden; on `zen/…` models (
 `openrouter/…` models the Go quota stays hidden and the footer shows the
 OpenRouter balance instead (`GET {openrouter_base}/credits` →
 `OR $X.XX left`); plain API keys 403 on that endpoint, so the footer stays
-clean until a management-key balance lands.
+clean until a management-key balance lands. Each `openrouter/…` completion also
+feeds best-effort footer metadata: the serving provider (top-level `provider`)
+and billed cost (`usage.cost`) from the body or last SSE usage chunk, the
+catalog's `pricing.prompt`/`completion` rates, and locally-timed throughput
+(completion tokens over the first-to-last content delta, no extra request).
 
 Transport is selected per model by `modelTransport` (live Go table, Oct 2
 2026): `grok-4.x`, `gpt-*-luna` and `muse-spark-*-contributor` are
@@ -186,6 +191,20 @@ On responses, `none`/empty omit `reasoning` (Muse Spark rejects effort
 verbatim. A 400 listing valid efforts is parsed and cached per model at
 `$XDG_DATA_HOME/valen/thinking_levels.json`, so the next `/effort` and ctrl+t
 use the learned list.
+
+### OpenRouter routing variants
+
+`routing` selects OpenRouter's provider-sorting variant and is appended to the
+wire model as a suffix by `wireModelID`: `floor` → `:floor` (cheapest;
+`provider.sort: "price"`, flex-tier eligible), `nitro` → `:nitro` (fastest
+throughput; `provider.sort: "throughput"`, priority-tier eligible), `exacto` →
+`:exacto` (quality-first provider sorting for tool use), empty/`none` → the
+bare slug (OpenRouter's default inverse-square price-weighted load balancing,
+unchanged). It applies only to `openrouter/…` models; on Go and Zen the setting
+is ignored and ctrl+y is a **silent no-op** (no notice, no state write). Switch
+live with `/route` or ctrl+y (cycles none → floor → nitro → exacto, wraps). The
+suffix lives on the wire only, so the stored/config model never carries it and
+a model switch or `none` cannot leave a stale suffix.
 
 ## Agent loop
 
@@ -345,8 +364,10 @@ explain and ask.
   (`~/go`, `~/.cache`, `~/.npm`, `~/.cargo`, `~/fvm`, `~/.fvm`, `~/.pub-cache`,
   `~/.rustup`, `~/.gradle`, the user cache dir). Shared `/tmp` and `$HOME` are not
   writable by default: explicit use asks once per folder via `shellgate.go`,
-  like `git push` does. Environment-derived roots that would re-expose `$HOME`
-  (`GOCACHE=$HOME`, a `TMPDIR` above the home dir) are ignored.
+  like `git push` does. `$HOME` itself is never a writable root, however it was
+  granted (a folder approval for a file directly in `$HOME`, `[sandbox] allow`,
+  or `access.toml write` naming it): the grant is dropped so home confinement
+  stays; subdirs of `$HOME` still grant normally.
 - **Reads**: `$HOME` is hidden (reads ask once per folder, then the approved
   folder is re-allowed read-only), as are credential files (`~/.ssh`, `~/.aws`,
   `~/.gnupg`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.netrc`, `~/.npmrc`,
@@ -376,10 +397,11 @@ Built-in writable roots also include the toolchain dirs `~/fvm`, `~/.fvm`,
 `~/.pub-cache`, `~/.rustup` and `~/.gradle` (never prompt). Two narrow
 capabilities replace the all-or-nothing `network` toggle, both default on:
 
-- **Loopback bind**: with network off, listening on `localhost` is allowed so
-  `go test ./...` (httptest) needs no egress grant. macOS only
-  (`(allow network-bind (local ip "localhost:*"))`); bubblewrap's private netns
-  has `lo` down, so on Linux use `network: true`. Off with
+- **Loopback bind**: with network off, listening on the loopback addresses in
+  `[sandbox] allow_bind` (default `localhost`) is allowed so `go test ./...`
+  (httptest) needs no egress grant. macOS only (one
+  `(allow network-bind (local ip "<addr>:*"))` per address); bubblewrap's
+  private netns has `lo` down, so on Linux use `network: true`. Off with
   `[sandbox] allow_bind = []`.
 - **IPC sockets**: connecting to the docker unix sockets (`/var/run/docker.sock`,
   `~/.colima/default/docker.sock`, `~/.colima/docker.sock`,
@@ -410,14 +432,15 @@ Platform differences (same policy in `sandbox.go`, different enforcement):
 
 ### Access prompts and `access.toml`
 
-Every folder or shell-capability approval is one fixed 4-choice question (no
-free-text row; the folder or command is shown on its own line, bold yellow in
-the TUI): `Grant access this session`, `Grant access FOR ALL SESSIONS`,
-`Deny access this session`, `Deny access FOR ALL SESSIONS`. An all-sessions
-answer is followed by a yes/no confirm (default yes) naming the rule and
-`~/.config/valen/access.toml`; `No` downgrades to the session outcome; an unrecognized answer
-fails closed to deny-this-session. With `-config <file>` there is
-no user config dir, so all-sessions acts as session-only.
+Every folder or shell-capability approval is one fixed question (no free-text
+row; the folder or command is shown on its own line, bold yellow in the TUI):
+the 4-choice `Grant access this session`, `Grant access FOR ALL SESSIONS`,
+`Deny access this session`, `Deny access FOR ALL SESSIONS`, or just the two
+session choices when there is no rules file (`-config <file>` runs are
+session-only). An all-sessions answer is followed by a yes/no confirm (default
+yes; an empty Enter accepts it) naming the rule and
+`~/.config/valen/access.toml`; `No`, or cancelling the confirm, downgrades to
+the session outcome; an unrecognized answer fails closed to deny-this-session.
 
 `access.toml` (seeded empty, hand-editable, written atomically, deduplicated and
 sorted):
@@ -433,7 +456,8 @@ deny  = []
 
 Folders are absolute (`~/` expands) and prefix-matched. Precedence: secrets
 (`.env*`, credential dirs) always blocked; then `deny` (this file, `[sandbox]
-deny`, or this session) beats any allow; then `read`/`write`/session approvals.
+deny`, or this session) beats any allow, the workdir included; then
+`read`/`write`/session approvals.
 Rules apply at once to the file tools, the shell gate and the kernel policy
 (a denied folder is hidden from shell). A malformed file grants nothing and is
 never overwritten.
@@ -496,6 +520,7 @@ deterministic. Tools are registered as
   persist round-trip, `thinking` validation in `loadConfig`, plus OpenRouter:
   provider prefix/wire/display/base forms, family levels through the vendor
   segment, provider validation in `loadConfig`, catalog fetch/filter,
+  the routing suffix/validation (`floor`/`nitro`/`exacto`, no-op on Go/Zen),
   and the OpenRouter chat wire shape (stripped model, OR key, no session
   header, `reasoning_effort`). Zen: `zenTransport` per model, provider
   prefix/wire/base forms, catalog fetch filtering Gemini, and the shared
@@ -552,14 +577,18 @@ default; zero hot-loop cost when off.
 
 TUI model controls: `/model [filter]` (ctrl+p) lists the OpenCode Go, OpenCode
 Zen and OpenRouter catalogs and
-switches; `/effort [level]` (`/thinking` alias) sets the thinking level for
-the current model. Both persist to `state.json` in the config dir, so the last selection
-sticks across runs and overrides `config.toml`'s `model`/`thinking`; headless
+switches; `/effort [level]` (`/thinking` alias) sets the thinking level and
+`/route [none|floor|nitro|exacto]` (ctrl+y) the OpenRouter routing variant for
+the current model (routing is a no-op elsewhere). Both persist to `state.json` in the config dir, so the last selection
+sticks across runs and overrides `config.toml`'s `model`/`thinking`/`routing`; headless
 mode reads the same overlay (not with `-config <file>`). `/plan` toggles plan
 mode at runtime (read-only investigation, reply is the plan; header shows
 `· plan`); it does not persist. The TUI footer also
 shows Go plan usage (`5h` / `7d` / `30d`), yellow past 80% and pink at the cap —
-or the OpenRouter balance (`OR $X.XX left`) on `openrouter/…` models; it stays
+or the OpenRouter balance (`OR $X.XX left`) on `openrouter/…` models, followed
+by best-effort serving-provider, throughput and per-million in/out rate
+metadata when OpenRouter reports it (throughput is measured locally from the
+stream — no extra request); it stays
 hidden on `zen/…` models (pay-as-you-go).
 
 ## Extension points

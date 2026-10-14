@@ -100,10 +100,10 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   (`⏺ fetch… · 2 running`, `✓ search · 1 still running`). The scrollback
   repaints at the ~10fps spinner tick only while threads are open; committed
   turns stay cached.
-- Thinking renders dim/italic with a left rule, shown by default; ctrl+y or
-  `/think` collapses to `✦ thinking (N chars)`.
+- Thinking renders dim/italic with a left rule, shown by default;
+  ctrl+o or `/think` collapses to `✦ thinking (N chars)`.
 - Live busy state renders once, in the spinner row above the chatbox, with
-  `esc esc to stop` pinned to its right edge; the pending scrollback block
+  `esc to stop` pinned to its right edge; the pending scrollback block
   carries no duplicate tool/status line.
 - Tool calls render one compact cyan line plus a dim first-line preview;
   full args/output live in the Tools view. Headers use plain English, not
@@ -143,6 +143,16 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   On `openrouter/…` models the Go quota stays hidden and the footer shows the
   OpenRouter balance (`OR $X.XX left`) once the credits fetch lands; plain API
   keys 403 on `/credits`, so the footer shows only the hint until then.
+  When OpenRouter reports it, the balance is followed by best-effort turn
+  metadata: the serving provider, throughput and per-million input/output
+  rates (`OR $X.XX left · Infermatic · 42 t/s · in $0.10/out $0.40 per M`).
+  The provider name and billed cost come from the response (top-level
+  `provider`, `usage.cost`); rates come from the model catalog's
+  `pricing.prompt`/`pricing.completion`; throughput is measured locally from the
+  stream (completion tokens over the first-to-last content delta), so it needs
+  no extra request. Each segment is independently
+  optional and the whole suffix yields to the width rule, so a narrow terminal
+  or a missing field just drops that part.
 - Autoscroll follows new turns while pinned to the bottom; PgUp/PgDn or the
   mouse wheel scrolls the transcript, which pauses autoscroll until scrolled
   back to the bottom (a new submit or committed turn re-pins). Mouse reporting
@@ -244,7 +254,7 @@ background turn on `askPrompter`; the UI thread serves `questionMsg` in the
 question overlay and replies with confirmed answers, leaving history and the
 transport converters unchanged. Slash commands
 (`/clear` `/think` `/save` `/help` `/history` `/sessions` `/tools` `/errors` `/model`
-`/effort` `/quit`) resolve inside `submit`/`handleCommand`; `/model` fetches
+`/effort` `/route` `/quit`) resolve inside `submit`/`handleCommand`; `/model` fetches
 the catalog asynchronously via `modelsLoadedMsg`. The footer quota refreshes
 via `orCreditsMsg`/`usageMsg` from `fetchQuotaCmd` at `Init`, on each
 one-minute `usageTickMsg`, after each `turnDoneMsg`, and on every model
@@ -291,7 +301,7 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
 ## Thinking / reasoning display
 
 - `<think>...</think>` parsed into `Turn.Thinking` via `splitThinking`.
-- Shown by default, dim + indented. Ctrl+Y / `/think` toggles the display.
+- Shown by default, dim + indented. Ctrl+O / `/think` toggles the display.
 - `/effort [level]` (`/thinking` alias) sets the reasoning level sent to the
   provider for the current model — not the display. Levels come from
   `AvailableThinkingLevels` (fixed well-known table per models.dev, plus a
@@ -335,14 +345,16 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
   models sort to the top of the picker with a ★, alphabetically within each
   group, and the cursor stays on the toggled row. Space writes the file;
   without a state path (tests, `-config <file>`) favourites are session-only.
-- Favourite slots: ten assignable model + thinking-level pairs, like weapon
-  slots. `alt+1`…`alt+9`, `alt+0` (the tenth) switch to the pair stored in
-  that slot; `alt+shift+<digit>` stores the current model + thinking there
-  and says so in the status notice (`Slot 2 ← go/glm-5.3 · high.`). Stored at
-  `~/.config/valen/slots.yaml`, one `<digit>: <model> [thinking]` line per
-  slot (no thinking = provider default); without a state path they are
-  session-only. An empty slot reports it; a saved level the model no longer
-  offers resets to the provider default with a note. Works in chat and
+- Favourite slots: ten assignable model + thinking-level + routing triples, like
+  weapon slots. `alt+1`…`alt+9`, `alt+0` (the tenth) switch to the triple
+  stored in that slot; `alt+shift+<digit>` stores the current model + thinking +
+  routing there and says so in the status notice (`Slot 2 ← go/glm-5.3 · high.`).
+  Stored at `~/.config/valen/slots.yaml`, one `<digit>: <model> [thinking]
+  [floor|nitro|exacto]` line per slot (no thinking = provider default; no
+  routing token = `none`; the two vocabularies are disjoint, so order is
+  unambiguous); without a state path they are session-only. An empty slot
+  reports it; a saved level the model no longer offers resets to the provider
+  default with a note. Works in chat and
   overlays (not during a question). Terminals must send Option/Alt as Meta;
   alt+shift+digit arrives as the US shifted symbol (`alt+!`) or, under Kitty
   disambiguate mode, CSI `<digit>;4u`.
@@ -398,12 +410,13 @@ the full height, starts at its heading and scrolls to follow the selected option
 | Alt+M | toggle plain-drag selection (mouse reporting off: drag selects, wheel paused) | — |
 | Ctrl+G | help | help |
 | Ctrl+R / Ctrl+L / Ctrl+U / Ctrl+X | history / sessions / tools / errors | same |
-| Ctrl+Y | toggle thinking display | toggle thinking display |
+| Ctrl+Y | cycle OpenRouter routing: none → floor → nitro → exacto, wraps (silent no-op on Go/Zen) | same |
 | Tab | swap work ↔ plan mode (chatbox border cyan in plan mode, green in work mode; header shows `· plan`; placeholder becomes `Plan mode…  TAB to switch (/help)`; notices: `Plan Mode enabled: read only and planning` / `Work mode enabled`) | — |
 | Ctrl+N | new blank session (fresh id + file; blocked while busy) | same |
 | Ctrl+T | thinking level cycle low→high, wraps to low | same |
+| Ctrl+O | toggle thinking display (shown by default) | toggle thinking display |
 | Alt+1…9, Alt+0 / Alt+Shift+1…0 | favourite slots: switch to slot / store current model + thinking in slot | same |
-| Ctrl+O | toggle status details | toggle status details |
+| Ctrl+Shift+T | toggle status details | toggle status details |
 | Ctrl+P / Ctrl+M | model picker | model picker |
 | Ctrl+S | save transcript | save transcript |
 | Ctrl+Q | quit | quit |
@@ -414,7 +427,7 @@ Function keys are gone; the footer only points at `/help`, which lists every
 shortcut (and the shortcut line above).
 
 Slash commands: `/help` `/history` `/sessions` (`/resume`, `/continue` — resume most recent) `/tools` `/errors` `/think` `/save` `/copy`
-`/clear` `/compact` (`/summarize` alias) `/model [filter]` `/effort [level]` (`/thinking` alias) `/quit` (`:q` alias).
+`/clear` `/compact` (`/summarize` alias) `/model [filter]` `/effort [level]` (`/thinking` alias) `/route [none|floor|nitro|exacto]` `/quit` (`:q` alias).
 
 ## Streaming (live)
 
@@ -435,7 +448,7 @@ retries the round unary.
 
 - Pure model tests (no TTY): instant user echo before `turnDoneMsg`, reply +
   headers + usage on success, friendly 402, history/tools/model/effort views +
-  detail, `/clear` `/think` `/model` `/effort` unknown-command paths, no
+  detail, `/clear` `/think` `/model` `/effort` `/route` unknown-command paths, no
   `user:`/`assistant:` prefixes, thinking visible by default.
 - Question overlay tests: multi-select, type-your-own, confirmation submit,
   and dismiss paths.
@@ -446,7 +459,9 @@ retries the round unary.
 - `usage_test.go`: `/usage` parsing + identity headers, 404 hides the footer,
   severity thresholds, footer text/reset hints, refresh command wiring;
   `/credits` parsing, 403 hides the footer, balance flooring + footer text,
-  OpenRouter footer hiding Go usage, Zen hiding the footer entirely,
+  OpenRouter footer hiding Go usage, the optional provider/tps/in-out
+  metadata suffix (present and cleanly-dropped), Zen hiding the footer
+  entirely,
   per-provider refresh dispatch.
 - Fake completions server drives the real `runTurn` through `submit`.
 - `stream_test.go`: per-transport SSE rounds, stream-rejection fallback, and

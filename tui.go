@@ -714,7 +714,7 @@ func (m *tuiModel) handleAskKey(s string) (tea.Model, tea.Cmd) {
 				a.advanceAsk()
 			}
 		case "esc":
-			m.dismissAsk(errors.New("user dismissed the questions"))
+			m.dismissAsk(errAskDismissed)
 		}
 	case "own":
 		switch s {
@@ -744,7 +744,7 @@ func (m *tuiModel) handleAskKey(s string) (tea.Model, tea.Cmd) {
 			m.resumeTimer()
 			m.show(viewChat)
 		case "esc", "n":
-			m.dismissAsk(errors.New("user dismissed the questions"))
+			m.dismissAsk(errAskDismissed)
 		}
 	}
 	m.refreshViewport()
@@ -2649,7 +2649,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch s {
 	case "ctrl+c", "ctrl+d":
 		if m.ask != nil {
-			m.dismissAsk(errors.New("user dismissed the questions"))
+			m.dismissAsk(errAskDismissed)
 			return m, nil
 		}
 		if m.busy {
@@ -3170,7 +3170,7 @@ func (m *tuiModel) statusView() string {
 		// Cancel hint lives here, pinned to the right edge directly above
 		// the chatbox. The scrollback no longer repeats the status line,
 		// so the spinner row above is the single source of live state.
-		esc := metaStyle.Render("esc esc to stop")
+		esc := metaStyle.Render("esc to stop")
 		if m.width > 0 {
 			avail := m.columnWidth() - 4
 			used := lipgloss.Width(left) + lipgloss.Width(mid) + lipgloss.Width(right) + lipgloss.Width(esc)

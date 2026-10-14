@@ -43,7 +43,7 @@ type sandboxPolicy struct {
 	Hidden       []string // existing files/dirs shell cannot read or write
 	SystemHidden []string // system paths shell cannot read (approvable via folder approval)
 	Network      bool
-	AllowBind    bool     // loopback bind/listen even with Network off (Darwin only)
+	BindAddrs    []string // loopback bind addresses allowed even with Network off (Darwin only)
 	IPCPaths     []string // existing unix sockets (docker) shell may connect to
 }
 
@@ -102,10 +102,27 @@ func (c SandboxConfig) validate() error {
 	return nil
 }
 
-// allowBind: loopback listeners are on unless allow_bind = [].
-func allowBind() bool {
+// bindAddrs lists the loopback addresses shell may bind/listen on with network
+// egress off (Darwin only). Default ["localhost"]; `allow_bind = []` switches
+// it off, a non-nil list replaces the default. Values are re-checked here
+// (SandboxConfig.validate also does) so nothing but a loopback host reaches the
+// inlined profile text.
+func bindAddrs() []string {
 	b := sandboxConf().AllowBind
-	return b == nil || len(b) > 0
+	if b == nil {
+		return []string{"localhost"}
+	}
+	out := make([]string, 0, len(b))
+	for _, a := range b {
+		if a == "localhost" {
+			out = append(out, a)
+			continue
+		}
+		if ip := net.ParseIP(a); ip != nil && ip.IsLoopback() {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // ipcPaths lists the existing unix sockets shell may connect to (docker by
@@ -241,7 +258,7 @@ func sandboxCommand(ctx context.Context, command string, network bool) (*exec.Cm
 		Root: getFileRoot(), Writable: writableRoots(), Readable: readableRoots(),
 		ReadOnly: append(gitReadOnlyPaths(), systemReadOnlyPaths()...),
 		Hidden:   hiddenPaths(), SystemHidden: systemHiddenPaths(), Network: network,
-		AllowBind: allowBind(), IPCPaths: ipcPaths(),
+		BindAddrs: bindAddrs(), IPCPaths: ipcPaths(),
 	})
 	if err != nil {
 		return nil, err
@@ -302,8 +319,10 @@ func scrubShellEnv() []string {
 // for git worktrees: `git worktree add /tmp/<name>`). /var/tmp is not. The
 // private per-user temp dir (os.TempDir, /var/folders/... on macOS, used by
 // t.TempDir and go builds) stays writable so `go test` never prompts.
-// Environment-derived roots (TMPDIR, GOCACHE) that would re-expose $HOME are
-// dropped; explicit user approvals are honored even when broad.
+// $HOME (or an ancestor) is never a writable root, however it was granted:
+// approving a file directly in $HOME makes the folder unit $HOME, and binding
+// it would erase the home confinement (secrets stay denied, but unrelated dirs
+// would open up). Implicit env roots and explicit approvals alike are dropped.
 func writableRoots() []string {
 	root := getFileRoot()
 	home, _ := os.UserHomeDir()
@@ -324,6 +343,7 @@ func writableRoots() []string {
 	approvedMu.Unlock()
 	c = append(c, accessDirs(ruleWrite)...) // "FOR ALL SESSIONS" grants
 	c = append(c, siblingWorktrees(root)...)
+	c = dropBroadRoots(c, home)
 	return dropDeniedRoots(existingDirs(c), root)
 }
 

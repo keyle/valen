@@ -1100,7 +1100,7 @@ func TestPendingThinkingHeaderBeforeText(t *testing.T) {
 	if !strings.Contains(status, "Working…") {
 		t.Fatalf("spinner row must carry the live status:\n%s", status)
 	}
-	if !strings.Contains(status, "esc esc to stop") {
+	if !strings.Contains(status, "esc to stop") {
 		t.Fatalf("cancel hint must sit in the spinner row:\n%s", status)
 	}
 	// Line return after the thinking state: header must not share a visual

@@ -33,7 +33,16 @@ type AskQuestion struct {
 	// NoFreeText hides the "type your own answer" row: access questions are a
 	// fixed choice. Model-driven questions keep it (zero value false).
 	NoFreeText bool `json:"-"`
+	// DefaultFirst makes an empty headless answer select the first option (the
+	// TUI already pre-selects row 0, so Enter picks it there). Access
+	// confirmations set it so an empty Enter confirms "Yes".
+	DefaultFirst bool `json:"-"`
 }
+
+// errAskDismissed is what a prompter returns when the user cancels a question
+// (esc in the TUI, "n" at the headless review). Access confirmations treat it
+// as "No" — downgrade to the session-scoped outcome — rather than a hard error.
+var errAskDismissed = errors.New("user dismissed the questions")
 
 // AskFunc collects answers for model-driven questions. Exactly one is
 // installed per run: the TUI blocks on an overlay, headless chat reads stdin,
@@ -146,7 +155,7 @@ func headlessAsk(ctx context.Context, qs []AskQuestion, r io.Reader, w io.Writer
 		case "e", "edit":
 			continue
 		case "n", "no":
-			return nil, errors.New("user dismissed the questions")
+			return nil, errAskDismissed
 		default:
 			fmt.Fprintln(w, "please answer y, n or e")
 		}
@@ -189,6 +198,9 @@ func headlessOne(ctx context.Context, br *bufio.Reader, w io.Writer, q *AskQuest
 		line, err := readLine(br)
 		if err != nil {
 			return "", errors.New("no stdin for answers")
+		}
+		if q.DefaultFirst && !q.MultiSelect && len(q.Options) > 0 && strings.TrimSpace(line) == "" {
+			return q.Options[0].Label, nil
 		}
 		picks, err := parsePicks(line, len(q.Options), own)
 		if err != nil {
