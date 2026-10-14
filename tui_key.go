@@ -486,15 +486,20 @@ func (m *tuiModel) ensureCursorVisible() {
 func (m *tuiModel) handleOverlayKey(msg tea.KeyMsg, s string) (tea.Model, tea.Cmd) {
 	if m.mode == viewModels {
 		focused := m.modelSearch.Focused()
+		// Space toggles favourites: model IDs never contain spaces, so a
+		// typed space can never match the filter. Handled before the focus
+		// gate so it works while the field is focused, swallowing the key
+		// so it reaches the filter as a no-op.
+		if s == " " {
+			m.toggleFavourite()
+			return m, nil
+		}
 		if !focused {
 			switch s {
 			case "j":
 				s = "down"
 			case "k":
 				s = "up"
-			case " ":
-				m.toggleFavourite()
-				return m, nil
 			}
 		}
 		switch s {

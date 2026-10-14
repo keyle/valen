@@ -405,7 +405,7 @@ Keys
   ↑ on an empty chatbox reloads your last prompt: edit it and enter resends from there
   favourite slots: alt+1…alt+9, alt+0 switch to the model + thinking + routing saved in that slot · alt+shift+1…0 saves the current triple there
   in lists: ↑↓ move · enter open · esc back
-  /model picker: ↑↓/j/k select · enter switches · space stars/unstars favourites (kept on top) · ctrl+f filters (esc leaves the field, then backs)
+  /model picker: ↑↓/j/k select · enter switches · space stars/unstars favourites (kept on top, works while filtering) · ctrl+f filters (esc leaves the field, then backs)
 
 Modes
    WORK (green chatbox) — default: the agent can read, edit, write and run commands.

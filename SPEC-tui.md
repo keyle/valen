@@ -353,7 +353,7 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
   fetches the live catalogs — OpenCode Go (`GET {base_url}/models`), OpenCode
   Zen (`GET https://opencode.ai/zen/v1/models`, same OpenCode key as Go) plus
   OpenRouter (`GET https://openrouter.ai/api/v1/models`) — and opens
-  a picker: ↑↓ move, Enter switches, Space stars/unstars, j/k also move, Ctrl+F focuses the search field (ghost hint
+  a picker: ↑↓ move, Enter switches, Space stars/unstars (focused or not — model IDs hold no spaces, so a typed space can never match the filter), j/k also move, Ctrl+F focuses the search field (ghost hint
   "ctrl+f to filter models"; Esc unfocuses it, a second Esc backs out). The
   picker search box is
   pinned to the full content width (like the chatbox) so typing never resizes

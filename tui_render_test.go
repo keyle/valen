@@ -716,6 +716,33 @@ func TestTUIModelPickerFavouritesFloatAndToggle(t *testing.T) {
 	}
 }
 
+func TestTUIModelPickerSpaceFavouritesWhileFilterFocused(t *testing.T) {
+	m, statePath := newTestModelWithConfig(t, "model = \"m\"\nbase_url = \"https://unused\"\n")
+	favPath := filepath.Join(filepath.Dir(statePath), userFavouritesName)
+	_, _ = m.Update(modelsLoadedMsg{ids: []string{"alpha", "j-model", "k-model"}})
+
+	// Focus the filter and narrow to a single row.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlF})
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if !m.modelSearch.Focused() || len(m.modelChoices) != 1 || m.modelChoices[0].id != "j-model" {
+		t.Fatalf("setup: focused=%v choices=%v", m.modelSearch.Focused(), m.modelChoices)
+	}
+	// Space stars the highlighted model without leaking into the query.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+	if m.modelSearch.Value() != "j" {
+		t.Fatalf("space must not enter the filter: query=%q", m.modelSearch.Value())
+	}
+	if !m.isFavourite("j-model") {
+		t.Fatal("space while the filter is focused must star the highlighted model")
+	}
+	if raw, _ := os.ReadFile(favPath); !strings.Contains(string(raw), "- j-model") {
+		t.Fatalf("star must persist: %q", raw)
+	}
+	if !m.modelSearch.Focused() {
+		t.Fatal("toggling must not blur the filter field")
+	}
+}
+
 func TestTUIModelPickerSearchBoxKeepsFullWidth(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	m.width = 200

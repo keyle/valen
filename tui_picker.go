@@ -138,7 +138,7 @@ func (m *tuiModel) isFavourite(id string) bool {
 
 // toggleFavourite stars or unstars the highlighted model, persists the set
 // and re-sorts the list, keeping the cursor on the same model. Space drives
-// it (when the search field is unfocused); Enter stays selection.
+// it, focused or not (the filter never needs a space); Enter stays selection.
 func (m *tuiModel) toggleFavourite() {
 	if m.cursor < 0 || m.cursor >= len(m.modelChoices) {
 		return
