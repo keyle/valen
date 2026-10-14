@@ -47,7 +47,7 @@ func TestUserStateRoundTripAndOverlay(t *testing.T) {
 	if err := os.WriteFile(p, []byte(`{"other":1}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := saveModelState(p, "glm-5.3", "max"); err != nil {
+	if err := saveModelState(p, "glm-5.3", "max", ""); err != nil {
 		t.Fatal(err)
 	}
 	if st := loadUserState(p); st.Model != "glm-5.3" || st.Thinking != "max" {
@@ -61,7 +61,7 @@ func TestUserStateRoundTripAndOverlay(t *testing.T) {
 		t.Fatalf("overlay=%+v", cfg)
 	}
 	// Invalid saved thinking for the model is ignored.
-	if err := saveModelState(p, "glm-5.3", "none"); err != nil {
+	if err := saveModelState(p, "glm-5.3", "none", ""); err != nil {
 		t.Fatal(err)
 	}
 	cfg = applyUserState(Config{Model: "kimi-k2.6", Thinking: "high"}, p)
@@ -113,5 +113,62 @@ func TestFavouritesRoundTripAndParsing(t *testing.T) {
 	}
 	if p := favouritesPathFor(filepath.Join(dir, "state.json")); p != filepath.Join(dir, userFavouritesName) {
 		t.Fatalf("favourites path=%q", p)
+	}
+}
+
+func TestRoutingStateRoundTrip(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "state.json")
+	if err := saveModelState(p, "openrouter/z-ai/glm-5.3", "high", "nitro"); err != nil {
+		t.Fatal(err)
+	}
+	st := loadUserState(p)
+	if st.Model != "openrouter/z-ai/glm-5.3" || st.Thinking != "high" || st.Routing != "nitro" {
+		t.Fatalf("state=%+v", st)
+	}
+	cfg := applyUserState(Config{Model: "kimi-k2.6", Thinking: "high"}, p)
+	if cfg.Model != "openrouter/z-ai/glm-5.3" || cfg.Thinking != "high" || cfg.Routing != "nitro" {
+		t.Fatalf("overlay=%+v", cfg)
+	}
+	// "none" is stored as absence (empty).
+	if err := saveModelState(p, "openrouter/z-ai/glm-5.3", "high", "none"); err != nil {
+		t.Fatal(err)
+	}
+	if st := loadUserState(p); st.Routing != "" {
+		t.Fatalf("none routing must round-trip empty, got %q", st.Routing)
+	}
+	// A stale/invalid saved routing is ignored without blocking the model.
+	if err := os.WriteFile(p, []byte(`{"model":"openrouter/z-ai/glm-5.3","thinking":"high","routing":"bogus"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg = applyUserState(Config{Model: "kimi-k2.6"}, p)
+	if cfg.Model != "openrouter/z-ai/glm-5.3" || cfg.Routing != "" {
+		t.Fatalf("invalid routing must be ignored: %+v", cfg)
+	}
+}
+
+func TestSlotsRoutingRoundTrip(t *testing.T) {
+	p := filepath.Join(t.TempDir(), userSlotsName)
+	raw := "1: openrouter/moonshotai/kimi-k3 high floor\n2: glm-5.3 none\n3: openrouter/anthropic/claude-opus-5.5 nitro\n"
+	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := readSlots(p)
+	if got["1"] != (modelSlot{model: "openrouter/moonshotai/kimi-k3", thinking: "high", routing: "floor"}) {
+		t.Fatalf("slot 1=%+v", got["1"])
+	}
+	// "none" is a thinking level, not routing: it must land in thinking.
+	if got["2"] != (modelSlot{model: "glm-5.3", thinking: "none"}) {
+		t.Fatalf("slot 2=%+v", got["2"])
+	}
+	if got["3"] != (modelSlot{model: "openrouter/anthropic/claude-opus-5.5", routing: "nitro"}) {
+		t.Fatalf("slot 3=%+v", got["3"])
+	}
+	if err := saveSlots(p, got); err != nil {
+		t.Fatal(err)
+	}
+	saved, _ := os.ReadFile(p)
+	want := "1: openrouter/moonshotai/kimi-k3 high floor\n2: glm-5.3 none\n3: openrouter/anthropic/claude-opus-5.5 nitro\n"
+	if string(saved) != want {
+		t.Fatalf("saved=%q want=%q", saved, want)
 	}
 }

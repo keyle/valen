@@ -699,3 +699,69 @@ func TestDeepSeekToolCallReasoningPadded(t *testing.T) {
 		t.Fatal("non-deepseek must be untouched")
 	}
 }
+
+func TestRoutingWireSuffix(t *testing.T) {
+	const or = "openrouter/moonshotai/kimi-k3"
+	cases := []struct {
+		id, routing, want string
+	}{
+		{or, "floor", "moonshotai/kimi-k3:floor"},
+		{or, "nitro", "moonshotai/kimi-k3:nitro"},
+		{or, "exacto", "moonshotai/kimi-k3:exacto"},
+		{or, "NONE", "moonshotai/kimi-k3"},
+		{or, "", "moonshotai/kimi-k3"},
+		{"glm-5.3", "floor", "glm-5.3"},
+		{"zen/claude-haiku-5-5", "nitro", "claude-haiku-5-5"},
+		{"  openrouter/anthropic/claude-sonnet-5.5 ", "Floor", "anthropic/claude-sonnet-5.5:floor"},
+	}
+	for _, c := range cases {
+		if got := wireModelID(c.id, c.routing); got != c.want {
+			t.Errorf("wireModelID(%q,%q)=%q want %q", c.id, c.routing, got, c.want)
+		}
+	}
+	// No routing argument keeps the bare ID for family/transport lookups.
+	if got := wireModelID(or); got != "moonshotai/kimi-k3" {
+		t.Fatalf("bare wireModelID=%q", got)
+	}
+}
+
+func TestRoutingHelpers(t *testing.T) {
+	for _, r := range []string{"", "none", "NONE", "floor", "nitro", "exacto", " floor "} {
+		if !validRouting(r) {
+			t.Errorf("validRouting(%q) should be true", r)
+		}
+	}
+	for _, r := range []string{"cheap", "auto", "exacto2", "0"} {
+		if validRouting(r) {
+			t.Errorf("validRouting(%q) should be false", r)
+		}
+	}
+	if got := normalizeRouting("NONE"); got != "" {
+		t.Errorf("normalizeRouting(NONE)=%q want empty", got)
+	}
+	if got := routingLabel(""); got != "none" {
+		t.Errorf("routingLabel(empty)=%q", got)
+	}
+	// Cycle wraps none → floor → nitro → exacto → none; unknown lands on floor.
+	seq := []string{"", "floor", "nitro", "exacto", ""}
+	cur := ""
+	for i := 1; i < len(seq); i++ {
+		cur = cycleRouting(cur)
+		if cur != seq[i] {
+			t.Fatalf("cycle step %d = %q want %q", i, cur, seq[i])
+		}
+	}
+	if got := cycleRouting("bogus"); got != "floor" {
+		t.Fatalf("cycleRouting(bogus)=%q", got)
+	}
+	for _, bad := range []string{"none", "high", "cheap"} {
+		if isRoutingToken(bad) {
+			t.Errorf("isRoutingToken(%q) must be false so it reads as thinking", bad)
+		}
+	}
+	for _, ok := range []string{"floor", "nitro", "exacto"} {
+		if !isRoutingToken(ok) {
+			t.Errorf("isRoutingToken(%q) must be true", ok)
+		}
+	}
+}

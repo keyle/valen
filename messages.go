@@ -478,7 +478,7 @@ func runMessagesTurn(ctx context.Context, cfg Config, client *openai.Client, api
 	return runModelTurn(ctx, cfg, registry, history, onEvent, func(ctx context.Context, history []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
 		system, msgs := splitMessagesHistoryNative(history, native)
 		req := messagesRequest{
-			Model:     wireModelID(cfg.Model),
+			Model:     wireModelID(cfg.Model, cfg.Routing),
 			MaxTokens: messagesMaxTokens(cfg),
 			System:    messagesSystemParam(system),
 			Messages:  msgs,

@@ -126,6 +126,7 @@ func ensureUserConfig(dir string) (string, error) {
 type userState struct {
 	Model    string `json:"model,omitempty"`
 	Thinking string `json:"thinking,omitempty"`
+	Routing  string `json:"routing,omitempty"`
 }
 
 func readStateMap(path string) map[string]any {
@@ -147,9 +148,10 @@ func loadUserState(path string) userState {
 	return st
 }
 
-// saveModelState records the last model/thinking pair, keeping any other
-// keys already in the state file. Empty thinking means provider default.
-func saveModelState(path, model, thinking string) error {
+// saveModelState records the last model/thinking/routing selection, keeping
+// any other keys already in the state file. Empty thinking means the provider
+// default; empty routing means OpenRouter's default (none).
+func saveModelState(path, model, thinking, routing string) error {
 	if path == "" {
 		return errors.New("no state path")
 	}
@@ -159,6 +161,11 @@ func saveModelState(path, model, thinking string) error {
 		m["thinking"] = t
 	} else {
 		delete(m, "thinking")
+	}
+	if r := normalizeRouting(routing); r != "" {
+		m["routing"] = r
+	} else {
+		delete(m, "routing")
 	}
 	raw, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
@@ -182,9 +189,9 @@ func saveModelState(path, model, thinking string) error {
 	return os.Rename(tmp.Name(), path)
 }
 
-// applyUserState overlays the last-used model/thinking from the state file
-// onto cfg. An invalid saved pair (model removed, level no longer valid)
-// is ignored so a stale state file can never block boot.
+// applyUserState overlays the last-used model/thinking/routing from the state
+// file onto cfg. An invalid saved selection (model removed, level no longer
+// valid) is ignored so a stale state file can never block boot.
 func applyUserState(cfg Config, statePath string) Config {
 	st := loadUserState(statePath)
 	model := strings.TrimSpace(st.Model)
@@ -197,6 +204,9 @@ func applyUserState(cfg Config, statePath string) Config {
 	}
 	cfg.Model = model
 	cfg.Thinking = thinking
+	if routing := normalizeRouting(st.Routing); validRouting(routing) {
+		cfg.Routing = routing
+	}
 	return cfg
 }
 
@@ -225,9 +235,22 @@ func favouritesPathFor(statePath string) string {
 // then alt+0 as the tenth.
 const slotKeys = "1234567890"
 
-// modelSlot is one favourite slot: a model plus a thinking level ("" means
-// the provider default).
-type modelSlot struct{ model, thinking string }
+// modelSlot is one favourite slot: a model plus a thinking level and an
+// optional OpenRouter routing token (both "" mean the provider default).
+type modelSlot struct{ model, thinking, routing string }
+
+// slotLine renders a slot's stored one-line form: "<model> [thinking]
+// [floor|nitro|exacto]", omitting empty parts ("none" routing is absence).
+func slotLine(s modelSlot) string {
+	parts := []string{strings.TrimSpace(s.model)}
+	if s.thinking != "" {
+		parts = append(parts, strings.ToLower(s.thinking))
+	}
+	if r := normalizeRouting(s.routing); r != "" {
+		parts = append(parts, r)
+	}
+	return strings.Join(parts, " ")
+}
 
 // slotsPathFor returns the favourite-slots file beside the state file, or ""
 // when there is no state path (slots stay session-only then).
@@ -238,9 +261,11 @@ func slotsPathFor(statePath string) string {
 	return filepath.Join(filepath.Dir(statePath), userSlotsName)
 }
 
-// readSlots loads slots.yaml: one "<digit>: <model> [thinking]" line per
-// slot. Blank lines, comments, quotes and malformed lines are skipped; a
-// missing file yields an empty map.
+// readSlots loads slots.yaml: one "<digit>: <model> [thinking] [floor|nitro|
+// exacto]" line per slot. Blank lines, comments, quotes and malformed lines
+// are skipped; a missing file yields an empty map. The routing vocabulary
+// (floor/nitro/exacto) is disjoint from thinking levels, so order is
+// unambiguous; no routing token means "none".
 func readSlots(path string) map[string]modelSlot {
 	slots := map[string]modelSlot{}
 	if path == "" {
@@ -261,8 +286,13 @@ func readSlots(path string) map[string]modelSlot {
 			continue
 		}
 		s := modelSlot{model: f[0]}
-		if len(f) > 1 {
-			s.thinking = strings.ToLower(f[1])
+		for _, tok := range f[1:] {
+			tok = strings.ToLower(tok)
+			if isRoutingToken(tok) {
+				s.routing = tok
+			} else if s.thinking == "" {
+				s.thinking = tok
+			}
 		}
 		slots[key] = s
 	}
@@ -277,7 +307,7 @@ func saveSlots(path string, slots map[string]modelSlot) error {
 	var b strings.Builder
 	for _, k := range slotKeys {
 		if s, ok := slots[string(k)]; ok {
-			fmt.Fprintf(&b, "%c: %s\n", k, strings.TrimSpace(s.model+" "+s.thinking))
+			fmt.Fprintf(&b, "%c: %s\n", k, slotLine(s))
 		}
 	}
 	dir := filepath.Dir(path)

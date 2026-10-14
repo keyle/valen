@@ -22,12 +22,18 @@ and exposes tools plus any number of stdio MCP servers to the model.
 
 | File | Responsibility |
 | --- | --- |
-| `main.go` | CLI flags, config loading/defaults, HTTP identity headers, agent loop |
+| `main.go` | CLI flags, TTY/client/transport setup, HTTP identity headers, shared agent loop (`runTurn`: tool fan-out, budget, doom-loop guard) |
+| `config.go` | Config schema (`Config`/`TUIConfig`/`InputConfig`/`MCPServer`) with defaults and `loadConfig` |
+| `chat.go` | Chat-completions transport: headers, wire body, unary + SSE rounds |
 | `internal/prompts` | Agent guidelines: per-family `prompt_*.txt` (opencode-adapted, embedded) + `<env>` header + plan overlay; plan-mode ctx gating |
 | `internal/guard` | Repeat-limit default and stripping of legacy ephemeral notices; execution policy lives in `runModelTurn` |
 | `internal/dvlog` | Debug-verbose trace (`-dv`/`-dvlog`): timestamped round/tool/size log, off by default |
-| `tui.go` | Bubble Tea chat UI: padded conversation, instant echo, recall views, Monokai theme |
-| `models.go` | OpenCode Go/Zen/OpenRouter catalogs: live lists, transport maps, thinking levels, OpenRouter routing variants, config persist |
+| `tui.go` | Bubble Tea chat UI model: state, update/key/mouse handling, commands, `runTUI` |
+| `tui_view.go` | TUI rendering: chrome, turns, tools, pending/stream, ask overlay |
+| `tui_lists.go` | TUI recall/picker/help lists and their item builders |
+| `models.go` | Model ids, transport map, context windows, thinking families, OpenRouter routing variants, request wiring |
+| `model_thinking.go` | Thinking-level cache, error parsing, learning, and live probe |
+| `model_catalog.go` | OpenCode Go/Zen/OpenRouter catalog fetching (live lists + pricing) |
 | `messages.go` | Anthropic `/messages` transport: wire format, thinking, tool loop |
 | `responses.go` | OpenAI `/responses` transport (stateless): wire format, reasoning, tool loop |
 | `stream.go` | Shared streaming layer: raw POST, SSE scanner, unary-JSON fallback |
@@ -40,7 +46,8 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `todos.go` | Session plan (`todowrite`/`todoread`, opencode schema, in-memory + session fold) |
 | `task.go` | Foreground-only `task` subagent (explore/general, isolated history, depth 1) |
 | `sandbox*.go`, `shellgate.go` | Shell sandbox: policy in `sandbox.go`, `sandbox-exec` (macOS), `bwrap` (Linux), other OSes fail to compile; once-per-session prompts for network and destructive commands |
-| `files.go` | File builtins (`read`, `write`, `edit`, `glob`, `grep`): workdir sandbox, outside-access approval, glob matching |
+| `files.go` | File builtins (`read`, `write`, `edit`, `glob`, `grep`): tool implementations, glob matching, background grep |
+| `fileaccess.go` | File-access gate: workdir/worktree roots, outside-access approval, secret/data guards |
 | `ask.go` | `AskUserQuestion` contract, headless prompting/confirmation, answer formatting |
 | `search.go` | `web_search` (DuckDuckGo HTML) and `web_fetch` (HTML → text) |
 | `mcp.go` | stdio MCP client lifecycle, tool registration, result flattening |
@@ -118,12 +125,16 @@ startup, once a minute, and after each turn to render the footer; non-200s and
 non-Go keys are ignored so the footer simply stays hidden; on `zen/…` models (pay-as-you-go, no plan quota) the footer shows just `Zen`. On
 `openrouter/…` models the Go quota stays hidden and the footer shows the
 OpenRouter balance instead (`GET {openrouter_base}/credits` →
-`OR $X.XX left`); plain API keys 403 on that endpoint, so the footer stays
-clean until a management-key balance lands. Each `openrouter/…` completion also
-feeds best-effort footer metadata: the serving provider (top-level `provider`)
-and billed cost (`usage.cost`) from the body or last SSE usage chunk, the
-catalog's `pricing.prompt`/`completion` rates, and locally-timed throughput
-(completion tokens over the first-to-last content delta, no extra request).
+`OR $X.XX left`); plain API keys 403 on that endpoint, so only the
+locally-measured metadata below shows until a management-key balance lands.
+Each `openrouter/…` completion also feeds best-effort footer metadata: the
+serving provider (top-level `provider`) and billed cost (`usage.cost`) from the
+body or last SSE usage chunk, the catalog's `pricing.prompt`/`completion`
+rates, locally-timed throughput (completion tokens over the first-to-last
+content delta, no extra request), and the session's cumulative billed cost
+(`usage.cost` summed across turns and tool-loop rounds; shown as
+`session $X.XXXX`, four decimals below a cent). The session total is measured
+locally, so it renders without a balance and resets on a new/resumed session.
 
 Transport is selected per model by `modelTransport` (live Go table, Oct 2
 2026): `grok-4.x`, `gpt-*-luna` and `muse-spark-*-contributor` are

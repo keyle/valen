@@ -2664,7 +2664,7 @@ func TestSlotsRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := readSlots(p)
-	if len(got) != 2 || got["1"] != (modelSlot{"glm-5.3", "high"}) || got["0"] != (modelSlot{"openrouter/x/y", ""}) {
+	if len(got) != 2 || got["1"] != (modelSlot{model: "glm-5.3", thinking: "high"}) || got["0"] != (modelSlot{model: "openrouter/x/y"}) {
 		t.Fatalf("parsed=%v", got)
 	}
 	if err := saveSlots(p, got); err != nil {
@@ -2675,5 +2675,191 @@ func TestSlotsRoundTrip(t *testing.T) {
 	}
 	if len(readSlots("")) != 0 || slotsPathFor("") != "" {
 		t.Fatal("no state path must mean session-only")
+	}
+}
+
+func TestRoutingCycleOpenRouter(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.statePath = filepath.Join(t.TempDir(), "state.json")
+	m.cfg.Model = "openrouter/moonshotai/kimi-k3"
+
+	for _, want := range []string{"floor", "nitro", "exacto", ""} {
+		_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlY})
+		if m.cfg.Routing != want {
+			t.Fatalf("ctrl+y routing=%q want %q", m.cfg.Routing, want)
+		}
+	}
+	if st := loadUserState(m.statePath); st.Routing != "" {
+		t.Fatalf("wrapped-to-none state routing=%q", st.Routing)
+	}
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlY}) // none → floor
+	if st := loadUserState(m.statePath); st.Routing != "floor" {
+		t.Fatalf("persisted routing=%q want floor", st.Routing)
+	}
+	if !strings.Contains(m.notice, "floor") {
+		t.Fatalf("cycle notice must name the routing: %q", m.notice)
+	}
+}
+
+func TestRoutingNoopGoZen(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.statePath = filepath.Join(t.TempDir(), "state.json")
+	for _, model := range []string{"glm-5.3", "zen/claude-haiku-5-5"} {
+		m.cfg.Model = model
+		m.cfg.Routing = ""
+		m.notice = ""
+		_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlY})
+		if m.cfg.Routing != "" {
+			t.Fatalf("%s: ctrl+y changed routing to %q", model, m.cfg.Routing)
+		}
+		if m.notice != "" {
+			t.Fatalf("%s: ctrl+y must be a silent no-op, notice=%q", model, m.notice)
+		}
+	}
+	if _, err := os.Stat(m.statePath); !os.IsNotExist(err) {
+		t.Fatalf("ctrl+y on Go/Zen must not write state (err=%v)", err)
+	}
+}
+
+func TestRouteCommand(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.statePath = filepath.Join(t.TempDir(), "state.json")
+	m.cfg.Model = "openrouter/moonshotai/kimi-k3"
+
+	m.handleCommand("/route floor")
+	if m.cfg.Routing != "floor" {
+		t.Fatalf("/route floor set %q", m.cfg.Routing)
+	}
+	m.notice = ""
+	m.handleCommand("/route")
+	if !strings.Contains(m.notice, "floor") {
+		t.Fatalf("/route read=%q", m.notice)
+	}
+	m.handleCommand("/route none")
+	if m.cfg.Routing != "" {
+		t.Fatalf("/route none left %q", m.cfg.Routing)
+	}
+	m.handleCommand("/route bogus")
+	if !m.noticeErr {
+		t.Fatalf("/route bogus must error, notice=%q", m.notice)
+	}
+
+	// Go models are a no-op with an explanatory notice.
+	m.cfg.Model = "glm-5.3"
+	m.cfg.Routing = ""
+	m.notice, m.noticeErr = "", false
+	m.handleCommand("/route floor")
+	if m.cfg.Routing != "" || m.noticeErr || !strings.Contains(m.notice, "OpenRouter") {
+		t.Fatalf("go /route: routing=%q notice=%q err=%v", m.cfg.Routing, m.notice, m.noticeErr)
+	}
+}
+
+func TestCtrlOThinkToggle(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	if !m.showThink {
+		t.Fatal("thinking must be shown by default")
+	}
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlO})
+	if m.showThink {
+		t.Fatal("ctrl+o must hide thinking")
+	}
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlO})
+	if !m.showThink {
+		t.Fatal("ctrl+o must show thinking again")
+	}
+	before := m.showMeta
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlB})
+	if m.showMeta == before {
+		t.Fatal("ctrl+b must toggle the status details")
+	}
+}
+
+func TestRoutingFooterMetadata(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.cfg.Model = "openrouter/moonshotai/kimi-k3"
+	m.width, m.viewport.Width = 200, 200
+	m.orCredits = &ORCredits{TotalCredits: 20, TotalUsage: 7.66}
+	m.orMeta = &ORMeta{Provider: "Infermatic", TPS: 42.4}
+	m.orPricing = map[string]orPricing{
+		"openrouter/moonshotai/kimi-k3": {prompt: 0.0000001, completion: 0.0000004},
+	}
+	m.orSpent, m.orSpentSet = 0.0034, true
+	got := ansi.Strip(m.footerView())
+	for _, want := range []string{"openrouter $12.34 left", "Infermatic", "42 t/s", "in $0.10/out $0.40 per M", "session $0.0034"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("footer %q missing %q", got, want)
+		}
+	}
+
+	// Segments drop independently: no provider, no catalog rates.
+	m.orMeta = &ORMeta{TPS: 42.4}
+	m.orPricing = nil
+	got = ansi.Strip(m.footerView())
+	if strings.Contains(got, "Infermatic") || strings.Contains(got, "per M") {
+		t.Fatalf("missing metadata must drop: %q", got)
+	}
+	if !strings.Contains(got, "42 t/s") {
+		t.Fatalf("tps should survive: %q", got)
+	}
+
+	// Nothing to add leaves the plain balance.
+	m.orMeta = nil
+	if got := ansi.Strip(m.footerView()); !strings.Contains(got, "left") || strings.Contains(got, "t/s") {
+		t.Fatalf("empty metadata footer=%q", got)
+	}
+
+	// Narrow terminals yield the whole suffix via the width rule.
+	m.width, m.viewport.Width = 24, 24
+	m.orMeta = &ORMeta{Provider: "Infermatic", TPS: 42}
+	m.orPricing = map[string]orPricing{"openrouter/moonshotai/kimi-k3": {prompt: 0.0000001, completion: 0.0000004}}
+	if got := ansi.Strip(m.footerView()); strings.Contains(got, "Infermatic") || strings.Contains(got, "per M") || strings.Contains(got, "session") {
+		t.Fatalf("narrow footer must yield the suffix: %q", got)
+	}
+}
+
+// TestRoutingSessionCostAccumulates: each OpenRouter turn's billed cost (summed
+// across tool-loop rounds) adds to a running session total, a costless turn
+// leaves it alone, and a new session zeroes it.
+func TestRoutingSessionCostAccumulates(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.cfg.Model = "openrouter/moonshotai/kimi-k3"
+	m.width, m.viewport.Width = 200, 200
+	m.session.Turns = nil
+
+	_, _ = m.Update(turnDoneMsg{prompt: "a", answer: "1", history: []openai.ChatCompletionMessage{}, model: m.cfg.Model, turnCost: 0.0012, hasTurnCost: true})
+	_, _ = m.Update(turnDoneMsg{prompt: "b", answer: "2", history: []openai.ChatCompletionMessage{}, model: m.cfg.Model, turnCost: 0.001, hasTurnCost: true})
+	if got := formatCost(m.orSpent); got != "$0.0022" {
+		t.Fatalf("session spend = %s, want $0.0022", got)
+	}
+	if got := ansi.Strip(m.footerView()); !strings.Contains(got, "session $0.0022") {
+		t.Fatalf("footer %q missing session cost", got)
+	}
+
+	// A turn that reports no cost must not move the total.
+	_, _ = m.Update(turnDoneMsg{prompt: "c", answer: "3", history: []openai.ChatCompletionMessage{}, model: m.cfg.Model})
+	if got := formatCost(m.orSpent); got != "$0.0022" {
+		t.Fatalf("costless turn changed spend: %s", got)
+	}
+
+	m.startFreshSession()
+	if m.orSpent != 0 || m.orSpentSet {
+		t.Fatalf("new session must reset spend: %v set=%v", m.orSpent, m.orSpentSet)
+	}
+}
+
+// TestRoutingSessionCostWithoutBalance: the session cost is measured locally,
+// so it shows even when the credits balance never landed (plain API key).
+func TestRoutingSessionCostWithoutBalance(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.cfg.Model = "openrouter/moonshotai/kimi-k3"
+	m.width, m.viewport.Width = 200, 200
+	m.orCredits = nil
+	m.orSpent, m.orSpentSet = 0.5, true
+	got := ansi.Strip(m.footerView())
+	if !strings.Contains(got, "session $0.50") {
+		t.Fatalf("footer %q missing session cost without balance", got)
+	}
+	if strings.Contains(got, "left") {
+		t.Fatalf("no balance must mean no left segment: %q", got)
 	}
 }

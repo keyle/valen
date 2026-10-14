@@ -710,3 +710,46 @@ func TestRunTurnNoExtendWithoutCompactableHead(t *testing.T) {
 		t.Fatalf("calls=%d, want 2 (no summary, no second window)", *calls)
 	}
 }
+
+func TestOpenRouterMetadataParse(t *testing.T) {
+	// Unary body: provider + billed cost.
+	var provider string
+	var cost float64
+	var hasCost bool
+	parseOpenRouterMeta([]byte(`{"provider":"Infermatic","usage":{"cost":0.0012}}`), &provider, &cost, &hasCost)
+	if provider != "Infermatic" || !hasCost || cost != 0.0012 {
+		t.Fatalf("unary meta provider=%q cost=%v has=%v", provider, cost, hasCost)
+	}
+
+	// SSE usage chunk: provider plus upstream cost detail; usage.cost wins.
+	provider, cost, hasCost = "", 0, false
+	parseOpenRouterMeta([]byte(`{"provider":"Groq","usage":{"cost":0.002,"cost_details":{"upstream_inference_cost":0.003}}}`), &provider, &cost, &hasCost)
+	if provider != "Groq" || !hasCost || cost != 0.002 {
+		t.Fatalf("sse meta provider=%q cost=%v has=%v", provider, cost, hasCost)
+	}
+
+	// Missing usage.cost falls back to the upstream inference cost.
+	provider, cost, hasCost = "", 0, false
+	parseOpenRouterMeta([]byte(`{"usage":{"cost_details":{"upstream_inference_cost":0.003}}}`), &provider, &cost, &hasCost)
+	if !hasCost || cost != 0.003 {
+		t.Fatalf("fallback cost=%v has=%v", cost, hasCost)
+	}
+
+	// A body with neither provider nor cost leaves the targets untouched.
+	provider, cost, hasCost = "keep", 1.5, true
+	parseOpenRouterMeta([]byte(`{"choices":[]}`), &provider, &cost, &hasCost)
+	if provider != "keep" || cost != 1.5 || !hasCost {
+		t.Fatalf("clean body clobbered targets: %q %v %v", provider, cost, hasCost)
+	}
+
+	// Catalog price parsing tolerates strings, numbers and junk.
+	if got := orPrice(`"0.0000015"`); got != 0.0000015 {
+		t.Fatalf("orPrice string=%v", got)
+	}
+	if got := orPrice(`0.0000004`); got != 0.0000004 {
+		t.Fatalf("orPrice number=%v", got)
+	}
+	if got := orPrice(`"bogus"`); got != 0 {
+		t.Fatalf("orPrice junk=%v", got)
+	}
+}

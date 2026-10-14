@@ -17,25 +17,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BurntSushi/toml"
 	"github.com/keyle/valen/internal/dvlog"
 	"github.com/keyle/valen/internal/guard"
 	"github.com/keyle/valen/internal/prompts"
 	"github.com/sashabaranov/go-openai"
-)
-
-const (
-	defaultBaseURL               = "https://opencode.ai/zen/go/v1"
-	openCodeKeyEnv               = "OPENCODE_API_KEY"
-	openRouterKeyEnv             = "OPENROUTER_API_KEY"
-	defaultMaxRounds             = 300
-	defaultMaxTokens             = 16384
-	defaultRequestTimeoutSeconds = 300
-	// defaultMaxContextTokens is the fail-fast ceiling for models with no
-	// known window (see modelContextWindow): stateless transports resend
-	// all of history every round, so burn compounds as rounds × history.
-	// Explicit max_context_tokens always wins; 0 means per-model auto.
-	defaultMaxContextTokens = 300000
 )
 
 // version is the binary version; `make prod` stamps it via
@@ -69,177 +54,6 @@ func effectiveSystem(cfg Config) string {
 // seedHistory builds the initial history for a turn.
 func seedHistory(cfg Config) []openai.ChatCompletionMessage {
 	return []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleSystem, Content: effectiveSystem(cfg)}}
-}
-
-// Config mirrors config.toml. See SPEC.md for the full schema.
-type Config struct {
-	Model    string `toml:"model"`
-	Thinking string `toml:"thinking"`
-	BaseURL  string `toml:"base_url"`
-	// OpenCodeKey / OpenRouterKey are the API keys themselves. Empty by
-	// default: the OPENCODE_API_KEY / OPENROUTER_API_KEY env vars are
-	// used instead. persistModelSelection only writes model/thinking
-	// lines, and nothing logs these.
-	OpenCodeKey           string `toml:"opencode_key"`
-	OpenRouterKey         string `toml:"openrouter_key"`
-	SessionID             string `toml:"session_id"`
-	System                string `toml:"system"`
-	MaxRounds             int    `toml:"max_rounds"`
-	MaxContextTokens      int    `toml:"max_context_tokens"`
-	MaxTokens             int    `toml:"max_tokens"`
-	RequestTimeoutSeconds int    `toml:"request_timeout_seconds"`
-	// MaxStagnantRounds bounds consecutive identical tool batches, not research.
-	MaxStagnantRounds int `toml:"max_stagnant_rounds"`
-	// Plan starts the session in plan mode: read-only investigation
-	// (write/edit/mutating shell blocked, task explore-only) with the plan
-	// overlay appended to the system prompt. The TUI /plan command toggles
-	// the same flag at runtime without persisting it.
-	Plan        bool             `toml:"plan"`
-	Temperature *float32         `toml:"temperature"`
-	Tools       []string         `toml:"tools"`
-	MCPServers  []MCPServer      `toml:"mcp"`
-	Compaction  CompactionConfig `toml:"compaction"`
-	TUI         TUIConfig        `toml:"tui"`
-	Sandbox     SandboxConfig    `toml:"sandbox"`
-	Input       InputConfig      `toml:"input"`
-}
-
-// CompactionConfig mirrors the [compaction] table: summary-mode only,
-// send-side (disk JSONL stays lossless). Model selects the summarizer:
-// empty means the session model; set a cheap flash model to keep large
-// sessions cheap for the big model. Thinking selects the summarizer effort
-// explicitly (default "medium" when the model accepts it, else the cheapest
-// level); the main-turn effort stays in top-level `thinking`.
-type CompactionConfig struct {
-	Auto       *bool  `toml:"auto"`
-	KeepTokens int    `toml:"keep_tokens"`
-	Buffer     int    `toml:"buffer"`
-	Model      string `toml:"model"`
-	Thinking   string `toml:"thinking"`
-}
-
-// TUIConfig mirrors the [tui] table: transcript rendering and the
-// attention bell (TUI only). Sound nil means on: ring the terminal bell
-// when a question appears or a turn finishes.
-// MaxLines nil means the 1000-line default; 0 or less disables trimming.
-// When the rendered committed transcript exceeds the cap, older turns
-// collapse their reasoning (prompts, tool lines and replies stay whole)
-// and, if needed, the oldest turns drop from scrollback. History on disk
-// stays lossless and the recall views still expand everything.
-type TUIConfig struct {
-	MaxLines *int  `toml:"max_lines"`
-	Sound    *bool `toml:"sound"`
-}
-
-// defaultTUIMaxLines bounds the rendered committed transcript so the
-// viewport never re-parses an ever-growing scrollback (the TUI slowdown
-// after long sessions). Reasoning collapses first; prompts/tools/replies survive.
-const defaultTUIMaxLines = 1000
-
-// tuiMaxLines is the transcript line budget: the default when unset, else
-// the configured value (0 or less means unlimited).
-func tuiMaxLines(cfg Config) int {
-	if cfg.TUI.MaxLines == nil {
-		return defaultTUIMaxLines
-	}
-	return *cfg.TUI.MaxLines
-}
-
-// tuiSound reports whether the attention bell is on, default on.
-func tuiSound(cfg Config) bool {
-	return cfg.TUI.Sound == nil || *cfg.TUI.Sound
-}
-
-// InputConfig mirrors the [input] table: chatbox chrome (TUI only).
-// Blink nil means on; Height <= 0 means the 3-line default.
-type InputConfig struct {
-	Blink  *bool `toml:"blink"`
-	Height int   `toml:"height"`
-}
-
-// defaultInputHeight is the chatbox height in lines.
-const defaultInputHeight = 3
-
-// inputHeight is the chatbox height in lines, default 3.
-func inputHeight(cfg Config) int {
-	if cfg.Input.Height <= 0 {
-		return defaultInputHeight
-	}
-	return cfg.Input.Height
-}
-
-// inputBlink reports whether the chatbox block cursor blinks, default on.
-func inputBlink(cfg Config) bool {
-	return cfg.Input.Blink == nil || *cfg.Input.Blink
-}
-
-type MCPServer struct {
-	Name string            `toml:"name"`
-	Cmd  string            `toml:"cmd"`
-	Args []string          `toml:"args"`
-	Env  map[string]string `toml:"env"`
-}
-
-func loadConfig(path string) (Config, error) {
-	var cfg Config
-	md, err := toml.DecodeFile(path, &cfg)
-	if err != nil {
-		return cfg, fmt.Errorf("decode %s: %w", path, err)
-	}
-	if bad := md.Undecoded(); len(bad) > 0 {
-		names := make([]string, len(bad))
-		for i, k := range bad {
-			names[i] = k.String()
-		}
-		return cfg, fmt.Errorf("decode %s: unknown key(s): %s", path, strings.Join(names, ", "))
-	}
-	if cfg.Model == "" {
-		return cfg, errors.New("model is required")
-	}
-	if err := validateModelID(cfg.Model); err != nil {
-		return cfg, err
-	}
-	cfg.Thinking = strings.ToLower(strings.TrimSpace(cfg.Thinking))
-	if !validThinkingLevel(cfg.Model, cfg.Thinking) {
-		return cfg, fmt.Errorf("thinking %q is not available for model %q (try: %s)", cfg.Thinking, cfg.Model, strings.Join(AvailableThinkingLevels(cfg.Model), ", "))
-	}
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = defaultBaseURL
-	}
-	if cfg.MaxRounds == 0 {
-		cfg.MaxRounds = defaultMaxRounds
-	}
-	// MaxContextTokens 0 means auto: contextBudget resolves the model's own
-	// window (modelContextWindow) or the safe default. Explicit values
-	// always win and survive /model switches.
-	if cfg.MaxTokens == 0 {
-		cfg.MaxTokens = defaultMaxTokens
-	}
-	if cfg.RequestTimeoutSeconds <= 0 {
-		cfg.RequestTimeoutSeconds = defaultRequestTimeoutSeconds
-	}
-	if cfg.MaxStagnantRounds <= 0 {
-		cfg.MaxStagnantRounds = guard.DefaultMaxStagnantRounds
-	}
-	cfg.Compaction.Model = strings.TrimSpace(cfg.Compaction.Model)
-	cfg.Compaction.Thinking = strings.ToLower(strings.TrimSpace(cfg.Compaction.Thinking))
-	if err := validateExplicitCompactionThinking(compactionModel(cfg), cfg.Compaction.Thinking); err != nil {
-		return cfg, err
-	}
-	cfg.Compaction = normalizeCompactionConfig(cfg.Compaction, contextBudget(cfg))
-	cfg.Input.Height = inputHeight(cfg)
-	if err := cfg.Sandbox.validate(); err != nil {
-		return cfg, err
-	}
-	if cfg.SessionID == "" {
-		cfg.SessionID = newSessionID()
-	}
-	for _, s := range cfg.MCPServers {
-		if s.Name == "" || s.Cmd == "" {
-			return cfg, errors.New("mcp server requires name and cmd")
-		}
-	}
-	return cfg, nil
 }
 
 // headerTransport stamps the identity headers OpenCode Go requires for routing.
@@ -494,6 +308,53 @@ type Event struct {
 	// index concatenate exactly; the first delta of a new part starts on its
 	// own line, mirroring the committed join of separate summary parts.
 	Index int
+	// ORMeta carries OpenRouter serving metadata (provider, billed cost,
+	// locally-measured throughput) on an "or_meta" event.
+	ORMeta *ORMeta
+}
+
+// ORMeta is OpenRouter's best-effort per-round serving metadata: the upstream
+// provider that served the request, the billed cost and the throughput
+// measured from our own stream. Any field may be absent.
+type ORMeta struct {
+	Provider string
+	Cost     float64
+	HasCost  bool
+	TPS      float64
+}
+
+// parseOpenRouterMeta folds the serving provider and billed cost from one
+// completion body (unary) or SSE chunk into the targets. Missing fields leave
+// them untouched; `usage.cost` is preferred, falling back to
+// `cost_details.upstream_inference_cost`.
+func parseOpenRouterMeta(raw []byte, provider *string, cost *float64, hasCost *bool) {
+	if !bytes.Contains(raw, []byte("provider")) && !bytes.Contains(raw, []byte("cost")) {
+		return
+	}
+	var m struct {
+		Provider string `json:"provider"`
+		Usage    *struct {
+			Cost        float64 `json:"cost"`
+			CostDetails *struct {
+				UpstreamInferenceCost float64 `json:"upstream_inference_cost"`
+			} `json:"cost_details"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(raw, &m) != nil {
+		return
+	}
+	if m.Provider != "" {
+		*provider = m.Provider
+	}
+	if m.Usage != nil {
+		c := m.Usage.Cost
+		if c == 0 && m.Usage.CostDetails != nil {
+			c = m.Usage.CostDetails.UpstreamInferenceCost
+		}
+		if c != 0 {
+			*cost, *hasCost = c, true
+		}
+	}
 }
 
 type turnConfigKey struct{}
@@ -1004,7 +865,7 @@ func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey 
 	stream := true
 	tools := registry.OpenAITools()
 	return runModelTurn(ctx, cfg, registry, history, onEvent, func(ctx context.Context, history []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
-		req := openai.ChatCompletionRequest{Model: wireModelID(cfg.Model), Messages: chatSendMessages(history), Tools: tools, MaxTokens: outputTokens(cfg)}
+		req := openai.ChatCompletionRequest{Model: wireModelID(cfg.Model, cfg.Routing), Messages: chatSendMessages(history), Tools: tools, MaxTokens: outputTokens(cfg)}
 		if cfg.Temperature != nil {
 			req.Temperature = *cfg.Temperature
 		}
@@ -1027,364 +888,4 @@ func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey 
 		}
 		return msg, usage, err
 	})
-}
-
-func chatEndpoint(baseURL string) string {
-	return strings.TrimRight(baseURL, "/") + "/chat/completions"
-}
-
-// openRouterHTTPClient is the sessionless client for OpenRouter traffic:
-// the shared keep-alive transport without the Go identity headers.
-var openRouterHTTPClient = &http.Client{Transport: sharedTransport}
-
-// chatTarget resolves where a chat turn is sent. Go models ride cfg.BaseURL
-// with the Go key and session affinity; OpenRouter models ride OpenRouter's
-// OpenAI-compatible chat endpoint with the OpenRouter key and no Go session
-// header. It returns the endpoint URL, headers, send config and client.
-func chatTarget(cfg Config, apiKey string, hc *http.Client) (string, map[string]string, Config, *http.Client) {
-	if modelProvider(cfg.Model) == ProviderOpenRouter {
-		sendCfg := cfg
-		sendCfg.SessionID = ""
-		return openRouterBaseURL + "/chat/completions", openRouterHeaders(cfg.OpenRouterKey), sendCfg, openRouterHTTPClient
-	}
-	return chatEndpoint(providerBaseURL(cfg)), chatHeaders(apiKey), cfg, hc
-}
-
-// chatTransportLabel names the failing side for error mapping: OpenRouter
-// failures must not be reported as Go ("chat") ones, or the wrong env var
-// gets blamed.
-func chatTransportLabel(cfg Config) string {
-	if modelProvider(cfg.Model) == ProviderOpenRouter {
-		return "openrouter"
-	}
-	return "chat"
-}
-
-func chatHeaders(apiKey string) map[string]string {
-	if apiKey == "" {
-		return nil
-	}
-	return map[string]string{"Authorization": "Bearer " + apiKey}
-}
-
-// OpenRouter names reasoning `reasoning` (not DeepSeek's `reasoning_content`)
-// both ways. go-openai only knows the latter, so without these helpers the
-// reasoning is dropped and thinking-mode upstreams 400 on the next round
-// ("reasoning_content must be passed back").
-func altStreamReasoning(data string, index int) string {
-	if !strings.Contains(data, `"reasoning"`) {
-		return ""
-	}
-	var c struct {
-		Choices []struct {
-			Index int `json:"index"`
-			Delta struct {
-				Reasoning string `json:"reasoning"`
-			} `json:"delta"`
-		} `json:"choices"`
-	}
-	if json.Unmarshal([]byte(data), &c) != nil {
-		return ""
-	}
-	for _, ch := range c.Choices {
-		if ch.Index == index {
-			return ch.Delta.Reasoning
-		}
-	}
-	return ""
-}
-
-// fillReasoning recovers `reasoning` from a unary body when reasoning_content
-// was absent.
-func fillReasoning(msg *openai.ChatCompletionMessage, raw []byte) {
-	if msg.ReasoningContent != "" || !bytes.Contains(raw, []byte(`"reasoning"`)) {
-		return
-	}
-	var c struct {
-		Choices []struct {
-			Message struct {
-				Reasoning string `json:"reasoning"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if json.Unmarshal(raw, &c) == nil && len(c.Choices) > 0 {
-		msg.ReasoningContent = c.Choices[0].Message.Reasoning
-	}
-}
-
-// chatWireBody patches reasoning on the serialized request. OpenRouter gets
-// each assistant reasoning_content mirrored as `reasoning` (its documented
-// field). DeepSeek thinking mode 400s unless every assistant tool-call
-// message carries reasoning_content, and go-openai omits empty strings, so
-// those get an explicit "". Everything else is sent untouched.
-func chatWireBody(cfg Config, req openai.ChatCompletionRequest) any {
-	mirror := modelProvider(cfg.Model) == ProviderOpenRouter
-	pad := strings.HasPrefix(modelBaseID(cfg.Model), "deepseek") && strings.ToLower(strings.TrimSpace(cfg.Thinking)) != "none"
-	need := false
-	for _, m := range req.Messages {
-		if m.Role == openai.ChatMessageRoleAssistant && ((mirror && m.ReasoningContent != "") || (pad && len(m.ToolCalls) > 0 && m.ReasoningContent == "")) {
-			need = true
-			break
-		}
-	}
-	if !need {
-		return req
-	}
-	raw, err := json.Marshal(req)
-	if err != nil {
-		return req
-	}
-	var body map[string]json.RawMessage
-	var msgs []map[string]json.RawMessage
-	if json.Unmarshal(raw, &body) != nil || json.Unmarshal(body["messages"], &msgs) != nil {
-		return req
-	}
-	for _, m := range msgs {
-		if string(m["role"]) != `"assistant"` {
-			continue
-		}
-		rc, ok := m["reasoning_content"]
-		if mirror && ok {
-			m["reasoning"] = rc
-		}
-		if pad && !ok && len(m["tool_calls"]) > 0 {
-			m["reasoning_content"] = json.RawMessage(`""`)
-		}
-	}
-	body["messages"], _ = json.Marshal(msgs)
-	return body
-}
-
-// chatRoundOnce is the non-streaming round, kept as the fallback when a
-// provider rejects `stream: true`.
-func chatRoundOnce(ctx context.Context, cfg Config, apiKey string, hc *http.Client, req openai.ChatCompletionRequest) (openai.ChatCompletionMessage, openai.Usage, error) {
-	var usage openai.Usage
-	endpoint, headers, sendCfg, httpClient := chatTarget(cfg, apiKey, hc)
-	resp, err := postAPI(ctx, httpClient, sendCfg, endpoint, chatWireBody(cfg, req), headers)
-	if err != nil {
-		return openai.ChatCompletionMessage{}, usage, err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return openai.ChatCompletionMessage{}, usage, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return openai.ChatCompletionMessage{}, usage, parseTransportError(chatTransportLabel(cfg), resp.StatusCode, raw)
-	}
-	var out openai.ChatCompletionResponse
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return openai.ChatCompletionMessage{}, usage, fmt.Errorf("api: chat: decode: %w", err)
-	}
-	if len(out.Choices) == 0 {
-		return openai.ChatCompletionMessage{}, usage, errors.New("api: empty choices in response")
-	}
-	msg := out.Choices[0].Message
-	if err := chatFinishError(string(out.Choices[0].FinishReason)); err != nil {
-		return openai.ChatCompletionMessage{}, out.Usage, err
-	}
-	fillReasoning(&msg, raw)
-	return msg, out.Usage, validateModelReply(msg)
-}
-
-// errContentFilter marks a round the provider cut off with a content filter.
-var errContentFilter = errors.New("content filter")
-
-func chatFinishError(reason string) error {
-	switch reason {
-	case "", "stop", "tool_calls", "function_call":
-		return nil
-	case "content_filter":
-		return fmt.Errorf("api: chat: incomplete response (%s): %w", reason, errContentFilter)
-	default:
-		return fmt.Errorf("api: chat: incomplete response (%s)", reason)
-	}
-}
-
-type chatToolAcc struct {
-	id   string
-	name string
-	args strings.Builder
-}
-
-// chatRoundStream runs one round as SSE, emitting text/thinking deltas live.
-// A unary JSON body (provider ignored streaming) folds through the same
-// validation as chatRoundOnce without emitting deltas.
-func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Client, req openai.ChatCompletionRequest, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
-	var usage openai.Usage
-	req.Stream = true
-	req.StreamOptions = &openai.StreamOptions{IncludeUsage: true}
-	endpoint, headers, sendCfg, httpClient := chatTarget(cfg, apiKey, hc)
-	resp, err := postAPI(ctx, httpClient, sendCfg, endpoint, chatWireBody(cfg, req), headers)
-	if err != nil {
-		return openai.ChatCompletionMessage{}, usage, err
-	}
-	defer resp.Body.Close()
-	br := bufio.NewReader(io.LimitReader(resp.Body, 8<<20))
-	if resp.StatusCode != http.StatusOK {
-		raw, err := io.ReadAll(br)
-		if err != nil {
-			return openai.ChatCompletionMessage{}, usage, err
-		}
-		return openai.ChatCompletionMessage{}, usage, parseTransportError(chatTransportLabel(cfg), resp.StatusCode, raw)
-	}
-	sse, raw, err := splitBodyMode(br)
-	if err != nil {
-		return openai.ChatCompletionMessage{}, usage, err
-	}
-	emit := func(kind, text string) {
-		if onEvent != nil && text != "" {
-			onEvent(Event{Kind: kind, Text: text})
-		}
-	}
-	if !sse {
-		var out openai.ChatCompletionResponse
-		if err := json.Unmarshal(raw, &out); err != nil {
-			return openai.ChatCompletionMessage{}, usage, fmt.Errorf("api: chat: decode: %w", err)
-		}
-		if len(out.Choices) == 0 {
-			return openai.ChatCompletionMessage{}, usage, errors.New("api: empty choices in response")
-		}
-		if err := chatFinishError(string(out.Choices[0].FinishReason)); err != nil {
-			return openai.ChatCompletionMessage{}, out.Usage, err
-		}
-		msg := out.Choices[0].Message
-		fillReasoning(&msg, raw)
-		return msg, out.Usage, validateModelReply(msg)
-	}
-
-	var content, thinking strings.Builder
-	accs := map[int]*chatToolAcc{}
-	var order []int
-	var eventErr error
-	var terminal bool
-	scanErr := scanSSE(ctx, br, func(ev sseEvent) bool {
-		if strings.TrimSpace(ev.data) == "[DONE]" {
-			terminal = true
-			return false
-		}
-		var chunk struct {
-			openai.ChatCompletionStreamResponse
-			Error json.RawMessage `json:"error"`
-		}
-		if err := json.Unmarshal([]byte(ev.data), &chunk); err != nil {
-			eventErr = fmt.Errorf("api: chat: decode stream event: %w", err)
-			return false
-		}
-		if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
-			eventErr = parseTransportError(chatTransportLabel(cfg), 0, []byte(ev.data))
-			return false
-		}
-		if chunk.Usage != nil {
-			usage = *chunk.Usage
-		}
-		for _, choice := range chunk.Choices {
-			if choice.Index != 0 {
-				continue
-			}
-			if err := chatFinishError(string(choice.FinishReason)); err != nil {
-				eventErr = err
-				return false
-			}
-			if choice.FinishReason != "" {
-				terminal = true
-			}
-			d := choice.Delta
-			altReasoning := altStreamReasoning(ev.data, choice.Index)
-			if d.Content != "" {
-				content.WriteString(d.Content)
-				emit("text_delta", d.Content)
-			}
-			if r := d.ReasoningContent; r != "" || altReasoning != "" {
-				if r == "" {
-					r = altReasoning
-				}
-				thinking.WriteString(r)
-				emit("thinking_delta", r)
-			}
-			for _, tc := range d.ToolCalls {
-				idx := 0
-				if tc.Index != nil {
-					idx = *tc.Index
-				}
-				if idx < 0 || (tc.Type != "" && tc.Type != openai.ToolTypeFunction) {
-					eventErr = errors.New("api: chat: invalid streamed tool call")
-					return false
-				}
-				a := accs[idx]
-				if a == nil {
-					a = &chatToolAcc{}
-					accs[idx] = a
-					order = append(order, idx)
-				}
-				if tc.ID != "" {
-					a.id = tc.ID
-				}
-				if tc.Function.Name != "" {
-					a.name = tc.Function.Name
-				}
-				a.args.WriteString(tc.Function.Arguments)
-			}
-		}
-		return true
-	})
-	if eventErr != nil {
-		return openai.ChatCompletionMessage{}, usage, eventErr
-	}
-	if scanErr != nil {
-		return openai.ChatCompletionMessage{}, usage, scanErr
-	}
-	if !terminal {
-		return openai.ChatCompletionMessage{}, usage, errors.New("api: chat: incomplete stream (missing [DONE] or finish_reason)")
-	}
-	var calls []openai.ToolCall
-	for _, idx := range order {
-		a := accs[idx]
-		calls = append(calls, openai.ToolCall{
-			ID:   a.id,
-			Type: openai.ToolTypeFunction,
-			Function: openai.FunctionCall{
-				Name:      a.name,
-				Arguments: a.args.String(),
-			},
-		})
-	}
-	msg := openai.ChatCompletionMessage{
-		Role:             openai.ChatMessageRoleAssistant,
-		Content:          content.String(),
-		ReasoningContent: thinking.String(),
-		ToolCalls:        calls,
-	}
-	return msg, usage, validateModelReply(msg)
-}
-
-// chat is the headless one-shot path: one prompt, one answer, stdout.
-func chat(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, prompt string, stdout, stderr io.Writer) error {
-	resetTodos()
-	history := make([]openai.ChatCompletionMessage, 0, 8)
-	history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: effectiveSystem(cfg)})
-	history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: prompt})
-	dvlog.Logf("start model=%s transport=%s thinking=%s maxrounds=%d budget~%dtok schemastate~%dtok tools=%d headless prompt=%dB %q",
-		cfg.Model, modelTransport(cfg.Model), cfg.Thinking, cfg.MaxRounds, contextBudget(cfg), requestToolsTokens(registry), len(registry.Names()), len(prompt), dvlog.Preview(prompt, 200))
-
-	onEvent := func(ev Event) {
-		if ev.Kind == "tool_start" {
-			fmt.Fprintf(stderr, "[tool %s]\n", ev.Text)
-		}
-	}
-	askPrompter = func(ctx context.Context, qs []AskQuestion) ([]string, error) {
-		in, closeIn, err := headlessAskInput()
-		if err != nil {
-			return nil, err
-		}
-		defer closeIn()
-		return headlessAsk(ctx, qs, in, os.Stderr)
-	}
-	reply, usage, err := runTurn(ctx, cfg, client, apiKey, hc, registry, &history, onEvent)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintln(stdout, reply.Content)
-	fmt.Fprintf(stderr, "[tokens in=%d out=%d]\n", usage.PromptTokens, usage.CompletionTokens)
-	return nil
 }

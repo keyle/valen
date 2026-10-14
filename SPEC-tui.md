@@ -46,6 +46,20 @@ better onto an opencode-style chat: padded blocks, instant user echo, inline
 tool activity, overlay recall views — all in one `tuiModel` with async
 `turnDoneMsg` / `toolEventMsg` messages.
 
+## Code layout
+
+`package main` throughout (plus `internal/prompts`, `internal/guard`,
+`internal/dvlog`); the UI is split by concern so no single file dominates:
+
+- `tui.go` — `tuiModel` state and message types, `Update` plus key/mouse/CSI
+  handling, commands/actions (submit, slash commands, pickers, slots,
+  favourites), and the `runTUI` entry.
+- `tui_view.go` — chrome (header/status/footer/input), turn/tool/pending/stream
+  rendering, and the ask overlay.
+- `tui_lists.go` — recall/picker/help list rendering and item builders.
+- Shared, UI-agnostic: `runTurn` orchestration in `main.go`, config in
+  `config.go`, the Chat transport in `chat.go`.
+
 ## UX
 
 ```
@@ -144,17 +158,21 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   no plan quota, nothing fetched).
   On `openrouter/…` models the Go quota stays hidden and the footer shows the
   OpenRouter balance (`OR $X.XX left`) once the credits fetch lands; plain API
-  keys 403 on `/credits`, so the footer shows only the hint until then.
+  keys 403 on `/credits`, so only the locally-measured metadata below shows
+  until then.
   When OpenRouter reports it, the balance is followed by best-effort turn
-  metadata: the serving provider, throughput and per-million input/output
-  rates (`OR $X.XX left · Infermatic · 42 t/s · in $0.10/out $0.40 per M`).
+  metadata: the serving provider, throughput, per-million input/output rates and
+  the session's cumulative billed cost (`OR $X.XX left · Infermatic · 42 t/s ·
+  in $0.10/out $0.40 per M · session $0.0034`).
   The provider name and billed cost come from the response (top-level
   `provider`, `usage.cost`); rates come from the model catalog's
   `pricing.prompt`/`pricing.completion`; throughput is measured locally from the
   stream (completion tokens over the first-to-last content delta), so it needs
-  no extra request. Each segment is independently
-  optional and the whole suffix yields to the width rule, so a narrow terminal
-  or a missing field just drops that part.
+  no extra request. The session cost sums each turn's billed cost across every
+  tool-loop round, keeps four decimals below a cent, resets on a new or resumed
+  session, and — being local — shows even without a balance. Each segment is
+  independently optional and the whole suffix yields to the width rule, so a
+  narrow terminal or a missing field just drops that part.
 - Autoscroll follows new turns while pinned to the bottom; PgUp/PgDn or the
   mouse wheel scrolls the transcript, which pauses autoscroll until scrolled
   back to the bottom (a new submit or committed turn re-pins). Mouse reporting

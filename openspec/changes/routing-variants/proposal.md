@@ -39,9 +39,9 @@ the control must be OpenRouter-only and harmless elsewhere.
    [floor|nitro|exacto]` — the two vocabularies are disjoint, so the parser
    needs no quoting. Slot assign/apply and their notices name the routing.
 4. **Footer metadata** (OpenRouter only, best effort) — after the balance,
-   append the serving provider, throughput and cost when OpenRouter reports
-   them, e.g. `openrouter $12.34 left · Infermatic · 42 t/s · in $0.10/out
-   $0.40 per M`.
+   append the serving provider, throughput, rates and the session's cumulative
+   billed cost when OpenRouter reports them, e.g. `openrouter $12.34 left ·
+   Infermatic · 42 t/s · in $0.10/out $0.40 per M · session $0.0034`.
    - Provider + billed cost come from the top-level `provider` and `usage.cost`
      (`cost_details.upstream_inference_cost`) in the completion body, or in the
      last SSE usage chunk when streaming.
@@ -49,6 +49,9 @@ the control must be OpenRouter-only and harmless elsewhere.
      `pricing.prompt` / `pricing.completion`.
    - TPS is measured from our own stream — completion tokens over the wall time
      from the first to the last content delta — so it needs no extra API call.
+   - The session cost sums every turn's billed cost (all tool-loop rounds),
+     four decimals below a cent, resetting on a new/resumed session; being
+     local it shows even without a balance.
    - Every segment is independently optional; missing data drops silently and
      the whole suffix yields to the width rule so narrow terminals keep the
      plain balance.
