@@ -125,7 +125,7 @@ startup, once a minute, and after each turn to render the footer; non-200s and
 non-Go keys are ignored so the footer simply stays hidden; on `zen/…` models (pay-as-you-go, no plan quota) the footer shows just `Zen`. On
 `openrouter/…` models the Go quota stays hidden and the footer shows the
 OpenRouter balance instead (`GET {openrouter_base}/credits` →
-`OR $X.XX left`); plain API keys 403 on that endpoint, so only the
+`openrouter $X.XX left`); plain API keys 403 on that endpoint, so only the
 locally-measured metadata below shows until a management-key balance lands.
 Each `openrouter/…` completion also feeds best-effort footer metadata: the
 serving provider (top-level `provider`) and billed cost (`usage.cost`) from the
@@ -133,7 +133,7 @@ body or last SSE usage chunk, the catalog's `pricing.prompt`/`completion`
 rates, locally-timed throughput (completion tokens over the first-to-last
 content delta, no extra request), and the session's cumulative billed cost
 (`usage.cost` summed across turns and tool-loop rounds; shown as
-`session $X.XXXX`, four decimals below a cent). The session total is measured
+`sess $X.XXXX`, four decimals below a cent). The session total is measured
 locally, so it renders without a balance and resets on a new/resumed session.
 
 Transport is selected per model by `modelTransport` (live Go table, Oct 2
@@ -596,7 +596,7 @@ mode reads the same overlay (not with `-config <file>`). `/plan` toggles plan
 mode at runtime (read-only investigation, reply is the plan; header shows
 `· plan`); it does not persist. The TUI footer also
 shows Go plan usage (`5h` / `7d` / `30d`), yellow past 80% and pink at the cap —
-or the OpenRouter balance (`OR $X.XX left`) on `openrouter/…` models, followed
+or the OpenRouter balance (`openrouter $X.XX left`) on `openrouter/…` models, followed
 by best-effort serving-provider, throughput and per-million in/out rate
 metadata when OpenRouter reports it (throughput is measured locally from the
 stream — no extra request); it stays

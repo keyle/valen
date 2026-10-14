@@ -121,6 +121,10 @@ func (m *tuiModel) headerView() string {
 	if m.cfg.Thinking != "" {
 		model += " · " + m.cfg.Thinking
 	}
+	// Routing affinity rides only on OpenRouter models; Go and Zen ignore it.
+	if r := normalizeRouting(m.cfg.Routing); r != "" && modelProvider(m.cfg.Model) == ProviderOpenRouter {
+		model += " · " + r
+	}
 	right := headerDimStyle.Render(model)
 	// Suffixes after the logo: plan marker and the overlay name. They are
 	// reserved when truncating the label so the header never wraps onto a
@@ -327,10 +331,10 @@ func (m *tuiModel) orMetaSuffix() string {
 		}
 	}
 	if p, ok := m.orPricing[m.cfg.Model]; ok {
-		parts = append(parts, fmt.Sprintf("in $%.2f/out $%.2f per M", p.prompt*1e6, p.completion*1e6))
+		parts = append(parts, fmt.Sprintf("in $%.2f/out $%.2f/M", p.prompt*1e6, p.completion*1e6))
 	}
 	if m.orSpentSet {
-		parts = append(parts, "session "+formatCost(m.orSpent))
+		parts = append(parts, "sess "+formatCost(m.orSpent))
 	}
 	if len(parts) == 0 {
 		return ""

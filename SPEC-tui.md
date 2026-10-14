@@ -95,7 +95,10 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   entirely rather than falling back to the `ses-…` id. The bare model
   name and thinking level (`glm-5.3-flash · high`; no `go/`, `zen/` or
   `openrouter/vendor/` prefix) sit flush at the far right, aligned with the
-  footer's right text. The tools count is not shown, and the header carries no
+  footer's right text. The OpenRouter routing affinity (`none` omitted;
+  otherwise `floor`/`nitro`/`exacto`) trails the thinking level
+  (`kimi-k3 · high · nitro`) and is shown only on OpenRouter models — Go and
+  Zen ignore routing. The tools count is not shown, and the header carries no
   key hints (alt+m is listed in `/help`).
 - Transcript is padded conversation blocks separated by blank lines; no role
   prefixes. `You` (orange; `You (PLAN)` in cyan with a cyan left bar when sent in plan mode) and ` ✦ <model>` (green, leading space so it lines
@@ -157,13 +160,13 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   On `zen/…` models the right of the footer shows just `Zen` (pay-as-you-go,
   no plan quota, nothing fetched).
   On `openrouter/…` models the Go quota stays hidden and the footer shows the
-  OpenRouter balance (`OR $X.XX left`) once the credits fetch lands; plain API
+  OpenRouter balance (`openrouter $X.XX left`) once the credits fetch lands; plain API
   keys 403 on `/credits`, so only the locally-measured metadata below shows
   until then.
   When OpenRouter reports it, the balance is followed by best-effort turn
   metadata: the serving provider, throughput, per-million input/output rates and
-  the session's cumulative billed cost (`OR $X.XX left · Infermatic · 42 t/s ·
-  in $0.10/out $0.40 per M · session $0.0034`).
+  the session's cumulative billed cost (`openrouter $X.XX left · Infermatic · 42 t/s ·
+  in $0.10/out $0.40/M · sess $0.0034`).
   The provider name and billed cost come from the response (top-level
   `provider`, `usage.cost`); rates come from the model catalog's
   `pricing.prompt`/`pricing.completion`; throughput is measured locally from the

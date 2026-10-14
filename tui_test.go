@@ -200,6 +200,27 @@ func TestTUIHeaderModelFlushRight(t *testing.T) {
 	}
 }
 
+// TestTUIHeaderRoutingAffinity: an OpenRouter model shows the routing mode
+// after the thinking level; Go/Zen and "none" omit it.
+func TestTUIHeaderRoutingAffinity(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.cfg.Model = "openrouter/moonshotai/kimi-k3"
+	m.cfg.Thinking = "high"
+	m.cfg.Routing = "nitro"
+	if got := ansi.Strip(m.headerView()); !strings.HasSuffix(strings.TrimRight(got, " "), "kimi-k3 · high · nitro") {
+		t.Fatalf("openrouter header must show routing after thinking:\n%s", got)
+	}
+	m.cfg.Routing = "none"
+	if got := ansi.Strip(m.headerView()); !strings.HasSuffix(strings.TrimRight(got, " "), "kimi-k3 · high") || strings.Contains(got, "none") {
+		t.Fatalf("none routing must be omitted:\n%s", got)
+	}
+	m.cfg.Model = "glm-5.3-flash"
+	m.cfg.Routing = "nitro"
+	if got := ansi.Strip(m.headerView()); !strings.HasSuffix(strings.TrimRight(got, " "), "glm-5.3-flash · high") || strings.Contains(got, "nitro") {
+		t.Fatalf("go/zen header must not show routing:\n%s", got)
+	}
+}
+
 func TestTUIHeaderHidesUnnamedSessionID(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	if m.session.Title != "" {
@@ -2785,7 +2806,7 @@ func TestRoutingFooterMetadata(t *testing.T) {
 	}
 	m.orSpent, m.orSpentSet = 0.0034, true
 	got := ansi.Strip(m.footerView())
-	for _, want := range []string{"openrouter $12.34 left", "Infermatic", "42 t/s", "in $0.10/out $0.40 per M", "session $0.0034"} {
+	for _, want := range []string{"openrouter $12.34 left", "Infermatic", "42 t/s", "in $0.10/out $0.40/M", "sess $0.0034"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("footer %q missing %q", got, want)
 		}
@@ -2795,7 +2816,7 @@ func TestRoutingFooterMetadata(t *testing.T) {
 	m.orMeta = &ORMeta{TPS: 42.4}
 	m.orPricing = nil
 	got = ansi.Strip(m.footerView())
-	if strings.Contains(got, "Infermatic") || strings.Contains(got, "per M") {
+	if strings.Contains(got, "Infermatic") || strings.Contains(got, "/M") {
 		t.Fatalf("missing metadata must drop: %q", got)
 	}
 	if !strings.Contains(got, "42 t/s") {
@@ -2812,7 +2833,7 @@ func TestRoutingFooterMetadata(t *testing.T) {
 	m.width, m.viewport.Width = 24, 24
 	m.orMeta = &ORMeta{Provider: "Infermatic", TPS: 42}
 	m.orPricing = map[string]orPricing{"openrouter/moonshotai/kimi-k3": {prompt: 0.0000001, completion: 0.0000004}}
-	if got := ansi.Strip(m.footerView()); strings.Contains(got, "Infermatic") || strings.Contains(got, "per M") || strings.Contains(got, "session") {
+	if got := ansi.Strip(m.footerView()); strings.Contains(got, "Infermatic") || strings.Contains(got, "/M") || strings.Contains(got, "sess") {
 		t.Fatalf("narrow footer must yield the suffix: %q", got)
 	}
 }
@@ -2831,7 +2852,7 @@ func TestRoutingSessionCostAccumulates(t *testing.T) {
 	if got := formatCost(m.orSpent); got != "$0.0022" {
 		t.Fatalf("session spend = %s, want $0.0022", got)
 	}
-	if got := ansi.Strip(m.footerView()); !strings.Contains(got, "session $0.0022") {
+	if got := ansi.Strip(m.footerView()); !strings.Contains(got, "sess $0.0022") {
 		t.Fatalf("footer %q missing session cost", got)
 	}
 
@@ -2856,7 +2877,7 @@ func TestRoutingSessionCostWithoutBalance(t *testing.T) {
 	m.orCredits = nil
 	m.orSpent, m.orSpentSet = 0.5, true
 	got := ansi.Strip(m.footerView())
-	if !strings.Contains(got, "session $0.50") {
+	if !strings.Contains(got, "sess $0.50") {
 		t.Fatalf("footer %q missing session cost without balance", got)
 	}
 	if strings.Contains(got, "left") {
