@@ -100,7 +100,10 @@ func roundWithRetry(ctx context.Context, onEvent func(Event), history []openai.C
 		delay := roundRetryDelay(attempt)
 		dvlog.Logf("round retry attempt=%d/%d sleep=%s err=%v", attempt+1, roundMaxAttempts, delay, err)
 		if onEvent != nil {
-			onEvent(Event{Kind: "retry", Text: fmt.Sprintf("Provider error — retrying in %s (attempt %d/%d)…", delay.Round(100*time.Millisecond), attempt+2, roundMaxAttempts)})
+			// Args/Output carry the friendly title and raw details so the
+			// ctrl+x errors view can list the retried failure.
+			fe := friendlyError(err)
+			onEvent(Event{Kind: "retry", Text: fmt.Sprintf("Provider error — retrying in %s (attempt %d/%d)…", delay.Round(100*time.Millisecond), attempt+2, roundMaxAttempts), Args: fe.Title, Output: fe.Details})
 		}
 		select {
 		case <-ctx.Done():

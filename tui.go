@@ -365,6 +365,7 @@ type tuiModel struct {
 	// roundText/roundThinking snapshot the pending streams at round start so
 	// a retry can discard the failed attempt's partial output.
 	roundText, roundThinking string
+	retryErrs                []errEntry // retried provider failures, newest last (cap 50)
 	lastStreamFlush          time.Time
 	// chatCache memoizes the rendered committed turns so streaming deltas
 	// only re-render the live pending block, not the whole history. Committed
@@ -2073,6 +2074,12 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "retry":
 			m.pendingText, m.pendingThinking = m.roundText, m.roundThinking
 			m.toolStatus = msg.text
+			if msg.args != "" || msg.output != "" {
+				m.retryErrs = append(m.retryErrs, errEntry{at: time.Now(), title: "Retry: " + msg.args, details: msg.output})
+				if len(m.retryErrs) > 50 {
+					m.retryErrs = m.retryErrs[1:]
+				}
+			}
 		case "tool_start":
 			m.pendingTools = append(m.pendingTools, pendingTool{name: msg.text, args: msg.args, id: msg.id})
 			if n := m.runningToolCount(); n > 1 {
@@ -2660,8 +2667,8 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.show(viewChat)
 			return m, nil
 		}
-		if m.mode == viewSessions {
-			// Back to the current session; never arms the cancel confirm.
+		if m.mode != viewChat {
+			// Overlays go back to chat; never arm the cancel confirm.
 			m.show(viewChat)
 			return m, nil
 		}
@@ -2986,15 +2993,13 @@ func (m *tuiModel) openSelected() tea.Cmd {
 		}
 		m.resumeSessionPath(items[m.cursor].path)
 	case viewErrors:
-		idx := m.errorTurnIdx()
-		if m.cursor < 0 || m.cursor >= len(idx) {
+		es := m.errorEntries()
+		if m.cursor < 0 || m.cursor >= len(es) {
 			return nil
 		}
-		t := m.session.Turns[idx[m.cursor]]
-		m.detailTitle = "Error · " + t.At.Format("15:04:05")
-		if t.Error != nil {
-			m.detailBody = t.Error.Title + "\n\n" + t.Error.Details
-		}
+		e := es[m.cursor]
+		m.detailTitle = "Error · " + e.at.Format("15:04:05")
+		m.detailBody = e.title + "\n\n" + e.details
 		m.show(viewDetail)
 	}
 	return nil
@@ -4358,21 +4363,28 @@ func (m *tuiModel) renderSessionsList() string {
 	return b.String()
 }
 
-func (m *tuiModel) errorTurnIdx() []int {
-	var idx []int
-	if m.session == nil {
-		return idx
-	}
-	for i := range m.session.Turns {
-		if m.session.Turns[i].Error != nil {
-			idx = append(idx, i)
+// errEntry is one row of the errors view: a turn error or a retried failure.
+type errEntry struct {
+	at             time.Time
+	title, details string
+}
+
+// errorEntries merges turn errors and retried provider failures by time.
+func (m *tuiModel) errorEntries() []errEntry {
+	es := append([]errEntry(nil), m.retryErrs...)
+	if m.session != nil {
+		for _, t := range m.session.Turns {
+			if t.Error != nil {
+				es = append(es, errEntry{t.At, t.Error.Title, t.Error.Details})
+			}
 		}
 	}
-	return idx
+	sort.SliceStable(es, func(i, j int) bool { return es[i].at.Before(es[j].at) })
+	return es
 }
 
 func (m *tuiModel) renderErrorsList() string {
-	idx := m.errorTurnIdx()
+	idx := m.errorEntries()
 	if len(idx) == 0 {
 		return emptyStyle.Render("No errors — friendly messages will land here, never kill the loop.")
 	}
@@ -4385,9 +4397,8 @@ func (m *tuiModel) renderErrorsList() string {
 	var b strings.Builder
 	b.WriteString(metaStyle.Render("Errors — enter opens details · esc back") + "\n\n")
 	cw := m.contentWidth()
-	for i, ti := range idx {
-		t := m.session.Turns[ti]
-		line := truncateRunes(fmt.Sprintf("%2d  %s  %s", i+1, t.At.Format("15:04:05"), t.Error.Title), cw)
+	for i, e := range idx {
+		line := truncateRunes(fmt.Sprintf("%2d  %s  %s", i+1, e.at.Format("15:04:05"), singleLine(e.title, 200)), cw)
 		if i == m.cursor {
 			b.WriteString(selectedStyle.Width(cw).Render(" "+line) + "\n")
 		} else {
