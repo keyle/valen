@@ -28,6 +28,11 @@ models and runs the tool loop locally.
   outside the workdir, hides credential files and `.env` secrets, scrubs
   secret env vars, and asks before network use or destructive commands.
 
+Picking OpenRouter's routing affinity (`:floor`/`:nitro`/`:exacto`) as a live,
+per-model toggle is rare among harnesses — most expose it only through startup
+config, if at all. Try a fast OpenRouter model with `high` effort and `nitro`
+(ctrl+y) and it flies!
+
 ## Install
 
 Requires Go and, on Linux, `bubblewrap`.
