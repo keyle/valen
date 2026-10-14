@@ -22,15 +22,27 @@ and exposes tools plus any number of stdio MCP servers to the model.
 
 | File | Responsibility |
 | --- | --- |
-| `main.go` | CLI flags, TTY/client/transport setup, HTTP identity headers, shared agent loop (`runTurn`: tool fan-out, budget, doom-loop guard) |
+| `main.go` | CLI flags, TTY/client/transport setup, HTTP identity headers, `main`/`start` entry, prompt reading |
+| `turn.go` | Turn orchestration: `runTurn`, per-transport dispatch, `Event`/OpenRouter metadata, request timeouts, key resolution |
+| `agent.go` | Agent-loop internals: token budget, doom-loop guard, parallel tool fan-out, `runModelTurn`/`runChatTurn` |
 | `config.go` | Config schema (`Config`/`TUIConfig`/`InputConfig`/`MCPServer`) with defaults and `loadConfig` |
 | `chat.go` | Chat-completions transport: headers, wire body, unary + SSE rounds |
 | `internal/prompts` | Agent guidelines: per-family `prompt_*.txt` (opencode-adapted, embedded) + `<env>` header + plan overlay; plan-mode ctx gating |
 | `internal/guard` | Repeat-limit default and stripping of legacy ephemeral notices; execution policy lives in `runModelTurn` |
 | `internal/dvlog` | Debug-verbose trace (`-dv`/`-dvlog`): timestamped round/tool/size log, off by default |
-| `tui.go` | Bubble Tea chat UI model: state, update/key/mouse handling, commands, `runTUI` |
-| `tui_view.go` | TUI rendering: chrome, turns, tools, pending/stream, ask overlay |
-| `tui_lists.go` | TUI recall/picker/help lists and their item builders |
+| `tui.go` | Bubble Tea UI model: state/message types, construction, view-mode, `runTUI` entry |
+| `tui_update.go` | `Update` dispatch, `submit`, slash commands, plan-mode, open-selected, stream/pending mutation |
+| `tui_key.go` | Key/mouse/CSI parsing and handling (`handleKey`, overlays, esc/ctrl/mouse-hold) |
+| `tui_view.go` | Chrome rendering: `View`, header/status/footer/input, viewport + chat |
+| `tui_render_turn.go` | Conversation rendering: committed-turn assembly/trim, turn headers, durations, copy helpers |
+| `tui_render_tool.go` | Tool rendering: summaries, edit/write diffs, tool + pending lines |
+| `tui_stream.go` | Streaming text assembly (`appendStream*`, thinking deltas, round breaks) |
+| `tui_lists.go` | Recall/picker/help/session list rendering and item builders |
+| `tui_ask.go` | Ask-overlay state, prompts, key handling, answer formatting |
+| `tui_layout.go` | Width/height math, input wrapping, markdown renderer, truncation |
+| `tui_picker.go` | Model/effort pickers, favourite slots, thinking/routing switches |
+| `tui_usage.go` | Footer quota/credits polling commands |
+| `tui_session.go` | New-session, compaction trigger, transcript export |
 | `models.go` | Model ids, transport map, context windows, thinking families, OpenRouter routing variants, request wiring |
 | `model_thinking.go` | Thinking-level cache, error parsing, learning, and live probe |
 | `model_catalog.go` | OpenCode Go/Zen/OpenRouter catalog fetching (live lists + pricing) |
@@ -548,6 +560,13 @@ deterministic. Tools are registered as
   type-your-own, confirmation/edit, the TUI overlay state machine, and one
   `AskUserQuestion` round trip per transport (`tool`, `tool_result`,
   `function_call_output`).
+- `tui_test.go`, `tui_render_test.go`, `tui_key_test.go`, `tui_view_test.go` —
+  the Bubble Tea UI offline: model/session lifecycle, slash commands and
+  named sessions; committed-turn trim, tool/thinking rendering and streaming
+  assembly (`tui_render_test.go`); key/mouse/CSI handling, overlays,
+  autoscroll and input-`[tui]` config tables (`tui_key_test.go`); layout,
+  status rows, favourite slots and routing footer/session-cost metadata
+  (`tui_view_test.go`).
 - `todos_test.go` — `todowrite`/`todoread` round trip (opencode schema),
   validation rejects, empty/reset, restore-from-turns, scrollback checklist
   formatting (glyphs, args shape, cap tail, non-todo fallback);

@@ -51,14 +51,22 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 `package main` throughout (plus `internal/prompts`, `internal/guard`,
 `internal/dvlog`); the UI is split by concern so no single file dominates:
 
-- `tui.go` — `tuiModel` state and message types, `Update` plus key/mouse/CSI
-  handling, commands/actions (submit, slash commands, pickers, slots,
-  favourites), and the `runTUI` entry.
-- `tui_view.go` — chrome (header/status/footer/input), turn/tool/pending/stream
-  rendering, and the ask overlay.
-- `tui_lists.go` — recall/picker/help list rendering and item builders.
-- Shared, UI-agnostic: `runTurn` orchestration in `main.go`, config in
-  `config.go`, the Chat transport in `chat.go`.
+- `tui.go` — `tuiModel` state and message types, construction, view-mode, and
+  the `runTUI` entry.
+- `tui_update.go` — `Update` dispatch, `submit`, slash commands, plan-mode,
+  open-selected, and stream/pending-tool mutation.
+- `tui_key.go` — key/mouse/CSI parsing and handling.
+- `tui_view.go` — chrome (header/status/footer/input) and `View`.
+- `tui_render_turn.go` — committed-turn assembly/trim and turn rendering.
+- `tui_render_tool.go` — tool/tool-pending rendering, summaries, edit diffs.
+- `tui_stream.go` — streaming text assembly helpers.
+- `tui_lists.go` — recall/picker/help/session list rendering and item builders.
+- `tui_ask.go` — ask-overlay state and handling.
+- `tui_layout.go` — width/height math, input wrapping, markdown, truncation.
+- `tui_picker.go` — model/effort pickers, favourite slots, thinking/routing.
+- `tui_usage.go`, `tui_session.go` — footer quota polling; new/resume/compact/export.
+- Shared, UI-agnostic: `runTurn` orchestration in `turn.go`, loop internals in
+  `agent.go`, config in `config.go`, the Chat transport in `chat.go`.
 
 ## UX
 

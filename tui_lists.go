@@ -460,3 +460,43 @@ func renderSessionFileText(m *tuiModel, path string) string {
 	}
 	return b.String()
 }
+
+func (m *tuiModel) renderSessionsList() string {
+	items := m.sessionItems()
+	if len(items) == 0 {
+		return emptyStyle.Render("No saved sessions yet.")
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	if m.cursor >= len(items) {
+		m.cursor = len(items) - 1
+	}
+	var b strings.Builder
+	b.WriteString(metaStyle.Render("Sessions — enter resumes · esc back") + "\n\n")
+	cw := m.contentWidth()
+	for i, it := range items {
+		tag := it.model
+		if it.effort != "" {
+			tag += " · " + it.effort
+		}
+		line := fmt.Sprintf("%2d  %s  %s", i+1, it.when.Format("01-02 15:04"), it.title)
+		if tag != "" {
+			line += "  [" + tag + "]"
+		}
+		if it.turns > 0 {
+			line += fmt.Sprintf("  (%d)", it.turns)
+		}
+		cur := ""
+		if m.session != nil && it.path == m.session.Path {
+			cur = "  ● current"
+		}
+		line = truncateRunes(line+cur, cw)
+		if i == m.cursor {
+			b.WriteString(selectedStyle.Width(cw).Render(" "+line) + "\n")
+		} else {
+			b.WriteString("  " + line + "\n")
+		}
+	}
+	return b.String()
+}
