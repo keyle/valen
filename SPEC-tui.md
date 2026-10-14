@@ -71,12 +71,14 @@ tool activity, overlay recall views — all in one `tuiModel` with async
  ~/Code/valen                                  Go · 5h 90% ↻38m · 7d 36%
 ```
 
-- Header: the ` ✦ valen` logo stands alone on the left until a title is shown:
-  ` ✦ valen  ·  <session title>` — the session title is the same English name
-  shown in the Sessions view (first prompt, 60 runes), set the moment that
-  prompt is submitted so the header names the session while the first turn is
-  still running. Only an untouched session (no prompt yet) omits the title
-  segment entirely rather than falling back to the `ses-…` id. The bare model
+- Header: the ` ✦ valen` logo sits on the left with the version beside it
+  (` ✦ valen 1.0.2`; `dev` unstamped) while the session is untitled. Once a
+  title is shown it replaces the version: ` ✦ valen  ·  <session title>`. The
+  session title is the same English name shown in the Sessions view (first
+  prompt, 60 runes), set the moment that prompt is submitted so the header
+  names the session while the first turn is still running. Only an untouched
+  session (no prompt yet) keeps the version and omits the title segment
+  entirely rather than falling back to the `ses-…` id. The bare model
   name and thinking level (`glm-5.3-flash · high`; no `go/`, `zen/` or
   `openrouter/vendor/` prefix) sit flush at the far right, aligned with the
   footer's right text. The tools count is not shown, and the header carries no
@@ -84,9 +86,9 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 - Transcript is padded conversation blocks separated by blank lines; no role
   prefixes. `You` (orange; `You (PLAN)` in cyan with a cyan left bar when sent in plan mode) and ` ✦ <model>` (green, leading space so it lines
   up with ` ✦ valen`) head each block.
-  A blank session shows only a `valen <version>` label (the `-X main.version` stamp, `dev` unstamped); the AGENTS.md-first
-  behaviour lives in the default system prompt (`config.toml`), not as
-  intro text in the transcript.
+  A blank session's transcript is empty; its `valen <version>` label lives in
+  the header (above). The AGENTS.md-first behaviour lives in the default system
+  prompt (`config.toml`), not as intro text in the transcript.
 - Pending user message + working status render immediately on Enter, before
   `runTurn` completes. Spinner lives in the status bar so the transcript does
   not re-render every tick.
@@ -416,7 +418,7 @@ the full height, starts at its heading and scrolls to follow the selected option
 | Ctrl+T | thinking level cycle low→high, wraps to low | same |
 | Ctrl+O | toggle thinking display (shown by default) | toggle thinking display |
 | Alt+1…9, Alt+0 / Alt+Shift+1…0 | favourite slots: switch to slot / store current model + thinking in slot | same |
-| Ctrl+Shift+T | toggle status details | toggle status details |
+| Ctrl+B | toggle status details | toggle status details |
 | Ctrl+P / Ctrl+M | model picker | model picker |
 | Ctrl+S | save transcript | save transcript |
 | Ctrl+Q | quit | quit |
