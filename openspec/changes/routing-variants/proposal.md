@@ -31,7 +31,7 @@ the control must be OpenRouter-only and harmless elsewhere.
    - Because ctrl+y is repurposed, the thinking-block show/hide toggle moves to
      **ctrl+o** (thinking stays **shown by default**) and remains available as
      `/think`; the status-details toggle it displaces moves to
-     **ctrl+shift+T**. Both chords are listed in `/help`.
+     **ctrl+b**. Both chords are listed in `/help`.
 3. **Persistence** — routing rides with model + thinking everywhere they are
    saved: `state.json` gains a `routing` key (validated and applied on boot like
    `thinking`), `config.toml` gains an optional `routing` key, and favourite

@@ -9,7 +9,7 @@
   Go/Zen (no notice, no state write). `TestRoutingCycleOpenRouter`,
   `TestRoutingNoopGoZen`.
 - [ ] 3. Move thinking show/hide to ctrl+o (default still shown) and the status
-  details toggle to ctrl+shift+T; keep `/think`; update the collapse hints
+  details toggle to ctrl+b; keep `/think`; update the collapse hints
   (`ctrl+o to expand`) and `/help`. `TestCtrlOThinkToggle`.
 
 ## Phase 2 — persistence
