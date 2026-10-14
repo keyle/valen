@@ -155,7 +155,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   everything.
 - Errors render as a pink `✗ <friendly>` block; details in Errors view.
 - Session totals render once, in the status row above the chatbox, in
-  thousands (`N turns · win W/B · ↑P ↓C`, e.g. `3 turns · win 45k/300k ·
+  thousands (`N turn(s) · win W/B · ↑P ↓C`, e.g. `3 turns · win 45k/300k ·
   ↑276k ↓3k`); per-turn scrollback tallies are gone. While busy the spinner
   row also carries loop progress (`· rd 12/300`). Informational notices
   (e.g. the mouse toggle) are transient: the next chatbox edit clears them

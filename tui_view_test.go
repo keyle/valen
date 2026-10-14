@@ -119,7 +119,7 @@ func TestStatusRowShowsWindowInK(t *testing.T) {
 	if !strings.Contains(got, "256k") {
 		t.Fatalf("status missing k-format budget: %q", got)
 	}
-	if !strings.Contains(got, "1 turns") {
+	if !strings.Contains(got, "1 turn") {
 		t.Fatalf("status missing turn count: %q", got)
 	}
 }

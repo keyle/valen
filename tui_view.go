@@ -202,8 +202,12 @@ func (m *tuiModel) statusView() string {
 			mid = "  " + noticeStyle.Render(m.notice)
 		}
 	} else if m.session != nil {
-		mid = "  " + metaStyle.Render(fmt.Sprintf("%d turns · %s/%s · ↑%s ↓%s",
-			len(m.session.Turns), fk(estimateTokens(m.history)), fk(contextBudget(m.cfg)),
+		noun := "turns"
+		if len(m.session.Turns) == 1 {
+			noun = "turn"
+		}
+		mid = "  " + metaStyle.Render(fmt.Sprintf("%d %s · %s/%s · ↑%s ↓%s",
+			len(m.session.Turns), noun, fk(estimateTokens(m.history)), fk(contextBudget(m.cfg)),
 			fk(m.session.TotalUsage.Prompt), fk(m.session.TotalUsage.Completion)))
 	}
 	right := ""
