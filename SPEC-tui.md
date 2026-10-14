@@ -49,7 +49,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 ## UX
 
 ```
- ✦ valen  ·  glm-5.3-flash  ·  <session title>  ·  alt+m select
+ ✦ valen  ·  go/glm-5.3-flash  ·  <session title>
 
   You  15:04
   ┌ summarise the latest go release notes
@@ -71,15 +71,14 @@ tool activity, overlay recall views — all in one `tuiModel` with async
  ~/Code/valen                                         5h 90% ↻38m · 7d 36%
 ```
 
-- Header: ` ✦ valen  ·  <model>  ·  <session title>  ·  alt+m select` — the
+- Header: ` ✦ valen  ·  <model>  ·  <session title>` — the
   session title is the same English name shown in the Sessions view (first
   prompt, 60 runes), set the moment that prompt is submitted so the header
   names the session while the first turn is still running. Only an untouched
   session (no prompt yet) omits the title segment entirely rather than falling
   back to the `ses-…` id, so the header reads
-  ` ✦ valen  ·  <model>  ·  alt+m select`. The
-  tools count is not shown, and `alt+m select` names the plain-drag selection
-  toggle.
+  ` ✦ valen  ·  <model>`. The tools count is not shown, and the header carries
+  no key hints (alt+m is listed in `/help`).
 - Transcript is padded conversation blocks separated by blank lines; no role
   prefixes. `You` (orange; `You (PLAN)` in cyan with a cyan left bar when sent in plan mode) and ` ✦ <model>` (green, leading space so it lines
   up with ` ✦ valen`) head each block.

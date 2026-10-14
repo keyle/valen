@@ -155,7 +155,7 @@ func TestTUISessionsListShowsTitlesAndResumes(t *testing.T) {
 	}
 }
 
-func TestTUIHeaderShowsTitleAndMouseHint(t *testing.T) {
+func TestTUIHeaderShowsTitleOnly(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	m.session.Title = "fix the login redirect bug"
 	m.cfg.Model = "deepseek-v4.1-flash"
@@ -166,8 +166,11 @@ func TestTUIHeaderShowsTitleAndMouseHint(t *testing.T) {
 	if strings.Contains(header, "ses-tui") || strings.Contains(header, "tools") {
 		t.Fatalf("header must drop the ses- id and tool count:\n%s", header)
 	}
-	if !strings.Contains(header, "alt+m select") {
-		t.Fatalf("header must hint alt+m selection:\n%s", header)
+	if strings.Contains(header, "alt+m") {
+		t.Fatalf("header must not show key hints:\n%s", header)
+	}
+	if !strings.Contains(header, "go/deepseek-v4.1-flash") {
+		t.Fatalf("header must name the provider like the picker (go/…):\n%s", header)
 	}
 }
 
@@ -180,7 +183,7 @@ func TestTUIHeaderHidesUnnamedSessionID(t *testing.T) {
 	if strings.Contains(header, "ses-") {
 		t.Fatalf("header must hide the ses- id until the session is named:\n%s", header)
 	}
-	if strings.Contains(header, "  ·  alt+m select  ·") || strings.HasSuffix(header, "·") {
+	if strings.Contains(header, "  ·  ·") || strings.HasSuffix(header, "·") {
 		t.Fatalf("header must not leave a dangling separator:\n%s", header)
 	}
 }

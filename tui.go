@@ -3032,7 +3032,7 @@ func (m *tuiModel) View() string {
 
 func (m *tuiModel) headerView() string {
 	title := headerTitleStyle.Render(" ✦ valen")
-	model := m.cfg.Model
+	model := displayModelID(m.cfg.Model)
 	if m.cfg.Thinking != "" {
 		model += " · " + m.cfg.Thinking
 	}
@@ -3067,13 +3067,13 @@ func (m *tuiModel) headerView() string {
 	var meta string
 	if label != "" {
 		if m.width > 0 {
-			reserved := lipgloss.Width(" ✦ valen") + lipgloss.Width(fmt.Sprintf("  ·  %s  ·  ", model)) + lipgloss.Width("  ·  alt+m select") + lipgloss.Width(tail)
+			reserved := lipgloss.Width(" ✦ valen") + lipgloss.Width(fmt.Sprintf("  ·  %s  ·  ", model)) + lipgloss.Width(tail)
 			// truncateRunes appends "…" past n, so leave one cell for it.
 			label = truncateRunes(label, m.columnWidth()-reserved-1)
 		}
-		meta = headerDimStyle.Render(fmt.Sprintf("  ·  %s  ·  %s  ·  alt+m select", model, label))
+		meta = headerDimStyle.Render(fmt.Sprintf("  ·  %s  ·  %s", model, label))
 	} else {
-		meta = headerDimStyle.Render(fmt.Sprintf("  ·  %s  ·  alt+m select", model))
+		meta = headerDimStyle.Render(fmt.Sprintf("  ·  %s", model))
 	}
 	line := title + meta + headerDimStyle.Render(tail)
 	if m.width > 0 {
