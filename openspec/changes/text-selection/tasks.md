@@ -49,7 +49,7 @@
   so the whole span stays lit instead of only the first word.
   `TestTUISelectionHighlightReassertsAfterReset`.
 - [x] 12. Drag auto-scroll: reaching the top/bottom viewport row arms a
-  `[tui] select_scroll_ms` tick (default 150ms; `selScrollMsg`/`scheduleSelScroll`)
+  `[tui] select_scroll_ms` tick (default 50ms; `selScrollMsg`/`scheduleSelScroll`)
   that scrolls one line and extends
   the selection to the revealed row, pinning the anchor to its content, until
   the edge is left or the transcript ends (`selScrollStep`). The mouse handler
@@ -58,3 +58,15 @@
   `TestTUISelectionAutoScrollTickExtends`, `TestTUISelectionDragArmsAutoScroll`.
 - [x] 13. Docs: `SPEC-tui.md` mouse/selection paragraph + key table row.
 - [x] 14. Gate: `gofmt -l .`, `go vet ./...`, `go test ./...` (`network=true`).
+
+## Phase 5 — follow-ups (copy fidelity)
+
+- [x] 15. Drag-copy keeps code indentation: `selectedText()` cuts each row from
+  a selection-wide `gridBase` (least `contentStart`; bordered rows excluded)
+  instead of each row's own `contentStart`, so a code sample no longer collapses
+  to its first glyph. Bordered rows still cut at their content, so no border
+  glyph leaks. `highlightSelection` uses the same base.
+  `TestTUISelectionKeepsCodeIndent`, `TestTUISelectionNoBorderLeakOnMixed`.
+- [x] 16. Docs: `SPEC-tui.md` selection paragraph, `SPEC.md` `tui_select.go`
+  row, openspec design §3/§7/§8.
+- [x] 17. Gate: `gofmt -l .`, `go vet ./...`, `go test ./...` (`network=true`).

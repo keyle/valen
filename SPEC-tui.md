@@ -194,11 +194,21 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   release copies it to the
   clipboard via OSC 52 and reports `Copied N bytes to clipboard.` in the status
   bar. Dragging to the top or bottom row auto-scrolls the transcript one line
-  per `[tui] select_scroll_ms` (default 150ms; extending the selection to the
+  per `[tui] select_scroll_ms` (default 50ms; extending the selection to the
   revealed rows) until the drag
-  leaves the edge or the transcript ends. Copy is computed from the ANSI-stripped, display-width-aware line
+  leaves the edge or the transcript ends. Selection endpoints are absolute
+  transcript lines, not window rows, so lines that auto-scroll out of view stay
+  part of the copy — releasing after a long scroll yields the whole span, top
+  to bottom. Copy is computed from the ANSI-stripped, display-width-aware line
   content with leading border/padding and trailing width padding trimmed, so a
-  drag on a wide terminal no longer copies columns of spaces. Shift+drag is
+  drag on a wide terminal no longer copies columns of spaces. Leading chrome is
+  removed as a *common* prefix across the selected lines, so a code sample keeps
+  its relative indentation instead of collapsing to each line's first glyph,
+  while a bordered row still drops its border. This is the
+  *raw rendered* text exactly as displayed (no markdown syntax, code fences or
+  headings markers); it complements `/copy`, which yields the reply's markdown
+  source — use drag for what you see, `/copy` for what is re-usable as markdown.
+  Shift+drag is
   ignored (left to the terminal's native bypass modifier), and scrolling clears
   any active selection. Mouse reporting
   is on by default so the wheel scrolls. Split mouse
@@ -214,6 +224,9 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 - After a finished turn with a reply, an underlined dim `copy response` row, right-aligned, ends the
   transcript; a left click on it (or `/copy`) writes the last reply's markdown
   source to the clipboard via OSC 52 (needs terminal support; works over ssh).
+  This is the markdown *source*, unlike a drag-copy which yields the rendered,
+  ANSI-stripped text; both are kept — drag for what you see, `/copy` for the
+  re-usable markup.
   The row is absent while a turn is pending.
 - Chatbox chrome is configurable via `[input]` in `config.toml`: `blink`
   (default `true`; `false` parks the block cursor steady with no blink

@@ -341,8 +341,13 @@ type tuiModel struct {
 	orSpentSet bool                 // a turn reported cost at least once
 
 	viewport viewport.Model
-	input    textarea.Model
-	spinner  spinner.Model
+	// vpContent is the exact string handed to the viewport by the last
+	// refreshViewport, kept so drag selection can address lines that have
+	// scrolled out of the visible window (the viewport only exposes the
+	// visible slice). See tui_select.go.
+	vpContent string
+	input     textarea.Model
+	spinner   spinner.Model
 
 	prog   *tea.Program
 	ctx    context.Context

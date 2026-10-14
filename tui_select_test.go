@@ -14,6 +14,7 @@ func selectionModel(t *testing.T, w, h int, content string) *tuiModel {
 	m := newTestModel(t, testConfig("https://unused"))
 	m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	m.viewport.SetContent(content)
+	m.vpContent = content
 	m.viewport.GotoTop()
 	return m
 }
@@ -37,6 +38,36 @@ func TestTUISelectionMultiLine(t *testing.T) {
 	}
 }
 
+// A drag across a rendered code sample keeps its relative indentation: the
+// shared block margin is stripped, but the code's own leading spaces survive
+// (the reported bug collapsed every line to its first glyph).
+func TestTUISelectionKeepsCodeIndent(t *testing.T) {
+	content := "  intro\n\n    func main() {\n        if x {\n            y()\n        }\n    }\n  outro"
+	m := selectionModel(t, 80, 20, content)
+	// From "func" (row 2, content col 4) through "}" (row 4... row 6).
+	m.sel = selection{active: true, anchor: selPos{line: 2, col: 4}, cursor: selPos{line: 6, col: 4}}
+	want := "func main() {\n    if x {\n        y()\n    }\n}"
+	if got := m.selectedText(); got != want {
+		t.Fatalf("selectedText =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// A selection that mixes a bordered line with un-bordered ones must not leak
+// the border glyph, and must keep the un-bordered lines' indentation relative
+// to the block margin rather than to the border's content column.
+func TestTUISelectionNoBorderLeakOnMixed(t *testing.T) {
+	content := "┃ prompt\n\n    func x() {\n        y()\n    }"
+	m := selectionModel(t, 80, 20, content)
+	m.sel = selection{active: true, anchor: selPos{line: 0, col: 2}, cursor: selPos{line: 4, col: 4}}
+	got := m.selectedText()
+	if strings.Contains(got, "┃") {
+		t.Fatalf("border glyph leaked into copy: %q", got)
+	}
+	want := "prompt\n\nfunc x() {\n    y()\n}"
+	if got != want {
+		t.Fatalf("selectedText =\n%q\nwant\n%q", got, want)
+	}
+}
 func TestTUISelectionIgnoresShiftDrag(t *testing.T) {
 	old := clipboardWrite
 	called := ""
@@ -145,11 +176,71 @@ func TestTUISelectionAutoScrollStep(t *testing.T) {
 	if m.viewport.YOffset != before+1 {
 		t.Fatalf("YOffset = %d, want %d", m.viewport.YOffset, before+1)
 	}
-	if m.sel.anchor.line != 1 {
-		t.Fatalf("anchor.line = %d, want 1 (pinned to the same content)", m.sel.anchor.line)
+	if m.sel.anchor.line != 2 {
+		t.Fatalf("anchor.line = %d, want 2 (pinned to the same content)", m.sel.anchor.line)
 	}
-	if m.sel.cursor.line != h-1 {
-		t.Fatalf("cursor.line = %d, want %d", m.sel.cursor.line, h-1)
+	if want := m.viewport.YOffset + h - 1; m.sel.cursor.line != want {
+		t.Fatalf("cursor.line = %d, want %d", m.sel.cursor.line, want)
+	}
+}
+
+func TestTUISelectionSurvivesAutoScroll(t *testing.T) {
+	var lines []string
+	for i := 0; i < 100; i++ {
+		lines = append(lines, fmt.Sprintf("line %02d", i))
+	}
+	m := selectionModel(t, 80, 12, strings.Join(lines, "\n"))
+	h := m.viewport.Height
+	m.viewport.GotoTop()
+	// Anchor on the first content line, cursor on the bottom visible row.
+	m.sel = selection{active: true, anchor: selPos{line: 0, col: 0}, cursor: selPos{line: h - 1, col: 7}}
+	for i := 0; i < 3; i++ {
+		if !m.selScrollStep() {
+			t.Fatalf("selScrollStep %d failed", i)
+		}
+	}
+	if m.viewport.YOffset != 3 {
+		t.Fatalf("YOffset = %d, want 3", m.viewport.YOffset)
+	}
+	// The content that scrolled off the top must still be in the copy: the
+	// selection runs from line 00 to the revealed bottom row (the reported
+	// bug dropped the lines that scrolled off).
+	end := 3 + h - 1
+	wantEnd := fmt.Sprintf("line %02d", end)
+	got := m.selectedText()
+	if !strings.HasPrefix(got, "line 00") {
+		t.Fatalf("top content lost after scrolling: %q", got)
+	}
+	if !strings.HasSuffix(got, wantEnd) {
+		t.Fatalf("selection end = %q, want it to reach %q", got, wantEnd)
+	}
+	if n := strings.Count(got, "\n"); n != end {
+		t.Fatalf("selection has %d lines, want %d:\n%s", n+1, end+1, got)
+	}
+}
+
+// After auto-scroll, highlight must follow the offset: every visible row is
+// inside the selection and stays lit even though the anchor is off-screen.
+func TestTUISelectionHighlightAfterScroll(t *testing.T) {
+	var lines []string
+	for i := 0; i < 100; i++ {
+		lines = append(lines, fmt.Sprintf("line %02d", i))
+	}
+	m := selectionModel(t, 80, 12, strings.Join(lines, "\n"))
+	h := m.viewport.Height
+	m.viewport.GotoTop()
+	m.sel = selection{active: true, anchor: selPos{line: 0, col: 0}, cursor: selPos{line: h - 1, col: 7}}
+	for i := 0; i < 3; i++ {
+		if !m.selScrollStep() {
+			t.Fatalf("selScrollStep %d failed", i)
+		}
+	}
+	out := m.View()
+	if n := strings.Count(out, "\x1b[7m"); n < h {
+		t.Fatalf("highlight on %d rows, want at least %d:\n%q", n, h, out)
+	}
+	if !strings.Contains(ansi.Strip(out), "line 03") {
+		t.Fatal("highlight altered the scrolled content")
 	}
 }
 

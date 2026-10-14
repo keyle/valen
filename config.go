@@ -87,15 +87,15 @@ type TUIConfig struct {
 	MaxLines *int  `toml:"max_lines"`
 	Sound    *bool `toml:"sound"`
 	// SelectScrollMs paces the drag auto-scroll: one viewport line per
-	// interval. <= 0 means the 150ms default.
+	// interval. <= 0 means the 50ms default.
 	SelectScrollMs int `toml:"select_scroll_ms"`
 }
 
 // defaultSelectScrollMs paces the transcript selection drag auto-scroll.
-const defaultSelectScrollMs = 150
+const defaultSelectScrollMs = 50
 
 // tuiSelScrollInterval is the drag auto-scroll tick: the configured
-// select_scroll_ms, else 150ms.
+// select_scroll_ms, else 50ms.
 func tuiSelScrollInterval(cfg Config) time.Duration {
 	ms := cfg.TUI.SelectScrollMs
 	if ms <= 0 {

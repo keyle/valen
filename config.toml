@@ -82,9 +82,9 @@ thinking = "high"
                                 # 0 (or less) disables trimming.
 # sound = true                  # ring the terminal bell when a question appears or a
                                 # turn finishes (not on cancel); false mutes it.
-# select_scroll_ms = 150        # drag auto-scroll cadence: one viewport line per
+# select_scroll_ms = 50         # drag auto-scroll cadence: one viewport line per
                                 # interval while dragging a selection to the top or
-                                # bottom edge. <= 0 uses the 150ms default.
+                                # bottom edge. <= 0 uses the 50ms default.
 
 [sandbox]                       # shell sandbox policy (optional; every key has a built-in default).
 # allow = ["/opt/homebrew"]     # extra read+write roots, on top of the built-ins (workdir, /tmp,

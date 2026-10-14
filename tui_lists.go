@@ -476,6 +476,7 @@ func helpBody() string {
 	}))
 	b.WriteString("  /model picker: ↑↓/j/k select · enter switches · space stars a favourite · ctrl+f filters.\n")
 	b.WriteString("  /copy also by clicking the underlined \"copy response\" under the reply.\n")
+	b.WriteString("  /copy and \"copy response\" copy the reply as markdown source; drag-selecting transcript text copies the rendered text you see. Both are useful.\n")
 
 	b.WriteString("\n" + metaStyle.Render("Notes") + "\n")
 	b.WriteString(`  AskUserQuestion: ↑↓/jk move · enter select · space toggles multi-select · type your own · enter confirms.
@@ -491,7 +492,7 @@ func helpBody() string {
 	b.WriteString(`  Thinking shows by default (ctrl+o hides); tools render inline, ctrl+u shows full output.
 `)
 	b.WriteString(`  Chatbox chrome: config.toml [input] blink=false parks the cursor steady, height=N sets the box lines.
-  Selecting text: drag to select (auto-copies on release); dragging past the top/bottom edge auto-scrolls one line per [tui] select_scroll_ms (default 150ms).
+  Selecting text: drag to select (auto-copies on release); dragging past the top/bottom edge auto-scrolls one line per [tui] select_scroll_ms (default 50ms).
   shift+drag keeps the terminal's own selection; ctrl+click opens a link.`)
 	return b.String()
 }

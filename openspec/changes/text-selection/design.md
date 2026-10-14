@@ -37,9 +37,11 @@ type selection struct {
 }
 ```
 
-Stored on `tuiModel` (UI state stays in `tui.go`). Positions index **visible
-viewport lines** (row 0 = top of `m.viewport.View()`), so extraction never has to
-reason about `YOffset` or the turn cache. `contentLine = YOffset + (msg.Y - 1)`.
+Stored on `tuiModel` (UI state stays in `tui.go`). Positions index **absolute
+transcript content lines** (line 0 = first line of the full rendered content the
+viewport was given), so a selection survives auto-scroll without any
+`YOffset` bookkeeping in the endpoints. `mapCell` computes
+`line = YOffset + (msg.Y - 1)`, `col = (msg.X - pad)`.
 
 Lifecycle in `tui_update.go` `case tea.MouseMsg`:
 
@@ -47,13 +49,14 @@ Lifecycle in `tui_update.go` `case tea.MouseMsg`:
    it); still forward wheel.
 2. `msg.Alt && left press` → `openLinkAt(x, y)`; return (never a selection).
 3. Plain left press → `selection{active:true, anchor:cursor:mapCell(x,y)}`.
-4. Left motion while active → extend `cursor` (clamped to viewport).
+4. Left motion while active → extend `cursor` (clamped to the viewport, mapped
+   to an absolute line via `YOffset`).
 5. Left release while active → `clipboardWrite(selectedText())`, set the notice
-   (`Copied N chars.`), clear `active`.
+   (`Copied N bytes…`), clear `active`.
 6. Wheel / PgUp / PgDn → clear `active` (the line indexes would be stale).
 
-`selectedText()` and `openLinkAt` rebuild the grid from the *current*
-`m.viewport.View()` on demand; cost is bounded by the visible height.
+`selectedText()` and `openLinkAt` rebuild the grid from `m.vpContent`, the full
+content snapshot `refreshViewport` keeps beside the viewport, on demand.
 
 ## 3. Grid, copy fidelity, and hit-testing
 
@@ -65,15 +68,22 @@ Lifecycle in `tui_update.go` `case tea.MouseMsg`:
 - `contentStart`: the first rune that is neither a space nor a box-drawing border
   glyph (`│ ┃ ┆ ┊ ┋`); `contentEnd`: one past the last non-space rune. Leading
   border/pad and trailing padding are decoration, not content.
+- `gridBase`: the leftmost `contentStart` across the selected rows (bordered and
+  decoration-only rows excluded). It is the block margin shared by the selected
+  lines; rows are cut from there, not from their own `contentStart`, so a code
+  sample keeps its relative indentation instead of collapsing to its first
+  glyph. A bordered row instead cuts from its own `contentStart`, so the border
+  glyph never leaks even when the base sits further left.
 
 `cellToRune(line, col)` and `runeToCell(line, i)` use the cumulative widths.
 
 `selectedText()` walks rows `anchor.line..cursor.line` (ordered), slices each
-line's content runes between the anchors (first line from `anchor.col`, last to
-`cursor.col`, middles whole), `TrimRight`s spaces per line, and joins with `\n`.
-This is exactly what removes the wide-terminal padding the user reported:
+line's content cells between the anchors (first line from `anchor.col`, last to
+`cursor.col`, middles from `gridBase`), `TrimRight`s spaces per line, and joins
+with `\n`. This is what removes the wide-terminal padding the user reported:
 trailing `Width()` padding and leading border/`PaddingLeft` never enter the
-result. Empty lines stay as blank lines.
+result, while deeper indentation (code) survives relative to the base. Empty
+lines stay as blank lines.
 
 ## 4. Highlight while dragging
 
@@ -95,17 +105,25 @@ the styled viewport output without rewriting existing escape sequences:
 
 ## 4a. Auto-scroll during a drag
 
-The selection indexes visible viewport rows, so dragging past an edge has to
-scroll the viewport *and* keep the anchor pinned to its content:
+The selection indexes absolute transcript lines — the full rendered content the
+viewport was given, not the visible slice — so dragging past an edge can scroll
+the viewport without losing the rows already selected:
 
-- On motion, if the cursor lands on row `0` or `Height-1`, `scheduleSelScroll`
-  arms a `tea.Tick` loop paced by `[tui] select_scroll_ms` (default 150ms,
+- `mapCell` offsets the pressed/moved row by `viewport.YOffset`, so a `selPos`
+  is a content line; `contentGrid` (from the `vpContent` snapshot kept by
+  `refreshViewport`) is the full grid the copy and highlight read from.
+- On motion, if the cursor lands on row `0` or `Height-1` (its visible row is
+  `cursor.line - YOffset`), `scheduleSelScroll`
+  arms a `tea.Tick` loop paced by `[tui] select_scroll_ms` (default 50ms,
   `tuiSelScrollInterval`). `selScrollTicking` prevents a second ticker
   from a motion burst.
-- Each `selScrollMsg` runs `selScrollStep`: `ScrollUp/Down(1)`, shifts
-  `anchor.line` by ∓1 (a content row moves one row the other way), and parks the
-  cursor on the edge row. It stops at `AtTop`/`AtBottom` — "keep adding unless
-  past the end".
+- Each `selScrollMsg` runs `selScrollStep`: `ScrollUp/Down(1)` and parks the
+  cursor on the revealed edge row (`YOffset` at the top, `YOffset+Height-1` at
+  the bottom). The anchor is never moved — it already names a fixed content
+  line, so the span keeps growing and no selected content is lost. It stops at
+  `AtTop`/`AtBottom` — "keep adding unless past the end".
+- `highlightSelection` maps each selected content line back to a visible row via
+  `YOffset`; lines scrolled out simply aren't drawn.
 - The loop ends when the cursor leaves the edge, the selection is cleared, or the
   end is reached; `clearSelection` also drops `selScrollTicking`.
 - `handleMouseSelection` now returns `(handled bool, cmd tea.Cmd)` so the arming
@@ -142,9 +160,11 @@ scroll the viewport *and* keep the anchor pinned to its content:
 
 - **Selection is transcript-only and clears on scroll** (simplest, bounded,
   matches the reported use case).
-- **Copy trims leading border/indent per line**; code-block indentation is
-  therefore lost past the left edge. The alternative (keep indent, keep border
-  spaces) reintroduces the reported bug, so rejected.
+- **Copy strips the common leading chrome, preserving relative indentation.** A
+  selection-wide `gridBase` (least `contentStart`) is removed, so a code sample
+  keeps its own indentation; bordered rows drop their border independently so no
+  glyph leaks. (An earlier per-line trim lost code indentation — the reported
+  bug; the alternative of keeping borders reintroduces the original one.)
 - **OSC 52 remains the only clipboard path**; `/copy` and the copy row are
   untouched.
 - **Link modifier: ctrl+click** (was open: alt vs ctrl). iTerm2/Terminal.app use
@@ -160,9 +180,10 @@ scroll the viewport *and* keep the anchor pinned to its content:
 ## 8. Verification
 
 - Targeted: `go test -run 'TestTUISelection|TestTUILink|TestTUIMouse|TestTUIWheel' .`.
-- Grid/copy unit tests build a padded, bordered line and assert
-  `selectedText()` has no leading border/indent/trailing spaces; a partial
-  selection asserts exact slicing across multiple lines.
+- Grid/copy unit tests build padded, bordered and code-indented lines and assert
+  `selectedText()` has no leading border/trailing spaces but keeps a code
+  sample's relative indentation; a partial selection asserts exact slicing
+  across multiple lines.
 - Link tests inject a `openURL` test hook (like `clipboardWrite`) and assert the
   URL and that non-link or non-http(s) clicks are no-ops.
 - Final gate: `gofmt -l .`, `go vet ./...`, `go test ./...` with `network=true`

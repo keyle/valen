@@ -371,7 +371,8 @@ func (m *tuiModel) footerLine(hint, text string, st lipgloss.Style) string {
 	return footerStyle.Padding(0, 2).Render(line)
 }
 func (m *tuiModel) refreshViewport() {
-	m.viewport.SetContent(m.renderViewportContent())
+	m.vpContent = m.renderViewportContent()
+	m.viewport.SetContent(m.vpContent)
 }
 func (m *tuiModel) renderViewportContent() string {
 	switch m.mode {

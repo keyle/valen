@@ -13,8 +13,12 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// selPos is a point in the visible transcript: line is the viewport row
-// (0 = top of m.viewport.View()), col is a display cell (0-based).
+// selPos is a point in the transcript: line is the absolute content line
+// (0 = first line of the full rendered transcript, i.e. viewport.YOffset's
+// coordinate space), col is a display cell (0-based). Absolute lines let a
+// selection survive auto-scroll: rows scrolled out of the window stay part of
+// the copy because the grid is built from the full content, not the visible
+// slice.
 type selPos struct{ line, col int }
 
 // selection is the in-app drag selection over the chat transcript.
@@ -52,6 +56,44 @@ func isBorderGlyph(c gridCell) bool {
 
 func isSpaceCell(c gridCell) bool {
 	return c.text != "" && strings.TrimFunc(c.text, unicode.IsSpace) == ""
+}
+
+// hasLeadingBorder reports whether a line's leading decoration carries a border
+// glyph (a bordered body or a block quote). Such a marker is chrome and must
+// never be copied, so the row starts at its content; un-bordered rows instead
+// start at the selection's common base and keep their own indentation.
+func hasLeadingBorder(gl gridLine) bool {
+	for _, c := range gl.cells {
+		if c.col >= gl.cStart {
+			break
+		}
+		if isBorderGlyph(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// gridBase is the leftmost content column across a run of grid lines: the
+// shared leading decoration (document margin, block indent) that drag-copy
+// strips. Lines indented deeper than the base — a code sample's body — keep
+// their relative indentation instead of collapsing to their first glyph.
+// Decoration-only lines (blank rows, borders) and bordered rows are ignored:
+// a border is chrome stripped per row, so it must not drag the base leftward.
+func gridBase(rows []gridLine) int {
+	base := -1
+	for _, gl := range rows {
+		if gl.cStart >= gl.cEnd || hasLeadingBorder(gl) {
+			continue
+		}
+		if base < 0 || gl.cStart < base {
+			base = gl.cStart
+		}
+	}
+	if base < 0 {
+		return 0
+	}
+	return base
 }
 
 // buildGridLine strips ANSI and maps each grapheme to its display cell.
@@ -93,9 +135,11 @@ func gridContent(cells []gridCell, width int) (int, int) {
 	return cells[start].col, cells[end-1].col + cells[end-1].w
 }
 
-// visibleGrid is the stripped, cell-indexed form of the current viewport.
-func (m *tuiModel) visibleGrid() []gridLine {
-	lines := strings.Split(m.viewport.View(), "\n")
+// contentGrid is the stripped, cell-indexed form of the full transcript (not
+// just the visible window), so a selection can address lines that have
+// auto-scrolled out of view.
+func (m *tuiModel) contentGrid() []gridLine {
+	lines := strings.Split(m.vpContent, "\n")
 	grid := make([]gridLine, len(lines))
 	for i, l := range lines {
 		grid[i] = buildGridLine(l)
@@ -112,16 +156,21 @@ func selOrder(a, b selPos) (selPos, selPos) {
 }
 
 // selRowRange returns the half-open cell range [lo, hi) selected on a row.
-func selRowRange(gl gridLine, row, firstRow, lastRow, firstCol, lastCol int) (int, int) {
-	lo, hi := gl.cStart, gl.cEnd
+// base is the selection-wide left content column (from gridBase): un-bordered
+// rows start there so indentation relative to base survives, while bordered
+// rows start at their own content and the trailing edge is always clamped to
+// the row's content end so width padding never enters the copy.
+func selRowRange(gl gridLine, row, firstRow, lastRow, base, firstCol, lastCol int) (int, int) {
+	lo, hi := base, gl.cEnd
+	if hasLeadingBorder(gl) {
+		lo = gl.cStart
+	}
 	if row == firstRow {
 		lo = max(lo, firstCol)
 	}
 	if row == lastRow {
 		hi = min(hi, lastCol+1)
 	}
-	lo = max(lo, gl.cStart)
-	hi = min(hi, gl.cEnd)
 	return lo, hi
 }
 
@@ -133,16 +182,17 @@ func (m *tuiModel) selectedText() string {
 		return ""
 	}
 	a, b := selOrder(m.sel.anchor, m.sel.cursor)
-	grid := m.visibleGrid()
+	grid := m.contentGrid()
 	if len(grid) == 0 {
 		return ""
 	}
 	a.line = clampInt(a.line, 0, len(grid)-1)
 	b.line = clampInt(b.line, 0, len(grid)-1)
+	base := gridBase(grid[a.line : b.line+1])
 	var out []string
 	for row := a.line; row <= b.line; row++ {
 		gl := grid[row]
-		lo, hi := selRowRange(gl, row, a.line, b.line, a.col, b.col)
+		lo, hi := selRowRange(gl, row, a.line, b.line, base, a.col, b.col)
 		var sb strings.Builder
 		for _, c := range gl.cells {
 			if c.col < hi && c.col+c.w > lo {
@@ -165,9 +215,10 @@ func (m *tuiModel) copySelection() {
 	m.notice, m.noticeErr = fmt.Sprintf("Copied %d bytes to clipboard.", len(text)), false
 }
 
-// mapCell converts absolute screen cells to a viewport line/col. The header is
-// one row and the centered column starts at pad, so the viewport origin is
-// (pad, 1); columns and rows are clamped to the viewport.
+// mapCell converts absolute screen cells to a transcript line/col. The header
+// is one row and the centered column starts at pad, so the viewport origin is
+// (pad, 1); columns and rows are clamped to the viewport, and the row is
+// offset by the scroll position to yield an absolute content line.
 func (m *tuiModel) mapCell(x, y int) (selPos, bool) {
 	if m.width <= 0 || m.viewport.Height <= 0 {
 		return selPos{}, false
@@ -179,7 +230,7 @@ func (m *tuiModel) mapCell(x, y int) (selPos, bool) {
 		return selPos{}, false
 	}
 	col = clampInt(col, 0, max(0, m.viewport.Width-1))
-	return selPos{line: row, col: col}, true
+	return selPos{line: m.viewport.YOffset + row, col: col}, true
 }
 
 // handleMouseSelection handles transcript mouse events for in-app selection and
@@ -244,12 +295,14 @@ func (m *tuiModel) clearSelection() {
 }
 
 // selAtScrollEdge reports whether the drag cursor sits on the viewport's top or
-// bottom row, the trigger for auto-scroll.
+// bottom row, the trigger for auto-scroll. The cursor is an absolute content
+// line, so its visible row is line - YOffset.
 func (m *tuiModel) selAtScrollEdge() bool {
 	if !m.sel.active || m.viewport.Height <= 0 {
 		return false
 	}
-	return m.sel.cursor.line <= 0 || m.sel.cursor.line >= m.viewport.Height-1
+	row := m.sel.cursor.line - m.viewport.YOffset
+	return row <= 0 || row >= m.viewport.Height-1
 }
 
 // scheduleSelScroll starts the auto-scroll loop when the cursor reaches an edge.
@@ -263,28 +316,29 @@ func (m *tuiModel) scheduleSelScroll() tea.Cmd {
 	return m.selScrollTick()
 }
 
-// selScrollStep scrolls the viewport one line toward the drag edge and extends
-// the selection to the revealed row. The anchor is shifted with the viewport so
-// it keeps pointing at the same content. It reports false at the scroll limit.
+// selScrollStep scrolls the viewport one line toward the drag edge and moves
+// the cursor onto the revealed edge row. The anchor is an absolute content
+// line, so it stays pinned to its content with no adjustment — the whole span
+// (including rows now scrolled out of view) remains selectable. It reports
+// false at the scroll limit.
 func (m *tuiModel) selScrollStep() bool {
 	if !m.sel.active || m.viewport.Height <= 0 {
 		return false
 	}
+	row := m.sel.cursor.line - m.viewport.YOffset
 	switch {
-	case m.sel.cursor.line <= 0:
+	case row <= 0:
 		if m.viewport.AtTop() {
 			return false
 		}
 		m.viewport.ScrollUp(1)
-		m.sel.anchor.line++
-		m.sel.cursor.line = 0
-	case m.sel.cursor.line >= m.viewport.Height-1:
+		m.sel.cursor.line = m.viewport.YOffset
+	case row >= m.viewport.Height-1:
 		if m.viewport.AtBottom() {
 			return false
 		}
 		m.viewport.ScrollDown(1)
-		m.sel.anchor.line--
-		m.sel.cursor.line = m.viewport.Height - 1
+		m.sel.cursor.line = m.viewport.YOffset + m.viewport.Height - 1
 	default:
 		return false
 	}
@@ -296,7 +350,9 @@ func (m *tuiModel) selScrollStep() bool {
 
 // highlightSelection reverse-videos the selected cells of the rendered
 // viewport without disturbing the surrounding styling: the escape sequences
-// are injected at rune boundaries over the styled output.
+// are injected at rune boundaries over the styled output. Selection endpoints
+// are absolute content lines, so each is mapped back to a visible row via the
+// current scroll offset; rows scrolled out of the window simply aren't drawn.
 func (m *tuiModel) highlightSelection(vp string) string {
 	if !m.sel.active {
 		return vp
@@ -305,16 +361,26 @@ func (m *tuiModel) highlightSelection(vp string) string {
 	if len(lines) == 0 {
 		return vp
 	}
+	off := m.viewport.YOffset
 	a, b := selOrder(m.sel.anchor, m.sel.cursor)
-	a.line = clampInt(a.line, 0, len(lines)-1)
-	b.line = clampInt(b.line, 0, len(lines)-1)
+	grid := m.contentGrid()
+	if len(grid) == 0 {
+		return vp
+	}
+	a.line = clampInt(a.line, 0, len(grid)-1)
+	b.line = clampInt(b.line, 0, len(grid)-1)
+	base := gridBase(grid[a.line : b.line+1])
 	for row := a.line; row <= b.line; row++ {
-		gl := buildGridLine(lines[row])
-		lo, hi := selRowRange(gl, row, a.line, b.line, a.col, b.col)
+		vr := row - off
+		if vr < 0 || vr >= len(lines) {
+			continue
+		}
+		gl := grid[row]
+		lo, hi := selRowRange(gl, row, a.line, b.line, base, a.col, b.col)
 		if hi <= lo {
 			continue
 		}
-		lines[row] = reverseRange(lines[row], lo, hi)
+		lines[vr] = reverseRange(lines[vr], lo, hi)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -424,11 +490,12 @@ func (m *tuiModel) openLinkAt(x, y int) {
 	if !ok {
 		return
 	}
-	grid := m.visibleGrid()
-	if p.line < 0 || p.line >= len(grid) {
+	lines := strings.Split(m.vpContent, "\n")
+	if p.line < 0 || p.line >= len(lines) {
 		return
 	}
-	for _, sp := range linkSpans(grid[p.line]) {
+	gl := buildGridLine(lines[p.line])
+	for _, sp := range linkSpans(gl) {
 		if p.col >= sp.start && p.col < sp.end {
 			if err := openURL(sp.url); err != nil {
 				m.notice, m.noticeErr = "Could not open link: "+err.Error(), true

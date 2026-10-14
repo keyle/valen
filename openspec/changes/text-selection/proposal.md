@@ -20,9 +20,10 @@ line content, and auto-copy on release.
    a selection; motion extends it; release copies to the clipboard via the
    existing OSC 52 `clipboardWrite` and shows a status notice
    (`Copied N bytes to clipboard.`). Selection is computed against the *plain*
-   line content (ANSI-stripped, display-width aware), with leading
+   line content (ANSI-stripped, display-width aware), with the common leading
    border/padding and trailing padding trimmed, so wide terminals no longer
-   leak columns of spaces. Selected cells are highlighted with reverse video
+   leak columns of spaces while a code sample keeps its relative indentation.
+   Selected cells are highlighted with reverse video
    while dragging. Auto-copy on release is unconditional — no confirmation.
 2. **Shift+drag stays the terminal's native selection.** Mouse reporting stays
    on, so terminals whose bypass modifier is Shift (most) still select natively;
@@ -57,6 +58,8 @@ line content, and auto-copy on release.
 - `TestTUISelectionTrimsPadding`: a drag across a full width-padded transcript
   line yields the logical text with no leading border/indent and no trailing
   spaces (the reported bug).
+- `TestTUISelectionKeepsCodeIndent`: a drag across a rendered code sample keeps
+  the code's relative indentation (the reported bug).
 - `TestTUISelectionIgnoresShiftDrag`: shift+left press/motion/release leaves no
   selection and never calls `clipboardWrite`.
 - `TestTUILinkCtrlClickOpens`: a ctrl+left-click on a rendered URL calls the

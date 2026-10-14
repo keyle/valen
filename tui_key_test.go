@@ -249,16 +249,16 @@ func TestLoadConfigTUITable(t *testing.T) {
 	if got := tuiMaxLines(cfg2); got != 1000 {
 		t.Fatalf("default max_lines = %d, want 1000", got)
 	}
-	if got := tuiSelScrollInterval(cfg2); got != 150*time.Millisecond {
-		t.Fatalf("default select_scroll_ms = %v, want 150ms", got)
+	if got := tuiSelScrollInterval(cfg2); got != 50*time.Millisecond {
+		t.Fatalf("default select_scroll_ms = %v, want 50ms", got)
 	}
 	// A non-positive cadence falls back to the default.
 	cfg4, err := loadConfig(writeConfig(t, "model = \"m\"\n[tui]\nselect_scroll_ms = 0\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := tuiSelScrollInterval(cfg4); got != 150*time.Millisecond {
-		t.Fatalf("zero select_scroll_ms = %v, want 150ms", got)
+	if got := tuiSelScrollInterval(cfg4); got != 50*time.Millisecond {
+		t.Fatalf("zero select_scroll_ms = %v, want 50ms", got)
 	}
 	cfg3, err := loadConfig(writeConfig(t, "model = \"m\"\n[tui]\nmax_lines = 0\n"))
 	if err != nil {
