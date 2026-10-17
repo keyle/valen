@@ -24,6 +24,29 @@ const (
 	defaultMaxContextTokens = 300000
 )
 
+// defaultProviderIgnore is the OpenRouter provider blacklist applied when
+// provider_ignore is absent: BaseTen is skipped by default.
+var defaultProviderIgnore = []string{"baseten"}
+
+// normalizeProviderList lowercases, trims and dedupes provider slugs. A nil
+// input stays nil so "unset" keeps its default; an explicit [] clears it.
+func normalizeProviderList(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, s := range in {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
 // Config mirrors config.toml. See SPEC.md for the full schema.
 type Config struct {
 	Model    string `toml:"model"`
@@ -32,7 +55,13 @@ type Config struct {
 	// exacto; empty = none). Ignored on Go/Zen: the suffix rides the wire
 	// model only, so the stored model never carries it.
 	Routing string `toml:"routing"`
-	BaseURL string `toml:"base_url"`
+	// ProviderIgnore / ProviderOnly are OpenRouter's `provider.ignore` /
+	// `provider.only` routing lists (ignored on Go/Zen). ProviderIgnore
+	// nil keeps the default ["baseten"]; an explicit empty list clears it.
+	// The two are mutually exclusive, so ProviderOnly wins when set.
+	ProviderIgnore []string `toml:"provider_ignore"`
+	ProviderOnly   []string `toml:"provider_only"`
+	BaseURL        string   `toml:"base_url"`
 	// OpenCodeKey / OpenRouterKey are the API keys themselves. Empty by
 	// default: the OPENCODE_API_KEY / OPENROUTER_API_KEY env vars are
 	// used instead. persistModelSelection only writes model/thinking
@@ -179,6 +208,11 @@ func loadConfig(path string) (Config, error) {
 	cfg.Routing = normalizeRouting(cfg.Routing)
 	if !validRouting(cfg.Routing) {
 		return cfg, fmt.Errorf("routing %q is not valid (try: none, floor, nitro, exacto)", cfg.Routing)
+	}
+	cfg.ProviderIgnore = normalizeProviderList(cfg.ProviderIgnore)
+	cfg.ProviderOnly = normalizeProviderList(cfg.ProviderOnly)
+	if len(cfg.ProviderIgnore) > 0 && len(cfg.ProviderOnly) > 0 {
+		return cfg, errors.New("provider_ignore and provider_only are mutually exclusive")
 	}
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultBaseURL

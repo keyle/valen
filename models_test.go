@@ -700,6 +700,59 @@ func TestDeepSeekToolCallReasoningPadded(t *testing.T) {
 	}
 }
 
+// TestOpenRouterProviderWireBody: the provider object carries the default
+// BaseTen blacklist, honors an explicit ignore/only, disables on an explicit
+// empty ignore, and never rides Go/Zen requests.
+func TestOpenRouterProviderWireBody(t *testing.T) {
+	req := openai.ChatCompletionRequest{Model: "m", Messages: []openai.ChatCompletionMessage{{Role: "user", Content: "hi"}}}
+	cfg := newTestConfig("http://x")
+	cfg.Model = "openrouter/moonshotai/kimi-k3"
+
+	read := func() (ignore, only []string) {
+		t.Helper()
+		raw, _ := json.Marshal(chatWireBody(cfg, req))
+		var got struct {
+			Provider struct {
+				Ignore []string `json:"ignore"`
+				Only   []string `json:"only"`
+			} `json:"provider"`
+		}
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatal(err)
+		}
+		return got.Provider.Ignore, got.Provider.Only
+	}
+
+	ignore, only := read()
+	if len(ignore) != 1 || ignore[0] != "baseten" || only != nil {
+		t.Fatalf("default provider ignore=%v only=%v", ignore, only)
+	}
+
+	cfg.ProviderIgnore = []string{} // explicit [] clears the blacklist
+	if _, ok := chatWireBody(cfg, req).(openai.ChatCompletionRequest); !ok {
+		t.Fatal("explicit empty ignore must leave the request untouched")
+	}
+
+	cfg.ProviderIgnore = []string{"deepinfra"}
+	ignore, only = read()
+	if len(ignore) != 1 || ignore[0] != "deepinfra" {
+		t.Fatalf("custom ignore=%v", ignore)
+	}
+
+	cfg.ProviderIgnore = nil
+	cfg.ProviderOnly = []string{"anthropic"}
+	ignore, only = read()
+	if len(only) != 1 || only[0] != "anthropic" || ignore != nil {
+		t.Fatalf("only provider ignore=%v only=%v", ignore, only)
+	}
+
+	cfg.ProviderOnly = nil
+	cfg.Model = "glm-5.3"
+	if _, ok := chatWireBody(cfg, req).(openai.ChatCompletionRequest); !ok {
+		t.Fatal("Go models must not get a provider object")
+	}
+}
+
 func TestRoutingWireSuffix(t *testing.T) {
 	const or = "openrouter/moonshotai/kimi-k3"
 	cases := []struct {

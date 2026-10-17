@@ -24,6 +24,12 @@ openrouter_key = ""
 #                             # (cheapest) | nitro (fastest tps) | exacto
 #                             # (quality-first tool use). Sent as a model-slug
 #                             # suffix. Cycle live with ctrl+y or /route.
+# OpenRouter provider routing (openrouter/… models only; ignored on Go/Zen),
+# sent as the request `provider` object. provider_ignore and provider_only are
+# mutually exclusive (provider_only wins when both are set).
+# provider_ignore = ["baseten"]  # provider slugs to skip per request. Default
+#                                # ["baseten"]; an explicit [] disables it.
+# provider_only = []             # allowlist instead of the blacklist.
 # Second provider, OpenRouter: /model lists openrouter/<vendor>/<model>
 # (recent flagships while offline). A send without a key reports
 # "OpenRouter key not found" instead of failing boot.

@@ -100,15 +100,45 @@ func fillReasoning(msg *openai.ChatCompletionMessage, raw []byte) {
 	}
 }
 
-// chatWireBody patches reasoning on the serialized request. OpenRouter gets
-// each assistant reasoning_content mirrored as `reasoning` (its documented
-// field). DeepSeek thinking mode 400s unless every assistant tool-call
-// message carries reasoning_content, and go-openai omits empty strings, so
-// those get an explicit "". Everything else is sent untouched.
+// orProvider is the OpenRouter `provider` routing object valen sends: only
+// the slugs we model. Empty fields stay omitted so OpenRouter's own defaults
+// (load balancing, other filters) apply.
+type orProvider struct {
+	Ignore []string `json:"ignore,omitempty"`
+	Only   []string `json:"only,omitempty"`
+}
+
+// openRouterProvider builds the `provider` object for cfg, nil on Go/Zen (the
+// object is OpenRouter-only). provider_only wins; otherwise provider_ignore,
+// defaulting to [baseten] when unset. An explicit empty ignore disables it.
+func openRouterProvider(cfg Config) *orProvider {
+	if modelProvider(cfg.Model) != ProviderOpenRouter {
+		return nil
+	}
+	p := orProvider{Only: cfg.ProviderOnly}
+	if len(p.Only) == 0 {
+		p.Ignore = cfg.ProviderIgnore
+		if p.Ignore == nil {
+			p.Ignore = defaultProviderIgnore
+		}
+	}
+	if len(p.Ignore) == 0 && len(p.Only) == 0 {
+		return nil
+	}
+	return &p
+}
+
+// chatWireBody patches the serialized request. OpenRouter gets the provider
+// routing object (ignore/only) plus each assistant reasoning_content mirrored
+// as `reasoning` (its documented field). DeepSeek thinking mode 400s unless
+// every assistant tool-call message carries reasoning_content, and go-openai
+// omits empty strings, so those get an explicit "". Everything else is sent
+// untouched.
 func chatWireBody(cfg Config, req openai.ChatCompletionRequest) any {
 	mirror := modelProvider(cfg.Model) == ProviderOpenRouter
 	pad := strings.HasPrefix(modelBaseID(cfg.Model), "deepseek") && strings.ToLower(strings.TrimSpace(cfg.Thinking)) != "none"
-	need := false
+	provider := openRouterProvider(cfg)
+	need := provider != nil
 	for _, m := range req.Messages {
 		if m.Role == openai.ChatMessageRoleAssistant && ((mirror && m.ReasoningContent != "") || (pad && len(m.ToolCalls) > 0 && m.ReasoningContent == "")) {
 			need = true
@@ -123,23 +153,32 @@ func chatWireBody(cfg Config, req openai.ChatCompletionRequest) any {
 		return req
 	}
 	var body map[string]json.RawMessage
-	var msgs []map[string]json.RawMessage
-	if json.Unmarshal(raw, &body) != nil || json.Unmarshal(body["messages"], &msgs) != nil {
+	if json.Unmarshal(raw, &body) != nil {
 		return req
 	}
-	for _, m := range msgs {
-		if string(m["role"]) != `"assistant"` {
-			continue
-		}
-		rc, ok := m["reasoning_content"]
-		if mirror && ok {
-			m["reasoning"] = rc
-		}
-		if pad && !ok && len(m["tool_calls"]) > 0 {
-			m["reasoning_content"] = json.RawMessage(`""`)
+	if provider != nil {
+		if pb, err := json.Marshal(provider); err == nil {
+			body["provider"] = pb
 		}
 	}
-	body["messages"], _ = json.Marshal(msgs)
+	if mirror || pad {
+		var msgs []map[string]json.RawMessage
+		if json.Unmarshal(body["messages"], &msgs) == nil {
+			for _, m := range msgs {
+				if string(m["role"]) != `"assistant"` {
+					continue
+				}
+				rc, ok := m["reasoning_content"]
+				if mirror && ok {
+					m["reasoning"] = rc
+				}
+				if pad && !ok && len(m["tool_calls"]) > 0 {
+					m["reasoning_content"] = json.RawMessage(`""`)
+				}
+			}
+			body["messages"], _ = json.Marshal(msgs)
+		}
+	}
 	return body
 }
 

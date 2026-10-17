@@ -76,6 +76,45 @@ args = ["-y", "server"]
 	}
 }
 
+// TestProviderRoutingConfig: provider_ignore/provider_only load, normalize,
+// keep unset as nil, and reject being set together.
+func TestProviderRoutingConfig(t *testing.T) {
+	base, err := loadConfig(writeConfig(t, "model = \"openrouter/moonshotai/kimi-k3\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.ProviderIgnore != nil || base.ProviderOnly != nil {
+		t.Fatalf("unset provider lists must stay nil: %+v", base)
+	}
+	cfg, err := loadConfig(writeConfig(t, `model = "openrouter/moonshotai/kimi-k3"
+provider_ignore = [" BaseTen ", "baseten", "deepinfra"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.ProviderIgnore) != 2 || cfg.ProviderIgnore[0] != "baseten" || cfg.ProviderIgnore[1] != "deepinfra" {
+		t.Fatalf("ignore not normalized/deduped: %v", cfg.ProviderIgnore)
+	}
+	if cfg.ProviderOnly != nil {
+		t.Fatalf("only must stay nil: %v", cfg.ProviderOnly)
+	}
+	only, err := loadConfig(writeConfig(t, `model = "openrouter/moonshotai/kimi-k3"
+provider_only = ["Anthropic"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(only.ProviderOnly) != 1 || only.ProviderOnly[0] != "anthropic" {
+		t.Fatalf("only not normalized: %v", only.ProviderOnly)
+	}
+	if _, err := loadConfig(writeConfig(t, `model = "openrouter/moonshotai/kimi-k3"
+provider_ignore = ["baseten"]
+provider_only = ["anthropic"]
+`)); err == nil {
+		t.Fatal("both provider lists must be rejected")
+	}
+}
+
 func TestLoadConfigRejectsMissingModel(t *testing.T) {
 	if _, err := loadConfig(writeConfig(t, "base_url = \"x\"\n")); err == nil {
 		t.Fatal("expected error")
