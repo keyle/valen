@@ -72,6 +72,47 @@ func TestChatStreamsTextDeltas(t *testing.T) {
 	}
 }
 
+func TestChatStreamsOpenRouterTTFTAndTPS(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl, _ := w.(http.Flusher)
+		write := func(s string) {
+			w.Write([]byte(s))
+			if fl != nil {
+				fl.Flush()
+			}
+		}
+		time.Sleep(30 * time.Millisecond)
+		write("data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}\n\n")
+		time.Sleep(30 * time.Millisecond)
+		write("data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}]}\n\n")
+		write("data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":10,\"total_tokens\":20}}\n\n")
+		write("data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	oldBase := openRouterBaseURL
+	openRouterBaseURL = srv.URL
+	defer func() { openRouterBaseURL = oldBase }()
+
+	cfg := orTestConfig(srv.URL)
+	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}
+	var meta *ORMeta
+	onEvent := func(ev Event) {
+		if ev.Kind == "or_meta" {
+			meta = ev.ORMeta
+		}
+	}
+	if _, _, err := runChatTurn(context.Background(), cfg, nil, "or-key", srv.Client(), NewRegistry(), &history, onEvent); err != nil {
+		t.Fatal(err)
+	}
+	if meta == nil || meta.TTFT <= 0 || meta.TPS <= 0 {
+		t.Fatalf("meta=%+v", meta)
+	}
+	if meta.TTFT < 0.02 || meta.TTFT > 1 {
+		t.Fatalf("TTFT=%v, want roughly the 30ms prefill delay", meta.TTFT)
+	}
+}
+
 func TestChatRetriesContentFilterOnce(t *testing.T) {
 	filtered := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"par\"},\"finish_reason\":\"content_filter\"}]}\n\ndata: [DONE]\n\n"
 	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}

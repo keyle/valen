@@ -320,7 +320,8 @@ func (m *tuiModel) footerView() string {
 }
 
 // orMetaSuffix is the best-effort OpenRouter metadata appended after the
-// balance: the serving provider, throughput, per-million input/output rates
+// balance: the serving provider, time-to-first-token and decode throughput,
+// per-million input/output rates
 // and the cumulative billed cost of the session. Each segment is independently
 // optional; an empty result adds nothing, and the footer's width rule drops the
 // whole text on narrow terminals. It renders even without a balance, since the
@@ -331,8 +332,15 @@ func (m *tuiModel) orMetaSuffix() string {
 		if p := strings.TrimSpace(m.orMeta.Provider); p != "" {
 			parts = append(parts, p)
 		}
+		var perf []string
+		if m.orMeta.TTFT > 0 {
+			perf = append(perf, fmt.Sprintf("%.1fs TTFT", m.orMeta.TTFT))
+		}
 		if m.orMeta.TPS > 0 {
-			parts = append(parts, fmt.Sprintf("%.0f TPS", m.orMeta.TPS))
+			perf = append(perf, fmt.Sprintf("%.0f TPS", m.orMeta.TPS))
+		}
+		if len(perf) > 0 {
+			parts = append(parts, strings.Join(perf, " / "))
 		}
 	}
 	if p, ok := m.orPricing[m.cfg.Model]; ok {

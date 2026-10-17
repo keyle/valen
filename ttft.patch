@@ -1,0 +1,199 @@
+diff --git a/chat.go b/chat.go
+index c825bcb..e090fd2 100644
+--- a/chat.go
++++ b/chat.go
+@@ -203,6 +203,7 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
+ 	req.Stream = true
+ 	req.StreamOptions = &openai.StreamOptions{IncludeUsage: true}
+ 	endpoint, headers, sendCfg, httpClient := chatTarget(cfg, apiKey, hc)
++	start := time.Now()
+ 	resp, err := postAPI(ctx, httpClient, sendCfg, endpoint, chatWireBody(cfg, req), headers)
+ 	if err != nil {
+ 		return openai.ChatCompletionMessage{}, usage, err
+@@ -254,7 +255,14 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
+ 	var eventErr error
+ 	var terminal bool
+ 	orMeta := ORMeta{}
+-	var firstContent, lastContent time.Time
++	var firstDelta, lastDelta time.Time
++	markDelta := func() {
++		now := time.Now()
++		if firstDelta.IsZero() {
++			firstDelta = now
++		}
++		lastDelta = now
++	}
+ 	scanErr := scanSSE(ctx, br, func(ev sseEvent) bool {
+ 		if strings.TrimSpace(ev.data) == "[DONE]" {
+ 			terminal = true
+@@ -292,10 +300,7 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
+ 			d := choice.Delta
+ 			altReasoning := altStreamReasoning(ev.data, choice.Index)
+ 			if d.Content != "" {
+-				if firstContent.IsZero() {
+-					firstContent = time.Now()
+-				}
+-				lastContent = time.Now()
++				markDelta()
+ 				content.WriteString(d.Content)
+ 				emit("text_delta", d.Content)
+ 			}
+@@ -303,6 +308,7 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
+ 				if r == "" {
+ 					r = altReasoning
+ 				}
++				markDelta()
+ 				thinking.WriteString(r)
+ 				emit("thinking_delta", r)
+ 			}
+@@ -315,6 +321,7 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
+ 					eventErr = errors.New("api: chat: invalid streamed tool call")
+ 					return false
+ 				}
++				markDelta()
+ 				a := accs[idx]
+ 				if a == nil {
+ 					a = &chatToolAcc{}
+@@ -342,10 +349,13 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
+ 		return openai.ChatCompletionMessage{}, usage, errors.New("api: chat: incomplete stream (missing [DONE] or finish_reason)")
+ 	}
+ 	if modelProvider(cfg.Model) == ProviderOpenRouter {
+-		if !firstContent.IsZero() && lastContent.After(firstContent) && usage.CompletionTokens > 0 {
+-			orMeta.TPS = float64(usage.CompletionTokens) / lastContent.Sub(firstContent).Seconds()
++		if !firstDelta.IsZero() {
++			orMeta.TTFT = firstDelta.Sub(start).Seconds()
++			if lastDelta.After(firstDelta) && usage.CompletionTokens > 0 {
++				orMeta.TPS = float64(usage.CompletionTokens) / lastDelta.Sub(firstDelta).Seconds()
++			}
+ 		}
+-		if onEvent != nil && (orMeta.Provider != "" || orMeta.HasCost || orMeta.TPS > 0) {
++		if onEvent != nil && (orMeta.Provider != "" || orMeta.HasCost || orMeta.TTFT > 0 || orMeta.TPS > 0) {
+ 			m := orMeta
+ 			onEvent(Event{Kind: "or_meta", ORMeta: &m})
+ 		}
+diff --git a/stream_test.go b/stream_test.go
+index 2025dad..8576cf3 100644
+--- a/stream_test.go
++++ b/stream_test.go
+@@ -72,6 +72,44 @@ func TestChatStreamsTextDeltas(t *testing.T) {
+ 	}
+ }
+ 
++func TestChatStreamsOpenRouterTTFTAndTPS(t *testing.T) {
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		w.Header().Set("Content-Type", "text/event-stream")
++		fl, _ := w.(http.Flusher)
++		write := func(s string) {
++			w.Write([]byte(s))
++			if fl != nil {
++				fl.Flush()
++			}
++		}
++		time.Sleep(30 * time.Millisecond)
++		write("data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}\n\n")
++		time.Sleep(30 * time.Millisecond)
++		write("data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}]}\n\n")
++		write("data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":10,\"total_tokens\":20}}\n\n")
++		write("data: [DONE]\n\n")
++	}))
++	defer srv.Close()
++
++	cfg := orTestConfig(srv.URL)
++	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}
++	var meta *ORMeta
++	onEvent := func(ev Event) {
++		if ev.Kind == "or_meta" {
++			meta = ev.ORMeta
++		}
++	}
++	if _, _, err := runChatTurn(context.Background(), cfg, nil, "or-key", srv.Client(), NewRegistry(), &history, onEvent); err != nil {
++		t.Fatal(err)
++	}
++	if meta == nil || meta.TTFT <= 0 || meta.TPS <= 0 {
++		t.Fatalf("meta=%+v", meta)
++	}
++	if meta.TTFT < 0.02 || meta.TTFT > 1 {
++		t.Fatalf("TTFT=%v, want roughly the 30ms prefill delay", meta.TTFT)
++	}
++}
++
+ func TestChatRetriesContentFilterOnce(t *testing.T) {
+ 	filtered := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"par\"},\"finish_reason\":\"content_filter\"}]}\n\ndata: [DONE]\n\n"
+ 	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}
+diff --git a/tui_view.go b/tui_view.go
+index 2f497ec..8b85fc1 100644
+--- a/tui_view.go
++++ b/tui_view.go
+@@ -320,7 +320,8 @@ func (m *tuiModel) footerView() string {
+ }
+ 
+ // orMetaSuffix is the best-effort OpenRouter metadata appended after the
+-// balance: the serving provider, throughput, per-million input/output rates
++// balance: the serving provider, time-to-first-token and decode throughput,
++// per-million input/output rates
+ // and the cumulative billed cost of the session. Each segment is independently
+ // optional; an empty result adds nothing, and the footer's width rule drops the
+ // whole text on narrow terminals. It renders even without a balance, since the
+@@ -331,8 +332,15 @@ func (m *tuiModel) orMetaSuffix() string {
+ 		if p := strings.TrimSpace(m.orMeta.Provider); p != "" {
+ 			parts = append(parts, p)
+ 		}
++		var perf []string
++		if m.orMeta.TTFT > 0 {
++			perf = append(perf, fmt.Sprintf("%.1fs TTFT", m.orMeta.TTFT))
++		}
+ 		if m.orMeta.TPS > 0 {
+-			parts = append(parts, fmt.Sprintf("%.0f TPS", m.orMeta.TPS))
++			perf = append(perf, fmt.Sprintf("%.0f TPS", m.orMeta.TPS))
++		}
++		if len(perf) > 0 {
++			parts = append(parts, strings.Join(perf, " / "))
+ 		}
+ 	}
+ 	if p, ok := m.orPricing[m.cfg.Model]; ok {
+diff --git a/tui_view_test.go b/tui_view_test.go
+index 9446ee5..0b54a82 100644
+--- a/tui_view_test.go
++++ b/tui_view_test.go
+@@ -563,13 +563,13 @@ func TestRoutingFooterMetadata(t *testing.T) {
+ 	m.cfg.Model = "openrouter/moonshotai/kimi-k3"
+ 	m.width, m.viewport.Width = 200, 200
+ 	m.orCredits = &ORCredits{TotalCredits: 20, TotalUsage: 7.66}
+-	m.orMeta = &ORMeta{Provider: "Infermatic", TPS: 42.4}
++	m.orMeta = &ORMeta{Provider: "Infermatic", TTFT: 4.9, TPS: 42.4}
+ 	m.orPricing = map[string]orPricing{
+ 		"openrouter/moonshotai/kimi-k3": {prompt: 0.0000001, completion: 0.0000004},
+ 	}
+ 	m.orSpent, m.orSpentSet = 0.0034, true
+ 	got := ansi.Strip(m.footerView())
+-	for _, want := range []string{"openrouter $12.34 left", "Infermatic", "42 TPS", "in $0.10/out $0.40/M", "$0.0034 used"} {
++	for _, want := range []string{"openrouter $12.34 left", "Infermatic", "4.9s TTFT / 42 TPS", "in $0.10/out $0.40/M", "$0.0034 used"} {
+ 		if !strings.Contains(got, want) {
+ 			t.Fatalf("footer %q missing %q", got, want)
+ 		}
+diff --git a/turn.go b/turn.go
+index e290399..f960c6a 100644
+--- a/turn.go
++++ b/turn.go
+@@ -39,13 +39,18 @@ type Event struct {
+ }
+ 
+ // ORMeta is OpenRouter's best-effort per-round serving metadata: the upstream
+-// provider that served the request, the billed cost and the throughput
+-// measured from our own stream. Any field may be absent.
++// provider that served the request, the billed cost and the latency and
++// decode throughput measured from our own stream. Any field may be absent.
+ type ORMeta struct {
+ 	Provider string
+ 	Cost     float64
+ 	HasCost  bool
+-	TPS      float64
++	// TTFT is seconds from request send to the first streamed token (thinking
++	// or content), so it covers prefill, cache and queueing.
++	TTFT float64
++	// TPS is the decode rate over all streamed tokens: completion tokens
++	// divided by the span from first to last token.
++	TPS float64
+ }
+ 
+ // parseOpenRouterMeta folds the serving provider and billed cost from one

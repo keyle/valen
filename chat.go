@@ -203,6 +203,7 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 	req.Stream = true
 	req.StreamOptions = &openai.StreamOptions{IncludeUsage: true}
 	endpoint, headers, sendCfg, httpClient := chatTarget(cfg, apiKey, hc)
+	start := time.Now()
 	resp, err := postAPI(ctx, httpClient, sendCfg, endpoint, chatWireBody(cfg, req), headers)
 	if err != nil {
 		return openai.ChatCompletionMessage{}, usage, err
@@ -254,7 +255,14 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 	var eventErr error
 	var terminal bool
 	orMeta := ORMeta{}
-	var firstContent, lastContent time.Time
+	var firstDelta, lastDelta time.Time
+	markDelta := func() {
+		now := time.Now()
+		if firstDelta.IsZero() {
+			firstDelta = now
+		}
+		lastDelta = now
+	}
 	scanErr := scanSSE(ctx, br, func(ev sseEvent) bool {
 		if strings.TrimSpace(ev.data) == "[DONE]" {
 			terminal = true
@@ -292,10 +300,7 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 			d := choice.Delta
 			altReasoning := altStreamReasoning(ev.data, choice.Index)
 			if d.Content != "" {
-				if firstContent.IsZero() {
-					firstContent = time.Now()
-				}
-				lastContent = time.Now()
+				markDelta()
 				content.WriteString(d.Content)
 				emit("text_delta", d.Content)
 			}
@@ -303,6 +308,7 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 				if r == "" {
 					r = altReasoning
 				}
+				markDelta()
 				thinking.WriteString(r)
 				emit("thinking_delta", r)
 			}
@@ -315,6 +321,7 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 					eventErr = errors.New("api: chat: invalid streamed tool call")
 					return false
 				}
+				markDelta()
 				a := accs[idx]
 				if a == nil {
 					a = &chatToolAcc{}
@@ -342,10 +349,13 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 		return openai.ChatCompletionMessage{}, usage, errors.New("api: chat: incomplete stream (missing [DONE] or finish_reason)")
 	}
 	if modelProvider(cfg.Model) == ProviderOpenRouter {
-		if !firstContent.IsZero() && lastContent.After(firstContent) && usage.CompletionTokens > 0 {
-			orMeta.TPS = float64(usage.CompletionTokens) / lastContent.Sub(firstContent).Seconds()
+		if !firstDelta.IsZero() {
+			orMeta.TTFT = firstDelta.Sub(start).Seconds()
+			if lastDelta.After(firstDelta) && usage.CompletionTokens > 0 {
+				orMeta.TPS = float64(usage.CompletionTokens) / lastDelta.Sub(firstDelta).Seconds()
+			}
 		}
-		if onEvent != nil && (orMeta.Provider != "" || orMeta.HasCost || orMeta.TPS > 0) {
+		if onEvent != nil && (orMeta.Provider != "" || orMeta.HasCost || orMeta.TTFT > 0 || orMeta.TPS > 0) {
 			m := orMeta
 			onEvent(Event{Kind: "or_meta", ORMeta: &m})
 		}

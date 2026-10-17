@@ -39,13 +39,18 @@ type Event struct {
 }
 
 // ORMeta is OpenRouter's best-effort per-round serving metadata: the upstream
-// provider that served the request, the billed cost and the throughput
-// measured from our own stream. Any field may be absent.
+// provider that served the request, the billed cost and the latency and
+// decode throughput measured from our own stream. Any field may be absent.
 type ORMeta struct {
 	Provider string
 	Cost     float64
 	HasCost  bool
-	TPS      float64
+	// TTFT is seconds from request send to the first streamed token (thinking
+	// or content), so it covers prefill, cache and queueing.
+	TTFT float64
+	// TPS is the decode rate over all streamed tokens: completion tokens
+	// divided by the span from first to last token.
+	TPS float64
 }
 
 // parseOpenRouterMeta folds the serving provider and billed cost from one

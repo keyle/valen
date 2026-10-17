@@ -563,13 +563,13 @@ func TestRoutingFooterMetadata(t *testing.T) {
 	m.cfg.Model = "openrouter/moonshotai/kimi-k3"
 	m.width, m.viewport.Width = 200, 200
 	m.orCredits = &ORCredits{TotalCredits: 20, TotalUsage: 7.66}
-	m.orMeta = &ORMeta{Provider: "Infermatic", TPS: 42.4}
+	m.orMeta = &ORMeta{Provider: "Infermatic", TTFT: 4.9, TPS: 42.4}
 	m.orPricing = map[string]orPricing{
 		"openrouter/moonshotai/kimi-k3": {prompt: 0.0000001, completion: 0.0000004},
 	}
 	m.orSpent, m.orSpentSet = 0.0034, true
 	got := ansi.Strip(m.footerView())
-	for _, want := range []string{"openrouter $12.34 left", "Infermatic", "42 TPS", "in $0.10/out $0.40/M", "$0.0034 used"} {
+	for _, want := range []string{"openrouter $12.34 left", "Infermatic", "4.9s TTFT / 42 TPS", "in $0.10/out $0.40/M", "$0.0034 used"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("footer %q missing %q", got, want)
 		}
