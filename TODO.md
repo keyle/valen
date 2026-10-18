@@ -37,7 +37,8 @@ thinking/signature capture are implemented, not deferred D4/D7 work. See
 
 ## Medium
 
-- [ ] M.3 we need Plan mode! Something we don't have yet.
+- [x] M.3 Plan mode (`/plan`, `-plan`, Tab in the chatbox) — shipped; see
+  `SPEC.md` agent-loop section and `LIFECYCLE.md` §9.
 
 ## Parity (6 tracks — each has a small openspec in `openspec/changes/<track>/`)
 
@@ -68,12 +69,22 @@ regresses `project.md` caps.
 
 - [ ] W. Workflow tools (`workflow-tools/`): phased, foreground-only.
   Verifiable: each tool's round trip offline, no new files for todos.
-- [ ] W.1 `todowrite`/`todoread` (in-memory + session fold, opencode schema).
+- [x] W.1 `todowrite`/`todoread` (in-memory + session fold, opencode schema).
 - [ ] W.2 `skill` loader + discovery (`~/.config/valen/skills`,
-  `.valen/skills`, `.opencode/`+`.claude/` compat) + `skill` permission.
-- [ ] W.3 `task` foreground-only (`general`/`explore` policies, depth 1,
-  shared `mcpMu`); background deferred.
+  `.valen/skills`, `.opencode/`+`.claude/` compat) + `skill` permission —
+  now `skill-tool/`.
+- [x] W.3 `task` foreground-only (`general`/`explore` policies, depth 1,
+  shared `mcpMu`); background deferred. Parallel task batches (max 5) shipped.
 
 Gate per track: SPEC + help + `config.toml` comments together;
 `gofmt -l .` clean, `go vet ./...` + `go test ./...` green
 (`-race` for parallel/approval paths).
+
+## Safety & input (new openspecs, not parity tracks)
+
+- [ ] I. Composer input (`attach-input/`): paste an image's bytes or drop a
+  file → `[img-N]` / `[name.png]` tokens → attachments. Depends on A.
+- [ ] S. Shell approvals (`shell-approval/`): `[shell] prompt` policy,
+  committed approval lines, extra destructive labels.
+- [ ] U. Undo (`turn-undo/`): atomic writes + per-turn journal + `/undo`.
+  F.2 uses its atomic helper.

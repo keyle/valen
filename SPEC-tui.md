@@ -313,7 +313,7 @@ background turn on `askPrompter`; the UI thread serves `questionMsg` in the
 question overlay and replies with confirmed answers, leaving history and the
 transport converters unchanged. Slash commands
 (`/clear` `/think` `/save` `/help` `/history` `/sessions` `/tools` `/slots` `/errors` `/model`
-`/effort` `/route` `/quit`) resolve inside `submit`/`handleCommand`; `/model` fetches
+`/effort` `/route` `/copy` `/new` `/compact` `/plan` `/quit`) resolve inside `submit`/`handleCommand`; `/model` fetches
 the catalog asynchronously via `modelsLoadedMsg`. The footer quota refreshes
 via `orCreditsMsg`/`usageMsg` from `fetchQuotaCmd` at `Init`, on each
 one-minute `usageTickMsg`, after each `turnDoneMsg`, and on every model
@@ -493,7 +493,7 @@ Function keys are gone; the footer only points at `/help`, which lists every
 shortcut (and the shortcut line above).
 
 Slash commands: `/help` `/history` `/sessions` (`/resume`, `/continue` — resume most recent) `/tools` `/slots` `/errors` `/think` `/save` `/copy`
-`/clear` `/compact` (`/summarize` alias) `/model [filter]` `/effort [level]` (`/thinking` alias) `/route [none|floor|nitro|exacto]` `/quit` (`:q` alias).
+`/clear` `/new` `/compact` (`/summarize` alias) `/plan` `/model [filter]` `/effort [level]` (`/thinking` alias) `/route [none|floor|nitro|exacto]` `/quit` (`:q` alias).
 
 ## Streaming (live)
 
