@@ -225,6 +225,31 @@ func (m *tuiModel) assignSlot(key string) {
 	}
 }
 
+// unbindSelectedSlot clears the slot at the slots-view cursor and persists it.
+func (m *tuiModel) unbindSelectedSlot() {
+	m.loadSlots()
+	if m.cursor < 0 || m.cursor >= len(slotKeys) {
+		return
+	}
+	key := string(slotKeys[m.cursor])
+	if _, ok := m.slots[key]; !ok {
+		m.notice = fmt.Sprintf("Slot %s is already empty.", key)
+		m.noticeErr = false
+		m.refreshViewport()
+		return
+	}
+	delete(m.slots, key)
+	m.notice = fmt.Sprintf("Slot %s unbound.", key)
+	m.noticeErr = false
+	if path := slotsPathFor(m.statePath); path == "" {
+		m.notice += " (session only)"
+	} else if err := saveSlots(path, m.slots); err != nil {
+		m.notice = "Slot save failed: " + err.Error()
+		m.noticeErr = true
+	}
+	m.refreshViewport()
+}
+
 // applySlot switches to the model + thinking level stored in slot key.
 func (m *tuiModel) applySlot(key string) tea.Cmd {
 	m.loadSlots()

@@ -312,7 +312,7 @@ Events, so compaction cannot erase them. `AskUserQuestion` blocks the
 background turn on `askPrompter`; the UI thread serves `questionMsg` in the
 question overlay and replies with confirmed answers, leaving history and the
 transport converters unchanged. Slash commands
-(`/clear` `/think` `/save` `/help` `/history` `/sessions` `/tools` `/errors` `/model`
+(`/clear` `/think` `/save` `/help` `/history` `/sessions` `/tools` `/slots` `/errors` `/model`
 `/effort` `/route` `/quit`) resolve inside `submit`/`handleCommand`; `/model` fetches
 the catalog asynchronously via `modelsLoadedMsg`. The footer quota refreshes
 via `orCreditsMsg`/`usageMsg` from `fetchQuotaCmd` at `Init`, on each
@@ -413,7 +413,9 @@ Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
   routing token = `none`; the two vocabularies are disjoint, so order is
   unambiguous); without a state path they are session-only. An empty slot
   reports it; a saved level the model no longer offers resets to the provider
-  default with a note. Works in chat and
+  default with a note. Ctrl+S (or `/slots`) opens a Slots view (picker layout)
+  listing all ten slots with model, thinking, routing and a `● current` marker:
+  Enter switches to the slot, `x` unbinds it, Esc backs out. Works in chat and
   overlays (not during a question). Terminals must send Option/Alt as Meta;
   alt+shift+digit arrives as the US shifted symbol (`alt+!`) or, under Kitty
   disambiguate mode, CSI `<digit>;4u`.
@@ -457,7 +459,7 @@ the full height, starts at its heading and scrolls to follow the selected option
 
 ## Keybindings
 
-| Key | Chat | Overlays (history/sessions/tools/errors/help/detail) |
+| Key | Chat | Overlays (history/sessions/tools/errors/slots/help/detail) |
 | --- | --- | --- |
 | Enter | send turn | open selected row / resume session |
 | Esc | cancel run / clear input / back | back to chat |
@@ -476,9 +478,10 @@ the full height, starts at its heading and scrolls to follow the selected option
 | Ctrl+T | thinking level cycle low→high, wraps to low | same |
 | Ctrl+O | toggle thinking display (shown by default) | toggle thinking display |
 | Alt+1…9, Alt+0 / Alt+Shift+1…0 | favourite slots: switch to slot / store current model + thinking in slot | same |
+| x | — | slots view: unbind the selected slot |
 | Ctrl+B | toggle status details | toggle status details |
 | Ctrl+P / Ctrl+M | model picker | model picker |
-| Ctrl+S | save transcript | save transcript |
+| Ctrl+S | favourite slots view | favourite slots view |
 | Ctrl+Q | quit | quit |
 | ↑↓ / j/k | textarea cursor (PgUp scrolls); ↑ on an empty box recalls the last prompt | move selection (view scrolls to follow) |
 | Space / Enter / Esc | — | question overlay: toggle / select+confirm / dismiss |
@@ -486,7 +489,7 @@ the full height, starts at its heading and scrolls to follow the selected option
 Function keys are gone; the footer only points at `/help`, which lists every
 shortcut (and the shortcut line above).
 
-Slash commands: `/help` `/history` `/sessions` (`/resume`, `/continue` — resume most recent) `/tools` `/errors` `/think` `/save` `/copy`
+Slash commands: `/help` `/history` `/sessions` (`/resume`, `/continue` — resume most recent) `/tools` `/slots` `/errors` `/think` `/save` `/copy`
 `/clear` `/compact` (`/summarize` alias) `/model [filter]` `/effort [level]` (`/thinking` alias) `/route [none|floor|nitro|exacto]` `/quit` (`:q` alias).
 
 ## Streaming (live)

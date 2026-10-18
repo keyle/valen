@@ -157,6 +157,7 @@ const (
 	viewDetail
 	viewModels
 	viewEffort
+	viewSlots
 	viewAsk
 )
 

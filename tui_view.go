@@ -149,6 +149,8 @@ func (m *tuiModel) headerView() string {
 		tail += "  ·  models"
 	case viewEffort:
 		tail += "  ·  thinking"
+	case viewSlots:
+		tail += "  ·  slots"
 	case viewDetail:
 		tail += "  ·  " + m.detailTitle
 	case viewAsk:
@@ -398,6 +400,8 @@ func (m *tuiModel) renderViewportContent() string {
 		return m.renderModelsList()
 	case viewEffort:
 		return m.renderEffortList()
+	case viewSlots:
+		return m.renderSlotsList()
 	case viewDetail:
 		return m.renderDetail()
 	case viewAsk:

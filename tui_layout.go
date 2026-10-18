@@ -27,7 +27,7 @@ func (m *tuiModel) columnWidth() int {
 // question overlay) that hides the chatbox and footer, leaving the whole
 // height to the list so a question stays readable on short terminals.
 func (m *tuiModel) isPickerMode() bool {
-	return m.mode == viewSessions || m.mode == viewModels || m.mode == viewAsk
+	return m.mode == viewSessions || m.mode == viewModels || m.mode == viewSlots || m.mode == viewAsk
 }
 
 // maxInputHeight caps how far the chatbox grows with its content.

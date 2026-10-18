@@ -265,6 +265,9 @@ func (m *tuiModel) handleCommand(text string) tea.Cmd {
 	case "/tools":
 		m.show(viewTools)
 		return nil
+	case "/slots":
+		m.show(viewSlots)
+		return nil
 	case "/errors":
 		m.show(viewErrors)
 		return nil
@@ -786,6 +789,11 @@ func (m *tuiModel) openSelected() tea.Cmd {
 			return nil
 		}
 		m.resumeSessionPath(items[m.cursor].path)
+	case viewSlots:
+		if m.cursor < 0 || m.cursor >= len(slotKeys) {
+			return nil
+		}
+		return m.applySlot(string(slotKeys[m.cursor]))
 	case viewErrors:
 		es := m.errorEntries()
 		if m.cursor < 0 || m.cursor >= len(es) {

@@ -393,6 +393,41 @@ func (m *tuiModel) renderEffortList() string {
 	}
 	return b.String()
 }
+func (m *tuiModel) renderSlotsList() string {
+	m.loadSlots()
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	if m.cursor >= len(slotKeys) {
+		m.cursor = len(slotKeys) - 1
+	}
+	var b strings.Builder
+	b.WriteString(metaStyle.Render("Favourite slots — enter switches · esc back") + "\n\n")
+	cw := m.contentWidth()
+	for i := 0; i < len(slotKeys); i++ {
+		key := string(slotKeys[i])
+		line := "alt+" + key
+		if s, ok := m.slots[key]; ok {
+			line += fmt.Sprintf("  %s · %s%s", displayModelID(s.model), effortLabel(s.thinking), slotRoutingSuffix(s.routing))
+			if s.model == m.cfg.Model && s.thinking == m.cfg.Thinking && normalizeRouting(s.routing) == normalizeRouting(m.cfg.Routing) {
+				line += "  ● current"
+			}
+		} else {
+			line += "  " + metaStyle.Render("empty")
+		}
+		line = truncateRunes(line, cw)
+		if i == m.cursor {
+			b.WriteString(selectedStyle.Width(cw).Render(" "+line) + "\n")
+		} else {
+			b.WriteString("  " + line + "\n")
+		}
+	}
+	b.WriteString("\n" + metaStyle.Render("x to unbind the selected slot") + "\n" +
+		metaStyle.Render("alt+1,2,3…0 to select a saved model") + "\n" +
+		metaStyle.Render("shift+alt+1,2,3…0 to save the current model to that slot"))
+	return b.String()
+}
+
 func (m *tuiModel) renderHelp() string {
 	return emptyStyle.Width(m.contentWidth()).Render(`Conversation first: your message shows instantly, the reply streams into the same thread.
 `) + "\n" + helpBody()
@@ -442,7 +477,7 @@ func helpBody() string {
 		{"ctrl+n", "new session"},
 		{"ctrl+t", "cycle thinking level"},
 		{"ctrl+y", "cycle OpenRouter routing (none→floor→nitro→exacto)"},
-		{"ctrl+s", "save the transcript"},
+		{"ctrl+s", "favourite slots"},
 		{"ctrl+q", "quit"},
 		{"ctrl+c · ctrl+d", "cancel the turn · quit"},
 		{"ctrl+f", "filter in the model picker"},
@@ -462,6 +497,7 @@ func helpBody() string {
 		{"/history", "browse tool and command activity"},
 		{"/sessions", "resume a saved session (/resume, /continue)"},
 		{"/tools", "full tool output"},
+		{"/slots", "favourite slots — enter switches · x unbinds"},
 		{"/errors", "error log"},
 		{"/model [filter]", "list and switch models (provider-prefixed)"},
 		{"/effort [level]", "thinking level for the current model (/thinking)"},

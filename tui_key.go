@@ -357,9 +357,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+p":
 		return m, m.openModelPicker("")
 	case "ctrl+s":
-		text, isErr := m.exportTranscript()
-		m.notice = text
-		m.noticeErr = isErr
+		m.show(viewSlots)
 		return m, nil
 	case "ctrl+q":
 		return m, tea.Quit
@@ -531,6 +529,10 @@ func (m *tuiModel) handleOverlayKey(msg tea.KeyMsg, s string) (tea.Model, tea.Cm
 			m.viewport.GotoTop()
 		}
 		return m, cmd
+	}
+	if m.mode == viewSlots && s == "x" {
+		m.unbindSelectedSlot()
+		return m, nil
 	}
 	switch s {
 	case "q":

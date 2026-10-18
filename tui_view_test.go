@@ -442,6 +442,53 @@ func TestTUIFavouriteSlotsKittyAltShift(t *testing.T) {
 	}
 }
 
+func TestTUISlotsView(t *testing.T) {
+	m, statePath := newTestModelWithConfig(t, "model = \"glm-5.3\"\nthinking = \"high\"\nbase_url = \"https://unused\"\n")
+	alt := func(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}, Alt: true} }
+
+	// Store two slots: 2 ← glm-5.3/high, 3 ← kimi-k2.6.
+	_, _ = m.handleKey(alt('@'))
+	m.handleCommand("/model kimi-k2.6")
+	_, _ = m.handleKey(alt('#'))
+
+	// ctrl+s opens the slots view.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if m.mode != viewSlots {
+		t.Fatalf("ctrl+s mode=%v", m.mode)
+	}
+	got := ansi.Strip(m.renderViewportContent())
+	for _, want := range []string{"alt+1", "alt+2", "alt+3", "glm-5.3", "kimi-k2.6", "empty"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("slots view %q missing %q", got, want)
+		}
+	}
+
+	// Enter on slot 2 switches back to its model + thinking.
+	m.cursor = 1
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.cfg.Model != "glm-5.3" || m.cfg.Thinking != "high" {
+		t.Fatalf("enter slot 2 → %q/%q", m.cfg.Model, m.cfg.Thinking)
+	}
+
+	// x unbinds slot 3 and persists the removal.
+	m.show(viewSlots)
+	m.cursor = 2
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if !strings.Contains(m.notice, "Slot 3 unbound") || m.noticeErr {
+		t.Fatalf("unbind notice=%q err=%v", m.notice, m.noticeErr)
+	}
+	if raw, _ := os.ReadFile(slotsPathFor(statePath)); string(raw) != "2: glm-5.3 high\n" {
+		t.Fatalf("slots.yaml after unbind=%q", raw)
+	}
+
+	// x on an empty slot reports instead of erroring.
+	m.cursor = 4
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if m.noticeErr || !strings.Contains(m.notice, "already empty") {
+		t.Fatalf("empty unbind notice=%q err=%v", m.notice, m.noticeErr)
+	}
+}
+
 func TestSlotsRoundTrip(t *testing.T) {
 	p := filepath.Join(t.TempDir(), userSlotsName)
 	if err := os.WriteFile(p, []byte("# mine\n1: \"glm-5.3\" high # fast\n0: openrouter/x/y\nbad\nz: a\n"), 0o600); err != nil {
