@@ -24,6 +24,8 @@ and `grep`/`glob` take `literal/caseSensitive/limit` + `hidden/limit`.
 ## Non-goals
 
 - Multi-formatter matrix, `.gitignore`-aware walks, mandatory `rg` dep.
+  Cross-file rollback is `openspec/changes/turn-undo/` (atomic helper +
+  `/undo`).
 
 ## Success criteria
 

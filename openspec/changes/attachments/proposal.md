@@ -26,7 +26,8 @@ image media (bytes-sniffed; PDF/audio/video rejected), 20 MiB/item.
 ## Non-goals
 
 - Inline terminal image rendering; PDF/audio/video ingestion (reject with
-  "export page as PNG first"); share URLs.
+  "export page as PNG first"); share URLs. Paste/drop input is
+  `openspec/changes/attach-input/`.
 
 ## Success criteria
 

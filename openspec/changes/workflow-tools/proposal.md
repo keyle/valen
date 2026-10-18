@@ -17,7 +17,7 @@ useful; foreground-only first (no job view, no background results plumbing).
    `.valen/skills`, plus `.opencode/`/`.claude/` compat); advertised as
    `ID: name — description`; `skill {id}` loads body + ≤10 supporting
    paths (contents not auto-loaded). Permission action `skill`, ID as
-   resource.
+   resource. **Split out to `openspec/changes/skill-tool/`.**
 3. `task` third: `task {agent,prompt}` spawns a nested foreground `runTurn`
    with narrowed permissions (`explore`: read/glob/grep/web only;
    `general`: full except nested `task`, depth 1). Shares `mcpMu`.
