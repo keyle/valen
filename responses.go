@@ -41,8 +41,9 @@ type responsesRequest struct {
 }
 
 type responsesContent struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
 }
 
 type responsesSummaryPart struct {
@@ -383,8 +384,10 @@ func runResponsesTurn(ctx context.Context, cfg Config, client *openai.Client, ap
 	}
 	native := make(map[string][]responsesOutputItem)
 	stream := true
+	imgs := imageAttachments(turnAttachments(ctx))
 	return runModelTurn(ctx, cfg, registry, history, onEvent, func(ctx context.Context, history []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
 		instructions, input := splitResponsesInputNative(history, native)
+		responsesWithImages(input, imgs)
 		req := responsesRequest{
 			Model:           wireModelID(cfg.Model, cfg.Routing),
 			MaxOutputTokens: outputTokens(cfg),

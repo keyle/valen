@@ -88,6 +88,9 @@ type Config struct {
 	TUI         TUIConfig        `toml:"tui"`
 	Sandbox     SandboxConfig    `toml:"sandbox"`
 	Input       InputConfig      `toml:"input"`
+	// Attachments caps what one attached file may carry; every key has a
+	// built-in default (see attach.go).
+	Attachments AttachmentConfig `toml:"attachments"`
 }
 
 // CompactionConfig mirrors the [compaction] table: summary-mode only,
@@ -239,6 +242,7 @@ func loadConfig(path string) (Config, error) {
 	}
 	cfg.Compaction = normalizeCompactionConfig(cfg.Compaction, contextBudget(cfg))
 	cfg.Input.Height = inputHeight(cfg)
+	cfg.Attachments = normalizeAttachmentConfig(cfg.Attachments)
 	if err := cfg.Sandbox.validate(); err != nil {
 		return cfg, err
 	}

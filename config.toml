@@ -103,6 +103,14 @@ thinking = "high"
                                 # to (default: the docker sockets of colima, Docker Desktop, the system).
                                 # [] turns it off. A folder decision lives in access.toml, not here.
 
+[attachments]                   # caps for -f/--file, @path and TUI paste (every key has a built-in default).
+# max_bytes = 20971520         # per item, before base64 (20 MiB); larger files are skipped with a notice.
+# max_base64_bytes = 5242880   # encoded image payload ceiling (5 MiB); with auto_resize the image is shrunk to fit.
+# max_text_bytes = 65536       # inlined text / folder listing per item (64 KiB, first 2000 lines).
+# max_width = 2000             # image width cap in pixels; larger images are scaled down, aspect ratio preserved.
+# max_height = 2000            # image height cap in pixels.
+# auto_resize = true           # false rejects an over-cap image instead of shrinking it.
+
 # NOTE: [input] must stay the last table in this file. In TOML every key
 # after a [table] header belongs to that table, so top-level keys placed
 # below it decode as input.* and fail strict loading.

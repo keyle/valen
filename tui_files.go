@@ -176,7 +176,10 @@ func (m *tuiModel) refreshFilePickerChoices() bool {
 	}
 	value := m.input.Value()
 	info := m.input.LineInfo()
-	start, end, query, ok := fileTokenAt(value, inputCursorOffset(value, m.input.Line(), info.ColumnOffset))
+	// StartColumn + ColumnOffset is the caret's rune offset in the logical
+	// line: ColumnOffset alone is relative to the soft-wrapped visual row.
+	col := info.StartColumn + info.ColumnOffset
+	start, end, query, ok := fileTokenAt(value, inputCursorOffset(value, m.input.Line(), col))
 	if !ok {
 		m.closeFilePicker()
 		return false
@@ -290,6 +293,9 @@ func (m *tuiModel) acceptFileChoice() {
 		insert += " "
 	}
 	m.replaceInputRange(m.files.start, m.files.end, insert)
+	if abs, err := resolveFilePath(e.target()); err == nil {
+		m.addMentionAttachment(abs)
+	}
 	m.closeFilePicker()
 }
 

@@ -481,7 +481,8 @@ func helpBody() string {
 		{"ctrl+q", "quit"},
 		{"ctrl+c · ctrl+d", "cancel the turn · quit"},
 		{"ctrl+f", "filter in the model picker"},
-		{"@", "file picker — type to fuzzy-match files and folders, ↑↓ move, enter inserts @path, esc closes"},
+		{"@", "file picker — type to fuzzy-match files and folders, ↑↓ move, enter inserts @path and attaches it, esc closes"},
+		{"ctrl+v", "paste a clipboard image as an attachment (or a file path as a chip)"},
 		{"alt+1…alt+0", "jump to a favourite slot"},
 		{"alt+shift+1…0", "save model+thinking+routing to a slot"},
 	}))

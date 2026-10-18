@@ -340,8 +340,9 @@ func outputTokens(cfg Config) int {
 func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
 	stream := true
 	tools := registry.OpenAITools()
+	imgs := imageAttachments(turnAttachments(ctx))
 	return runModelTurn(ctx, cfg, registry, history, onEvent, func(ctx context.Context, history []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
-		req := openai.ChatCompletionRequest{Model: wireModelID(cfg.Model, cfg.Routing), Messages: chatSendMessages(history), Tools: tools, MaxTokens: outputTokens(cfg)}
+		req := openai.ChatCompletionRequest{Model: wireModelID(cfg.Model, cfg.Routing), Messages: chatMessagesWithImages(chatSendMessages(history), imgs), Tools: tools, MaxTokens: outputTokens(cfg)}
 		if cfg.Temperature != nil {
 			req.Temperature = *cfg.Temperature
 		}

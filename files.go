@@ -77,6 +77,9 @@ func ReadTool() Tool {
 			if len(raw) == 0 {
 				return fmt.Sprintf("File %s is empty.", relToRoot(abs)), nil
 			}
+			if imageMime(raw) != "" {
+				return imageDescriptor(ctx, filepath.Base(abs), abs, raw), nil
+			}
 			lines := strings.Split(string(raw), "\n")
 			total := len(lines)
 			start := a.Offset

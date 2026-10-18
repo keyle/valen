@@ -100,6 +100,9 @@ func (m *tuiModel) View() string {
 	// chatbox and quota footer don't apply there, but the ready/working
 	// status stays so the session state remains visible.
 	if !m.isPickerMode() {
+		if chips := m.attachChips(); chips != "" {
+			parts = append(parts, chips)
+		}
 		parts = append(parts, m.inputView(), m.footerView())
 	}
 	block := lipgloss.JoinVertical(lipgloss.Left, parts...)

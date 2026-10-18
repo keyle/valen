@@ -12,7 +12,8 @@ Single-binary Go agent harness. No server/client split, everything in-process in
 ## Constraints (all changes must keep)
 
 - Single binary, stdlib-first. No new runtime deps without explicit approval.
-  Current direct deps: `toml`, `go-openai`, `mcp-go`, `x/net/html` + charm TUI stack.
+  Current direct deps: `toml`, `go-openai`, `mcp-go`, `x/net/html`,
+  `x/image` (WebP decode + scaling) + charm TUI stack.
 - Memory is a feature (historical target ~2% of OpenCode, not a fresh benchmark). Keep streaming caps:
   `8MiB LimitReader` per round, `16k` tool-output truncate (storage/log),
   no secondary live-send truncation; rolling `32768`-byte UTF-8-safe TUI
@@ -22,6 +23,10 @@ Single-binary Go agent harness. No server/client split, everything in-process in
   `32768`-byte cap on the sideloaded `~/.config/valen/AGENTS.md`,
   `100` grep matches, `1MiB/512KiB` search/fetch caps, `8000` fetch runes,
   `@` file picker index `20000` entries / `200` fuzzy choices / `8` visible rows,
+  attachments `[attachments] max_bytes=20MiB / max_base64_bytes=5MiB /
+  max_width,max_height=2000 (resize to fit; `auto_resize=false` rejects;
+  64MP decode guard) / max_text_bytes=64KiB`, first `2000` lines, `100` folder
+  entries, clipboard helper `3s`/20MiB stdout cap, paste cache `7d`/`200` entries,
   `16384` output tokens default on all three transports (positive explicit
   overrides honored, no floor). Keep compaction caps: `15k` soft whole-turn
   tail target, entire current turn protected, `10%` buffer, early threshold

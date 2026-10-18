@@ -422,7 +422,28 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 
 // chat is the headless one-shot path: one prompt, one answer, stdout.
 func chat(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, prompt string, stdout, stderr io.Writer) error {
+	return chatWithAttachments(ctx, cfg, client, apiKey, hc, registry, prompt, nil, stdout, stderr)
+}
+
+// chatWithAttachments is chat plus -f/--file paths (and @path mentions, also
+// expanded headless): text rides inlined in the prompt, images on the wire only.
+func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, prompt string, files []string, stdout, stderr io.Writer) error {
 	resetTodos()
+	askPrompter = func(ctx context.Context, qs []AskQuestion) ([]string, error) {
+		in, closeIn, err := headlessAskInput()
+		if err != nil {
+			return nil, err
+		}
+		defer closeIn()
+		return headlessAsk(ctx, qs, in, os.Stderr)
+	}
+	paths := append(append([]string(nil), files...), atPaths(prompt)...)
+	refs, notices := resolveAttachments(ctx, paths, cfg)
+	for _, n := range notices {
+		fmt.Fprintln(stderr, "valen: "+n)
+	}
+	ctx = withTurnAttachments(ctx, refs)
+	prompt = promptWithAttachments(prompt, refs)
 	history := make([]openai.ChatCompletionMessage, 0, 8)
 	history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: effectiveSystem(cfg)})
 	history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: prompt})
@@ -433,14 +454,6 @@ func chat(ctx context.Context, cfg Config, client *openai.Client, apiKey string,
 		if ev.Kind == "tool_start" {
 			fmt.Fprintf(stderr, "[tool %s]\n", ev.Text)
 		}
-	}
-	askPrompter = func(ctx context.Context, qs []AskQuestion) ([]string, error) {
-		in, closeIn, err := headlessAskInput()
-		if err != nil {
-			return nil, err
-		}
-		defer closeIn()
-		return headlessAsk(ctx, qs, in, os.Stderr)
 	}
 	reply, usage, err := runTurn(ctx, cfg, client, apiKey, hc, registry, &history, onEvent)
 	if err != nil {

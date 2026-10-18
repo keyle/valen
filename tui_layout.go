@@ -100,19 +100,22 @@ func (m *tuiModel) syncInputHeight() {
 	if base := inputHeight(m.cfg); h < base {
 		h = base
 	}
-	if h == m.input.Height() {
-		return
+	if h != m.input.Height() {
+		m.input.SetHeight(h)
+		// The textarea only re-clamps its internal scroll on Update; a nil
+		// message keeps the cursor row visible after the resize.
+		m.input, _ = m.input.Update(nil)
 	}
-	m.input.SetHeight(h)
-	// The textarea only re-clamps its internal scroll on Update; a nil
-	// message keeps the cursor row visible after the resize.
-	m.input, _ = m.input.Update(nil)
 	if m.height == 0 {
 		return
 	}
-	m.viewport.Height = m.viewportHeight()
-	if m.follow && m.mode == viewChat {
-		m.viewport.GotoBottom()
+	// Chips appearing or vanishing re-derive the viewport height even when
+	// the chatbox itself did not resize.
+	if vh := m.viewportHeight(); vh != m.viewport.Height {
+		m.viewport.Height = vh
+		if m.follow && m.mode == viewChat {
+			m.viewport.GotoBottom()
+		}
 	}
 }
 
@@ -125,6 +128,9 @@ func (m *tuiModel) viewportHeight() int {
 		return m.viewport.Height
 	}
 	h := m.height - 6 - m.input.Height() - m.filePickerHeight()
+	if m.attachChips() != "" {
+		h-- // the chips line sits above the chatbox
+	}
 	if m.isPickerMode() {
 		h = m.height - 2 // header + status
 	}

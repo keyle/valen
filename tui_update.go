@@ -96,7 +96,10 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	if m.retrying {
 		m.rewindLastTurn()
 	}
-	hist := append(append([]openai.ChatCompletionMessage(nil), m.history...), openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: trimmed})
+	// Chips whose token left the text are dropped; the rest resolve to paths
+	// off the UI thread (folder approval may prompt).
+	attachPaths := m.reconcileAttachments(trimmed)
+	histBase := append([]openai.ChatCompletionMessage(nil), m.history...)
 
 	base := m.ctx
 	if base == nil {
@@ -128,7 +131,16 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	registry := m.registry
 	prog := m.prog
 	return func() tea.Msg {
-		h := hist
+		refs, notices := resolveAttachments(ctx, attachPaths, cfg)
+		if len(notices) > 0 && prog != nil {
+			prog.Send(noticeMsg{text: strings.Join(notices, " · ")})
+		}
+		prompt := trimmed
+		if len(refs) > 0 {
+			prompt = promptWithAttachments(trimmed, refs)
+			ctx = withTurnAttachments(ctx, refs)
+		}
+		h := append(histBase, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: prompt})
 		var tools []ToolRecord
 		var thinking, answer string
 		var orMeta *ORMeta
@@ -222,6 +234,7 @@ func (m *tuiModel) handleCommand(text string) tea.Cmd {
 	switch cmd {
 	case "/clear":
 		m.history = seedHistory(m.cfg)
+		m.clearAttachments()
 		resetTodos()
 		m.lastTurnDur = 0
 		if m.session != nil {
@@ -580,6 +593,31 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refreshViewport()
 		return m, nil
+
+	case noticeMsg:
+		m.notice = msg.text
+		m.noticeErr = false
+		m.refreshViewport()
+		return m, nil
+
+	case clipboardPasteMsg:
+		switch {
+		case msg.notice != "":
+			m.notice = msg.notice
+			m.noticeErr = false
+		case msg.path != "":
+			token := m.nextImageToken()
+			m.addPendingAttachment(token, msg.path)
+			m.input.InsertString(token + " ")
+			m.dismissTransientNotice()
+		case msg.text != "":
+			m.insertClipboardText(msg.text)
+		default:
+			m.notice = "Nothing to paste."
+			m.noticeErr = false
+		}
+		m.refreshViewport()
+		return m, m.syncFilePicker()
 
 	case questionMsg:
 		picks := make([]map[int]bool, len(msg.qs))

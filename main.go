@@ -98,6 +98,11 @@ func start() error {
 	planFlag := flag.Bool("plan", false, "plan mode: read-only investigation, present the plan as the reply")
 	dvFlag := flag.Bool("dv", false, "debug verbose: timestamped round/tool/size trace to stderr")
 	dvLogFlag := flag.String("dvlog", "", "debug verbose log file (implies -dv; use in TUI mode)")
+	// -f / --file attach files, folders and images to the headless prompt
+	// (repeatable); @path mentions in the prompt attach too.
+	var attachFiles fileFlag
+	flag.Var(&attachFiles, "f", "attach a file, folder or image (repeatable, headless)")
+	flag.Var(&attachFiles, "file", "attach a file, folder or image (alias for -f)")
 	flag.Parse()
 
 	// Resolve paths before any chdir so relative paths keep working.
@@ -137,6 +142,9 @@ func start() error {
 		return errors.New("-q needs a terminal (stdout is not a TTY)")
 	}
 	tuiMode := qMode || (!*printMode && isTTY(os.Stdin) && isTTY(os.Stdout))
+	if tuiMode && len(attachFiles) > 0 {
+		return errors.New("-f/--file attaches to a one-shot prompt (-p); in the TUI use @ or paste")
+	}
 	// In -q mode the positional arg is the prompt, never a workdir.
 	workdir, rest := splitWorkdirArg(*dirFlag, flag.Args(), tuiMode && !qMode)
 	if workdir != "" {
@@ -239,7 +247,17 @@ func start() error {
 	if prompt == "" {
 		return errors.New("empty prompt")
 	}
-	return chat(ctx, cfg, client, apiKey, newHTTPClient(cfg), registry, prompt, os.Stdout, os.Stderr)
+	return chatWithAttachments(ctx, cfg, client, apiKey, newHTTPClient(cfg), registry, prompt, attachFiles, os.Stdout, os.Stderr)
+}
+
+// fileFlag collects repeated -f/--file attachment paths in order.
+type fileFlag []string
+
+func (f *fileFlag) String() string { return strings.Join(*f, ", ") }
+
+func (f *fileFlag) Set(v string) error {
+	*f = append(*f, v)
+	return nil
 }
 
 // splitWorkdirArg resolves the sandbox root: an explicit -dir flag wins,

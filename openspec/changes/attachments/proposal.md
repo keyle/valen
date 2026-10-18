@@ -19,9 +19,9 @@ image media (bytes-sniffed; PDF/audio/video rejected), 20 MiB/item.
 3. `read` gains the same image path; transcript shows `[image name WxH]`.
 4. TUI `@` fuzzy picker (over `glob **`) + composer chips; headless `-f`
    repeatable + `@path` expansion in prompt args.
-5. Config `[attachments]` (`max_bytes`, image `max_width/max_height/
-   max_base64_bytes`, opencode defaults); no resizer dep — over-limit
-   images are rejected, in-limit pass through.
+5. Config `[attachments]` (`max_bytes` 20 MiB, `max_base64_bytes` 8 MiB,
+   `max_text_bytes` 64 KiB); no resizer dep and no width/height keys —
+   over-limit images are rejected, in-limit pass through.
 
 ## Non-goals
 

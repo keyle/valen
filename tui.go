@@ -359,9 +359,14 @@ type tuiModel struct {
 
 	busy          bool
 	pendingPrompt string
-	pendingPlan   bool
-	pendingSince  time.Time
-	lastTurnDur   time.Duration // working time of the last finished turn, shown beside "ready"
+	// pendingAttachments are composer chips (files, screenshots) waiting for
+	// submit; imgSeq numbers clipboard images per composer. Both are
+	// turn-scoped and never enter history.
+	pendingAttachments []pendingAttachment
+	imgSeq             int
+	pendingPlan        bool
+	pendingSince       time.Time
+	lastTurnDur        time.Duration // working time of the last finished turn, shown beside "ready"
 	// retrying marks that the chatbox holds the recalled last prompt: the
 	// next send rewinds that turn first. Cleared whenever the box empties.
 	retrying   bool
@@ -555,6 +560,7 @@ func (m *tuiModel) Init() tea.Cmd {
 func (m *tuiModel) clearInput() {
 	m.input.SetValue("")
 	m.retrying = false
+	m.clearAttachments()
 	m.closeFilePicker()
 }
 
@@ -687,6 +693,9 @@ func runTUI(ctx context.Context, cfg Config, statePath string, client *openai.Cl
 	if err != nil {
 		return fmt.Errorf("session: %w", err)
 	}
+	// Pasted screenshots land in a content-addressed cache; boot is the one
+	// place old entries are swept.
+	pruneAttachCache(time.Now())
 	resetTodos()
 	m := newTUIModel(cfg, client, registry, session)
 	m.ctx = ctx

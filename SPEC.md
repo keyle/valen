@@ -61,6 +61,8 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `sandbox*.go`, `shellgate.go` | Shell sandbox: policy in `sandbox.go`, `sandbox-exec` (macOS), `bwrap` (Linux), other OSes fail to compile; once-per-session prompts for network and destructive commands |
 | `files.go` | File builtins (`read`, `write`, `edit`, `glob`, `grep`): tool implementations, glob matching, background grep |
 | `fileaccess.go` | File-access gate: workdir/worktree roots, outside-access approval, secret/data guards |
+| `attach.go` | Attachments: `-f`/`@`/pasted-path resolution, opencode-style text and folder inlining, image sniffing, resizing and caps, and the wire-only image parts per transport (chat `image_url`, messages `image`, responses `input_image`) |
+| `clipboard.go` | Screenshot paste: `pbpaste`/`wl-paste`/`xclip` probe with timeout and output cap, content-addressed cache under `$XDG_CACHE_HOME/valen/attachments`, 7-day / 200-entry prune |
 | `ask.go` | `AskUserQuestion` contract, headless prompting/confirmation, answer formatting |
 | `search.go` | `web_search` (DuckDuckGo HTML) and `web_fetch` (HTML → text) |
 | `mcp.go` | stdio MCP client lifecycle, tool registration, result flattening |
@@ -99,6 +101,7 @@ and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
 | `[tui]` | table | `max_lines=1000`, `sound=true`, `select_scroll_ms=50` | Transcript rendering (TUI only). `max_lines` bounds the rendered committed scrollback so the viewport never re-parses an ever-growing transcript (the slowdown after long sessions). Over budget, older turns collapse their reasoning (user prompts, tool lines and replies are kept whole, never cut), then drop oldest-first behind a `… N earlier turn(s) trimmed` row; disk history stays lossless and ctrl+h/recall views still expand everything. `0` disables trimming. `sound` (default `true`) rings the terminal bell (BEL) when a question appears or a turn finishes (not on cancel); `false` mutes it. `select_scroll_ms` (default `50`) paces the selection drag auto-scroll: one viewport line per interval while dragging past the top/bottom edge |
 | `[sandbox]` | table | `allow`, `deny`, `allow_bind`, `ipc_allow` (all unset = built-in defaults) | Shell sandbox policy (see "Shell sandbox"); declared before `[input]` |
 | `[input]` | table | `blink=true, height=3` | Chatbox chrome (TUI only): block-cursor blink plus input box height in lines |
+| `[attachments]` | table | `max_bytes=20971520, max_base64_bytes=5242880, max_text_bytes=65536, max_width=2000, max_height=2000, auto_resize=true` | Attach caps (see "Attachments"), shared by `-f`/`--file`, headless `@path` and TUI paste: `max_bytes` per item before base64, `max_base64_bytes` encoded image payload ceiling, `max_width`/`max_height` pixel ceilings, `auto_resize` shrinks an over-cap image to fit (false rejects it), `max_text_bytes` inlined text/folder body per item |
 | `tools` | string[] | empty | Subset of `shell`, `web_search`, `web_fetch`, `read`, `write`, `edit`, `glob`, `grep`, `AskUserQuestion`, `todowrite`, `todoread`. `AskUserQuestion` plus `todowrite`/`todoread` plus `task` are also registered automatically when absent, so model-driven questions, the session plan, and subagent delegation work in every frontend |
 | `mcp` | table[] | empty | Each entry needs `name` + `cmd`; optional `args`, `env` |
 
@@ -360,7 +363,7 @@ Rules the registry enforces:
 | `shell` | `command`, `network` (bool, default false) | `sh -c` in the workdir, 60s timeout, combined stdout+stderr; non-zero exit is returned as content with `[exit N]`, a timeout as partial output with `[timed out after …]`, not as an error |
 | `web_search` | `query` | DuckDuckGo HTML endpoint, up to 8 results as `N. title / url / snippet`; unwraps `/l/?uddg=` tracker links; 1 MiB body cap |
 | `web_fetch` | `url` | GET with 512 KiB cap, HTML tokenized to text (script/style/noscript dropped), truncated to 8000 chars |
-| `read` | `path`, `offset`, `limit` | Line-windowed read (default 2000 lines, max 5000, ~12KB per call with an offset hint to continue); lines prefixed with their number for `edit` context; long lines trimmed at 1000 chars |
+| `read` | `path`, `offset`, `limit` | Line-windowed read (default 2000 lines, max 5000, ~12KB per call with an offset hint to continue); lines prefixed with their number for `edit` context; long lines trimmed at 1000 chars. An image returns a text descriptor instead, since tool results carry no bytes: when the image rides this turn it says so (`[image shot.png 1280x720, 84 KiB] attached to this message — inspect the image part, no need to read the file`), otherwise it names the way to attach it (`… ask the user to attach it with @shot.png` inside the workdir, `… ask the user to paste the image or its path` outside it) |
 | `write` | `path`, `content` | Create/overwrite a file, creating parents; preserves the existing mode |
 | `edit` | `path`, `oldString`, `newString`, `replaceAll` | Exact-string replace; refuses ambiguous multi-matches unless `replaceAll` |
 | `glob` | `pattern`, `path` | Recursive file list supporting `*`/`?`/`[...]`/`**`; top-level subtrees walk in parallel, results sorted; skips `.git` plus dependency/build dirs (`node_modules`, `target`, `dist`, `build`, `bin`, `vendor`, `.venv`/`venv`, `__pycache__`, `.next`, `out`, `coverage`) |
@@ -497,6 +500,42 @@ output shows a write or network denial gets a `[sandbox: …]` hint.
 Non-200 responses are errors, so the model sees `error: <url> returned 429 ...`
 rather than an HTML error page.
 
+## Attachments
+
+Files, folders and screenshots can ride one turn beside the prompt (TUI: `@`
+picker, drag-and-drop paste, ctrl+v; headless: repeatable `-f`/`--file` plus
+`@path` mentions in the prompt). Resolution happens once at submit, in
+`attach.go`, after the usual per-folder access check.
+
+- Text files and folders are inlined into the user message in opencode's
+  shape: `Attached file: <name>` (a folder is `Attached directory: <path>`), a
+  blank line, then the body — so every transport sends identical bytes
+  (stable cache prefix). Caps: `[attachments] max_text_bytes` and the first
+  2000 lines; a folder is a non-recursive listing capped at 100 entries. A cut
+  body is labelled `(truncated)`. Inlined text persists in history like any
+  prompt text.
+- PNG/JPEG/GIF/WebP images are sniffed by magic bytes and ride the wire copy
+  of the last user message — `image_url` parts on chat, `{type: "image",
+  source: {type: "base64"}}` on messages, `input_image` on responses — each
+  preceded by an `Attached file: <path>` text part, and are re-sent on every
+  round of the turn. Image limits match opencode's `media.image`:
+  `max_width`/`max_height` (2000 px) and `max_base64_bytes` (5 MiB). With
+  `auto_resize = true` (the default) an over-limit image is scaled down with
+  its aspect ratio preserved, then encoded as PNG and JPEG at progressively
+  smaller scales until it fits, so the wire MIME can change; with
+  `auto_resize = false` it is rejected instead. A source over 64 MP is
+  rejected before decoding to bound memory.
+- PDF, audio, video and other binaries are rejected with a user-facing notice;
+  the turn still sends. Rejections never reach the model.
+- Stored history stays string-content only. The typed prompt (plus inlined
+  text) persists in the session JSONL; image bytes never do, so a resumed
+  session does not show the model the screenshots again.
+- `-f`/`--file` is headless-only: in TUI mode (interactive or `-q`) it is
+  rejected with a hint to use `@` or paste. Clipboard screenshots need
+  `pbpaste` (macOS), `wl-paste` (Wayland) or `xclip` (X11); the cached file
+  lives under `$XDG_CACHE_HOME/valen/attachments` and bypasses the
+  folder-access prompt.
+
 ## MCP
 
 Each `[[mcp]]` entry spawns `cmd args...` over stdio with the parent environment
@@ -528,6 +567,12 @@ deterministic. Tools are registered as
 - `files_test.go` — workdir split, sandbox containment, `read`/`write`/`edit`
   round trip and error paths, `glob`/`grep` results, outside-access
   allow/deny via a stubbed prompter, shell running in the file root.
+- `attach_test.go` — attachment resolution and caps, opencode-style
+  text/folder inlining, image resizing (dimensions, base64 ceiling, disabled
+  auto-resize), the WebP decoder, `@`/pasted-path parsing, per-transport image
+  wire shapes, `read` on an image, TUI chips and reconcile, the clipboard probe
+  (stubbed `execCommand`), cache prune, headless `-f`, and the `[attachments]`
+  config table.
 - `search_test.go` — result parsing, redirect unwrapping, result cap, no
   results, HTTP error, script/style stripping, truncation, text extraction.
 - `mcp_test.go` — end-to-end stdio round trip: the test binary re-execs itself
@@ -601,6 +646,8 @@ go run . -p "..."                     # one-shot answer on stdout
 go run . -q "..."                     # start the TUI and run the prompt immediately
 go run . -config other.toml < prompt.txt   # headless via pipe
 go run . -p "..." -plan               # one-shot plan: read-only, reply is the plan
+go run . -p "..." -f shot.png         # attach an image (repeat -f/--file)
+go run . -p "review @main.go"         # @path mentions attach too (headless)
 go run . -p "..." -dv 2> trace.log     # timestamped round/tool/size trace
 go run . -dvlog trace.log              # same, to a file (use in TUI mode)
 ```

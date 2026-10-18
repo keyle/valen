@@ -13,6 +13,7 @@ require (
 	github.com/mark3labs/mcp-go v1.1.1
 	github.com/sahilm/fuzzy v0.1.1
 	github.com/sashabaranov/go-openai v1.43.0
+	golang.org/x/image v0.47.0
 	golang.org/x/net v0.59.0
 )
 
@@ -48,7 +49,7 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/yuin/goldmark v1.7.13 // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
-	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/term v0.46.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 )

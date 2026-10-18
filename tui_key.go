@@ -254,6 +254,14 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if cmd, consumed := m.filterMouseFragment(msg); consumed {
 		return m, cmd
 	}
+	// Drag-and-drop pastes arrive as runes: an all-paths paste becomes chips,
+	// an empty paste probes the clipboard for an image. Everything else
+	// stays literal text.
+	if msg.Paste && m.ask == nil && m.mode == viewChat {
+		if cmd, handled := m.handlePaste(msg); handled {
+			return m, cmd
+		}
+	}
 	s := msg.String()
 	if handled, cmd := m.filePickerKey(s); handled {
 		return m, cmd
@@ -405,6 +413,10 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// Keep the spinner ticking while the turn runs.
 		return m, tea.Batch(cmd, m.spinner.Tick)
+	case "ctrl+v":
+		// Clipboard images have no text form: probe the helper chain and add
+		// a chip; text falls back to the normal paste.
+		return m, m.pasteClipboard()
 	case "tab":
 		// Tab swaps work and plan mode, same as /plan. The textarea has no
 		// use for it (no tab character in prompts).

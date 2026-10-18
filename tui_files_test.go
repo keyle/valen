@@ -96,6 +96,54 @@ func TestTUIFileTokenAtCaretOnAtSign(t *testing.T) {
 	}
 }
 
+func TestTUIFilePickerReopensForLaterMentions(t *testing.T) {
+	m, root := pickerTestModel(t)
+	writeTestFile(t, root, "main.go", "x")
+	writeTestFile(t, root, "notes.md", "x")
+	loadPickerIndex(t, m, root)
+
+	typePickerKeys(t, m, "read @main")
+	if !m.files.open || len(m.files.choices) != 1 {
+		t.Fatalf("first mention: open=%v choices=%v", m.files.open, pickerTargets(m))
+	}
+	mm, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = mm.(*tuiModel)
+
+	typePickerKeys(t, m, " and @note")
+	if !m.files.open || len(m.files.choices) != 1 || m.files.choices[0].target() != "notes.md" {
+		t.Fatalf("second mention: open=%v choices=%v", m.files.open, pickerTargets(m))
+	}
+	mm, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = mm.(*tuiModel)
+	if got, want := m.input.Value(), "read @main.go  and @notes.md "; got != want {
+		t.Fatalf("input=%q want %q", got, want)
+	}
+}
+
+func TestTUIFilePickerWrappedLine(t *testing.T) {
+	m, root := pickerTestModel(t)
+	writeTestFile(t, root, "main.go", "x")
+	writeTestFile(t, root, "notes.md", "x")
+	loadPickerIndex(t, m, root)
+	// Narrow enough that the first insertion pushes the line past the wrap.
+	m.input.SetWidth(12)
+
+	typePickerKeys(t, m, "read this text @main")
+	if !m.files.open || len(m.files.choices) != 1 {
+		t.Fatalf("wrapped first mention: open=%v choices=%v", m.files.open, pickerTargets(m))
+	}
+	mm, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = mm.(*tuiModel)
+	if got := m.input.Value(); got != "read this text @main.go " {
+		t.Fatalf("input=%q", got)
+	}
+
+	typePickerKeys(t, m, "and @note")
+	if !m.files.open || len(m.files.choices) != 1 || m.files.choices[0].target() != "notes.md" {
+		t.Fatalf("second mention past the wrap: open=%v choices=%v", m.files.open, pickerTargets(m))
+	}
+}
+
 func TestTUIFilePickerCursorWalksInsertedPath(t *testing.T) {
 	m, root := pickerTestModel(t)
 	writeTestFile(t, root, "path/path/filename", "x")

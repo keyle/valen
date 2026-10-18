@@ -475,8 +475,10 @@ func runMessagesTurn(ctx context.Context, cfg Config, client *openai.Client, api
 	adaptive := messagesAdaptiveModel(wireModelID(cfg.Model))
 	native := make(map[string][]messagesBlock)
 	stream := true
+	imgs := imageAttachments(turnAttachments(ctx))
 	return runModelTurn(ctx, cfg, registry, history, onEvent, func(ctx context.Context, history []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
 		system, msgs := splitMessagesHistoryNative(history, native)
+		messagesWithImages(msgs, imgs)
 		req := messagesRequest{
 			Model:     wireModelID(cfg.Model, cfg.Routing),
 			MaxTokens: messagesMaxTokens(cfg),
