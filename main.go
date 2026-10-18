@@ -94,6 +94,7 @@ func start() error {
 	cfgPath := flag.String("config", "", "path to config (default: ~/.config/valen/config.toml, seeded on first run)")
 	dirFlag := flag.String("dir", "", "working directory: sandbox root for file tools and shell")
 	printMode := flag.Bool("p", false, "one-shot: answer the prompt and exit")
+	qFlag := flag.Bool("q", false, "start the TUI and run the prompt immediately")
 	planFlag := flag.Bool("plan", false, "plan mode: read-only investigation, present the plan as the reply")
 	dvFlag := flag.Bool("dv", false, "debug verbose: timestamped round/tool/size trace to stderr")
 	dvLogFlag := flag.String("dvlog", "", "debug verbose log file (implies -dv; use in TUI mode)")
@@ -129,8 +130,15 @@ func start() error {
 	}
 	defer dvlog.Close()
 
-	tuiMode := !*printMode && isTTY(os.Stdin) && isTTY(os.Stdout)
-	workdir, rest := splitWorkdirArg(*dirFlag, flag.Args(), tuiMode)
+	qMode := *qFlag
+	// -q forces the TUI regardless of stdin (its prompt comes from the args,
+	// not a pipe), so stdout still has to be a TTY for the alt screen.
+	if qMode && !isTTY(os.Stdout) {
+		return errors.New("-q needs a terminal (stdout is not a TTY)")
+	}
+	tuiMode := qMode || (!*printMode && isTTY(os.Stdin) && isTTY(os.Stdout))
+	// In -q mode the positional arg is the prompt, never a workdir.
+	workdir, rest := splitWorkdirArg(*dirFlag, flag.Args(), tuiMode && !qMode)
 	if workdir != "" {
 		abs, err := filepath.Abs(workdir)
 		if err != nil {
@@ -212,10 +220,16 @@ func start() error {
 			return fmt.Errorf("register task: %w", err)
 		}
 	}
-	if !*printMode && isTTY(os.Stdin) && isTTY(os.Stdout) {
+	if tuiMode {
 		dvlog.Logf("start model=%s transport=%s thinking=%s maxrounds=%d budget~%dtok schemastate~%dtok tools=%d tui=true",
 			cfg.Model, modelTransport(cfg.Model), cfg.Thinking, cfg.MaxRounds, contextBudget(cfg), requestToolsTokens(registry), len(registry.Names()))
-		return runTUI(ctx, cfg, statePath, client, registry, apiKey)
+		initial := ""
+		if qMode {
+			if initial = strings.TrimSpace(strings.Join(rest, " ")); initial == "" {
+				return errors.New("-q: empty prompt")
+			}
+		}
+		return runTUI(ctx, cfg, statePath, client, registry, apiKey, initial)
 	}
 
 	prompt, err := readPrompt(rest)
@@ -230,13 +244,14 @@ func start() error {
 
 // splitWorkdirArg resolves the sandbox root: an explicit -dir flag wins,
 // otherwise a single positional directory is taken as the workdir in TUI
-// mode (where positionals carry no prompt). Headless prompts are never
-// stolen: -p "..." keeps its args unless -dir is given.
-func splitWorkdirArg(dirFlag string, args []string, tuiMode bool) (string, []string) {
+// mode (where positionals carry no prompt). Headless prompts and -q's
+// prompt are never stolen: -p "..." / -q "..." keep their args unless
+// -dir is given.
+func splitWorkdirArg(dirFlag string, args []string, stealDir bool) (string, []string) {
 	if strings.TrimSpace(dirFlag) != "" {
 		return dirFlag, args
 	}
-	if tuiMode && len(args) > 0 {
+	if stealDir && len(args) > 0 {
 		if fi, err := os.Stat(args[0]); err == nil && fi.IsDir() {
 			return args[0], args[1:]
 		}

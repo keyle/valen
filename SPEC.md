@@ -598,6 +598,7 @@ go run .                              # fullscreen TUI (ctrl+h for keys)
 go run . ~/Code/something             # TUI rooted at another folder
 go run . -dir ~/Code/something        # same, explicit (also works headless)
 go run . -p "..."                     # one-shot answer on stdout
+go run . -q "..."                     # start the TUI and run the prompt immediately
 go run . -config other.toml < prompt.txt   # headless via pipe
 go run . -p "..." -plan               # one-shot plan: read-only, reply is the plan
 go run . -p "..." -dv 2> trace.log     # timestamped round/tool/size trace

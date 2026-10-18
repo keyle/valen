@@ -54,6 +54,7 @@ export OPENROUTER_API_KEY=...    # OpenRouter
 ```sh
 valen                       # TUI in the current directory
 valen -p "explain main.go"  # one-shot
+valen -q "explain main.go"  # TUI, runs the prompt immediately
 valen -plan                 # read-only plan mode
 valen -dir ~/proj           # set the working directory
 ```

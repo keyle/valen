@@ -322,6 +322,9 @@ switch.
 Entry point: `main()` keeps flag parsing; if `stdin`/`stdout` are TTYs and
 `-p` was not given, it builds config/registry/MCP once and runs the Bubble
 Tea program with alt screen; otherwise it falls back to one-shot `chat()`.
+`-q "<prompt>"` forces the TUI (stdout must be a TTY) and stashes the prompt
+on `tuiModel.initialPrompt`, which `Init` submits once so the turn starts as
+soon as the UI comes up; the positional arg is the prompt, never a workdir.
 
 ## History & recall
 

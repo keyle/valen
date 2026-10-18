@@ -210,6 +210,20 @@ func TestTUIInputBlinkOffAndHeight(t *testing.T) {
 	}
 }
 
+func TestTUIInitRunsInitialPrompt(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.initialPrompt = "do the thing"
+	if cmd := m.Init(); cmd == nil {
+		t.Fatal("Init returned nil cmd")
+	}
+	if m.initialPrompt != "" {
+		t.Fatalf("initialPrompt not cleared: %q", m.initialPrompt)
+	}
+	if !m.busy || m.pendingPrompt != "do the thing" {
+		t.Fatalf("initial prompt not submitted: busy=%v pending=%q", m.busy, m.pendingPrompt)
+	}
+}
+
 func TestLoadConfigInputTable(t *testing.T) {
 	cfg, err := loadConfig(writeConfig(t, "model = \"m\"\n[input]\nblink = false\nheight = 5\n"))
 	if err != nil {

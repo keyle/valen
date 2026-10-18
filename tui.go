@@ -326,20 +326,23 @@ type compactDoneMsg struct {
 }
 
 type tuiModel struct {
-	cfg        Config
-	statePath  string
-	client     *openai.Client
-	registry   *Registry
-	session    *Session
-	history    []openai.ChatCompletionMessage
-	apiKey     string
-	httpClient *http.Client
-	goUsage    *GoUsage
-	orCredits  *ORCredits
-	orMeta     *ORMeta              // last OpenRouter turn's serving metadata
-	orPricing  map[string]orPricing // catalog per-token prices, keyed by stored model ID
-	orSpent    float64              // cumulative billed cost across the session
-	orSpentSet bool                 // a turn reported cost at least once
+	cfg       Config
+	statePath string
+	// initialPrompt is a one-shot prompt (-q) submitted on the first Init and
+	// then cleared, so the turn starts as soon as the TUI comes up.
+	initialPrompt string
+	client        *openai.Client
+	registry      *Registry
+	session       *Session
+	history       []openai.ChatCompletionMessage
+	apiKey        string
+	httpClient    *http.Client
+	goUsage       *GoUsage
+	orCredits     *ORCredits
+	orMeta        *ORMeta              // last OpenRouter turn's serving metadata
+	orPricing     map[string]orPricing // catalog per-token prices, keyed by stored model ID
+	orSpent       float64              // cumulative billed cost across the session
+	orSpentSet    bool                 // a turn reported cost at least once
 
 	viewport viewport.Model
 	// vpContent is the exact string handed to the viewport by the last
@@ -530,6 +533,13 @@ func (m *tuiModel) Init() tea.Cmd {
 		cmds = append(cmds, c)
 	}
 	cmds = append(cmds, usageTick())
+	if m.initialPrompt != "" {
+		p := m.initialPrompt
+		m.initialPrompt = ""
+		if c := m.submit(p); c != nil {
+			cmds = append(cmds, c)
+		}
+	}
 	return tea.Batch(cmds...)
 }
 
@@ -658,7 +668,7 @@ func (m *tuiModel) cancelRun() {
 	}
 }
 
-func runTUI(ctx context.Context, cfg Config, statePath string, client *openai.Client, registry *Registry, apiKey string) error {
+func runTUI(ctx context.Context, cfg Config, statePath string, client *openai.Client, registry *Registry, apiKey, initialPrompt string) error {
 	session, err := newSession(cfg)
 	if err != nil {
 		return fmt.Errorf("session: %w", err)
@@ -667,6 +677,7 @@ func runTUI(ctx context.Context, cfg Config, statePath string, client *openai.Cl
 	m := newTUIModel(cfg, client, registry, session)
 	m.ctx = ctx
 	m.statePath = statePath
+	m.initialPrompt = initialPrompt
 	m.apiKey = effectiveOpenCodeKey(cfg, apiKey)
 	m.cfg.OpenRouterKey = effectiveOpenRouterKey(cfg)
 	if m.apiKey == "" && m.client == nil {
