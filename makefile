@@ -36,5 +36,5 @@ tag:
 
 install: prod
 	@mkdir -p /usr/local/bin
-	install -m755 bin/valen /usr/local/bin/.
+	sudo install -m755 bin/valen /usr/local/bin/.
 
