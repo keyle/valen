@@ -14,6 +14,7 @@ import (
 // modifier-newline keys (shift+enter / alt+enter / ctrl+j).
 func (m *tuiModel) insertInputNewline() {
 	m.input.InsertRune('\n')
+	m.closeFilePicker()
 	m.dismissTransientNotice()
 }
 
@@ -212,6 +213,7 @@ func (m *tuiModel) flushMouseHold() {
 		if m.input.Value() != before {
 			m.dismissTransientNotice()
 		}
+		m.refreshFilePickerChoices()
 	}
 }
 
@@ -253,6 +255,9 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	s := msg.String()
+	if handled, cmd := m.filePickerKey(s); handled {
+		return m, cmd
+	}
 
 	// Global: cancel / quit.
 	switch s {
@@ -392,6 +397,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.input.SetValue("")
+		m.closeFilePicker()
 		cmd := m.submit(text) // consumes m.retrying
 		m.retrying = false
 		if cmd == nil {
@@ -426,11 +432,11 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		li := m.input.LineInfo()
 		if s == "up" && m.input.Line() == 0 && li.RowOffset == 0 {
 			m.input.SetCursor(0)
-			return m, nil
+			return m, m.syncFilePicker()
 		}
 		if s == "down" && m.input.Line() == m.input.LineCount()-1 && li.RowOffset >= li.Height-1 {
 			m.input.CursorEnd()
-			return m, nil
+			return m, m.syncFilePicker()
 		}
 		var icmd tea.Cmd
 		before := m.input.Value()
@@ -438,7 +444,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.input.Value() != before {
 			m.dismissTransientNotice()
 		}
-		return m, icmd
+		return m, tea.Batch(icmd, m.syncFilePicker())
 	default:
 		var icmd tea.Cmd
 		before := m.input.Value()
@@ -449,7 +455,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.input.Value() == "" {
 			m.retrying = false
 		}
-		return m, icmd
+		return m, tea.Batch(icmd, m.syncFilePicker())
 	}
 }
 

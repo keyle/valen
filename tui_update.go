@@ -481,6 +481,24 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case usageTickMsg:
 		return m, tea.Batch(m.fetchQuotaCmd(), usageTick())
 
+	case fileIndexMsg:
+		if msg.root != getFileRoot() {
+			// Workdir changed under the walk: drop the stale index so the
+			// next keystroke starts a fresh one.
+			m.fileIndex, m.fileIndexReady, m.fileIndexLoading = nil, false, false
+			return m, nil
+		}
+		m.fileIndex = msg.entries
+		m.fileIndexReady = true
+		m.fileIndexTrunc = msg.truncated
+		m.fileIndexLoading = false
+		m.fileIndexAt = time.Now()
+		if m.files.open {
+			m.filterFileChoices()
+			m.syncFilePickerHeight()
+		}
+		return m, nil
+
 	case modelsRefreshMsg:
 		if m.mode != viewModels || msg.filter != m.modelLoadFilter {
 			return m, nil // picker closed or replaced; the next open reschedules
@@ -569,6 +587,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			picks[i] = map[int]bool{}
 		}
 		m.ask = &askState{qs: msg.qs, reply: msg.reply, picks: picks, ownText: make([]string, len(msg.qs)), phase: "pick"}
+		m.closeFilePicker()
 		m.mode = viewAsk
 		if m.askSince.IsZero() {
 			m.askSince = time.Now()
@@ -613,6 +632,9 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.history[0].Content = effectiveSystem(m.cfg)
 		}
 		m.busy = false
+		// The turn may have written files: refresh the picker index lazily.
+		m.fileIndexAt = time.Time{}
+		fcmd := m.syncFilePicker()
 		m.pendingPrompt = ""
 		m.orMeta = msg.orMeta
 		if msg.hasTurnCost {
@@ -642,9 +664,9 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pinBottom()
 		if msg.err != nil && isCancel(msg.err) {
 			// The user stopped it themselves: no bell.
-			return m, m.fetchQuotaCmd()
+			return m, tea.Batch(fcmd, m.fetchQuotaCmd())
 		}
-		return m, tea.Batch(m.fetchQuotaCmd(), m.dingCmd())
+		return m, tea.Batch(fcmd, m.fetchQuotaCmd(), m.dingCmd())
 
 	case compactDoneMsg:
 		m.busy = false

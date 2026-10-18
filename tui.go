@@ -417,6 +417,15 @@ type tuiModel struct {
 	detailTitle string
 	detailBody  string
 
+	// files is the @ file picker anchored above the chatbox; fileIndex is
+	// its capped workdir walk (see tui_files.go).
+	files            filePicker
+	fileIndex        fileEntries
+	fileIndexReady   bool
+	fileIndexTrunc   bool
+	fileIndexLoading bool
+	fileIndexAt      time.Time
+
 	modelCatalog    []modelChoice
 	modelChoices    []modelChoice
 	modelFilter     string
@@ -546,6 +555,7 @@ func (m *tuiModel) Init() tea.Cmd {
 func (m *tuiModel) clearInput() {
 	m.input.SetValue("")
 	m.retrying = false
+	m.closeFilePicker()
 }
 
 // dismissTransientNotice restores the turns/token status row after an
@@ -565,6 +575,7 @@ func (m *tuiModel) recallLastPrompt() bool {
 	}
 	m.input.SetValue(m.session.Turns[len(m.session.Turns)-1].Prompt)
 	m.input.CursorEnd()
+	m.closeFilePicker()
 	m.retrying = true
 	m.notice = "Editing previous prompt — enter resends from there, esc clears."
 	m.noticeErr = false
@@ -637,6 +648,9 @@ func (m *tuiModel) show(mode viewMode) {
 	}
 	if mode == viewDetail {
 		m.prevMode = m.mode
+	}
+	if mode != viewChat {
+		m.closeFilePicker()
 	}
 	m.mode = mode
 	m.cursor = 0

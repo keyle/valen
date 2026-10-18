@@ -124,7 +124,7 @@ func (m *tuiModel) viewportHeight() int {
 	if m.height == 0 {
 		return m.viewport.Height
 	}
-	h := m.height - 6 - m.input.Height()
+	h := m.height - 6 - m.input.Height() - m.filePickerHeight()
 	if m.isPickerMode() {
 		h = m.height - 2 // header + status
 	}

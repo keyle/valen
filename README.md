@@ -12,6 +12,7 @@ models and runs the tool loop locally.
 ## Features
 
 - Terminal UI (Bubble Tea) and headless `-p` mode
+- `@` fuzzy picker for workdir files and folders, including subfolders
 - Tools: `shell`, `read`, `write`, `edit`, `glob`, `grep`, `web_search`,
   `web_fetch`, plus todos and questions
 - Stdio MCP servers

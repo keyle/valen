@@ -93,6 +93,9 @@ func (m *tuiModel) View() string {
 		vp = m.highlightSelection(vp)
 	}
 	parts := []string{header, vp, status}
+	if p := m.filePickerView(); p != "" {
+		parts = append(parts, p)
+	}
 	// The picker views (sessions and models) are navigation surfaces: the
 	// chatbox and quota footer don't apply there, but the ready/working
 	// status stays so the session state remains visible.

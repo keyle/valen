@@ -481,6 +481,7 @@ func helpBody() string {
 		{"ctrl+q", "quit"},
 		{"ctrl+c · ctrl+d", "cancel the turn · quit"},
 		{"ctrl+f", "filter in the model picker"},
+		{"@", "file picker — type to fuzzy-match files and folders, ↑↓ move, enter inserts @path, esc closes"},
 		{"alt+1…alt+0", "jump to a favourite slot"},
 		{"alt+shift+1…0", "save model+thinking+routing to a slot"},
 	}))

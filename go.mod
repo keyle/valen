@@ -11,6 +11,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/mark3labs/mcp-go v1.1.1
+	github.com/sahilm/fuzzy v0.1.1
 	github.com/sashabaranov/go-openai v1.43.0
 	golang.org/x/net v0.59.0
 )

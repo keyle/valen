@@ -378,6 +378,25 @@ soon as the UI comes up; the positional arg is the prompt, never a workdir.
 - Transcript, thinking, question and detail content wraps to the viewport
   width (long single tokens are force-broken) so nothing runs off-screen.
 
+## File references (`@` picker)
+
+Typing `@` at the start of a word opens an inline dropdown above the chatbox.
+The query is everything between `@` and the cursor, matched with fzf-style
+subsequence scoring (`github.com/sahilm/fuzzy`) over full relative paths, so
+`notes` finds `src/deep/notes.txt` and queries may span folders. The walk is
+recursive from the workdir, skips dependency/build dirs (`skippedDir`) and
+secret `.env` names, caps at 20,000 entries, and is cached for 10 seconds or
+until the next completed turn. Files and folders are listed together; a
+folder carries a trailing `/` and can be inserted on its own.
+
+↑↓ move (wrapping), Enter replaces the whole `@…` token with
+`@relative/path ` and places the caret after it, Esc closes the dropdown and
+keeps the text. Spaces are escaped as `\ ` so the token stays one word.
+The dropdown reopens when the cursor moves back into an existing token and
+closes on newline, submit, cursor exit, or leaving the chat view. This is a
+reference token only: the agent sees `@path` and uses `read`/`glob`/`grep`;
+attachments (inlining bytes) remain the separate TODO track.
+
 ## Model switching
 
 - `/model` (ctrl+p, or ctrl+m where the terminal sends disambiguated ctrl+m)
@@ -484,6 +503,7 @@ the full height, starts at its heading and scrolls to follow the selected option
 | x | — | slots view: unbind the selected slot |
 | Ctrl+B | toggle status details | toggle status details |
 | Ctrl+P / Ctrl+M | model picker | model picker |
+| `@` | file picker: ↑↓ move, Enter inserts `@path`, Esc closes | — |
 | Ctrl+S | favourite slots view | favourite slots view |
 | Ctrl+Q | quit | quit |
 | ↑↓ / j/k | textarea cursor (PgUp scrolls); ↑ on an empty box recalls the last prompt | move selection (view scrolls to follow) |

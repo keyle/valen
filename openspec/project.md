@@ -21,6 +21,7 @@ Single-binary Go agent harness. No server/client split, everything in-process in
   reasoning then old turns, keeps prompts/tools; `0` disables),
   `32768`-byte cap on the sideloaded `~/.config/valen/AGENTS.md`,
   `100` grep matches, `1MiB/512KiB` search/fetch caps, `8000` fetch runes,
+  `@` file picker index `20000` entries / `200` fuzzy choices / `8` visible rows,
   `16384` output tokens default on all three transports (positive explicit
   overrides honored, no floor). Keep compaction caps: `15k` soft whole-turn
   tail target, entire current turn protected, `10%` buffer, early threshold
