@@ -412,7 +412,7 @@ shows the tokens, not the bytes.
   re-derived from the textarea on every keystroke:
   `attach: [img-1] 1280x720 84 KiB · [shot.png] 12 KiB`. Backspace deletes
   text only, so a chip disappears with its token before submit. Submit,
-  `/clear`, `/new`, ctrl+c on a non-empty box and esc all reset the composer.
+  `/clear`, `/new` and ctrl+c on a non-empty box all reset the composer.
 - **Tokens.** Clipboard images get `[img-1]`, `[img-2]`, … (numbered per
   composer). Pasted files inside the workdir get `[basename]`, duplicates
   `[name-2.png]`; a drop from outside keeps its full path
@@ -526,7 +526,7 @@ the full height, starts at its heading and scrolls to follow the selected option
 | Key | Chat | Overlays (history/sessions/tools/errors/slots/help/detail) |
 | --- | --- | --- |
 | Enter | send turn | open selected row / resume session |
-| Esc | cancel run / clear input / back | back to chat |
+| Esc | cancel run / back | back to chat |
 | Ctrl+C / Ctrl+D | cancel (busy) / quit (idle) | quit |
 | Ctrl+J / Alt+Enter / Shift+Enter | newline in input (shift+enter where the terminal supports it) | — |
 | PgUp/PgDn / wheel | scroll transcript (pauses autoscroll until back at bottom; clears any selection) | scroll view |

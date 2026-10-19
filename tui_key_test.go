@@ -514,6 +514,15 @@ func TestTUITransientNoticeClearsOnTyping(t *testing.T) {
 	}
 }
 
+func TestTUIEscKeepsTypedText(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.input.SetValue("half-written prompt")
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := m.input.Value(); got != "half-written prompt" {
+		t.Fatalf("esc must not clear the chatbox: %q", got)
+	}
+}
+
 func TestTUIEscTwiceCancels(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	cancelled := 0

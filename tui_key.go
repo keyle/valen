@@ -323,10 +323,6 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.show(viewChat)
 			return m, nil
 		}
-		if m.input.Value() != "" {
-			m.clearInput()
-			return m, nil
-		}
 		return m, nil
 	}
 

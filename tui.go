@@ -583,7 +583,7 @@ func (m *tuiModel) recallLastPrompt() bool {
 	m.input.CursorEnd()
 	m.closeFilePicker()
 	m.retrying = true
-	m.notice = "Editing previous prompt — enter resends from there, esc clears."
+	m.notice = "Editing previous prompt — enter resends from there, ctrl+c clears."
 	m.noticeErr = false
 	return true
 }

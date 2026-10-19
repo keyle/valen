@@ -461,7 +461,7 @@ func helpBody() string {
 		{"enter", "send the prompt"},
 		{"shift+enter · alt+enter · ctrl+j", "insert a newline"},
 		{"tab", "switch work/plan mode (cyan box = plan)"},
-		{"esc", "cancel the turn, clear input, or go back"},
+		{"esc", "cancel the turn or go back"},
 		{"↑ ↓", "move in lists"},
 		{"↑ (empty chatbox)", "reload the last prompt"},
 		{"pgup · pgdn · wheel", "scroll (wheel/pgup pauses autoscroll until you reach the bottom)"},
