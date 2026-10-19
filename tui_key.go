@@ -548,6 +548,10 @@ func (m *tuiModel) handleOverlayKey(msg tea.KeyMsg, s string) (tea.Model, tea.Cm
 		m.unbindSelectedSlot()
 		return m, nil
 	}
+	if m.mode == viewSessions && s == "x" {
+		m.deleteSelectedSession()
+		return m, nil
+	}
 	switch s {
 	case "q":
 		m.show(viewChat)

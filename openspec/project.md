@@ -20,6 +20,7 @@ Single-binary Go agent harness. No server/client split, everything in-process in
   text/thinking tails, exact delta concatenation, ~60ms render throttle,
   committed-scrollback line budget `[tui] max_lines` default `1000` (trims
   reasoning then old turns, keeps prompts/tools; `0` disables),
+  saved-session budget `saved_sessions` default `50` per project folder,
   `32768`-byte cap on the sideloaded `~/.config/valen/AGENTS.md`,
   `100` grep matches, `1MiB/512KiB` search/fetch caps, `8000` fetch runes,
   `@` file picker index `20000` entries / `200` fuzzy choices / `8` visible rows,

@@ -339,7 +339,9 @@ soon as the UI comes up; the positional arg is the prompt, never a workdir.
   folder per working directory, so projects never share a session list).
 - History view: one row per turn (time, prompt snippet, tokens) plus older
   saved session files read-only. Sessions view (Ctrl+L): every saved session
-  of this working folder with its title (first prompt, 60 runes), model/effort, turn count — Enter
+  of this working folder: fixed datetime/model/turn columns with the title
+  (first prompt, 60 runes) taking the remaining view width, model name as the
+  last `/` segment with no thinking level — Enter
   resumes it (latest `Turn.History` checkpoint plus later legacy turns, same
   file continues). Esc backs to the current session without arming the cancel
   confirm, so browsing sessions never counts toward stopping a running turn.

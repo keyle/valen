@@ -421,6 +421,10 @@ type tuiModel struct {
 	cursor      int
 	detailTitle string
 	detailBody  string
+	// sessionCache backs the sessions overlay so cursor moves re-render from
+	// memory instead of rescanning every JSONL on disk; reloaded when the
+	// view opens and after a delete.
+	sessionCache []sessionItem
 
 	// files is the @ file picker anchored above the chatbox; fileIndex is
 	// its capped workdir walk (see tui_files.go).
@@ -660,6 +664,9 @@ func (m *tuiModel) show(mode viewMode) {
 	}
 	m.mode = mode
 	m.cursor = 0
+	if mode == viewSessions {
+		m.sessionCache = m.loadSessionItems()
+	}
 	m.clearSelection()
 	m.viewport.Height = m.viewportHeight()
 	if mode == viewChat {

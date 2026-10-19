@@ -74,6 +74,9 @@ type Session struct {
 	Title      string
 	Model      string
 	Effort     string
+	// Keep bounds this project folder's saved sessions; the first append of
+	// a brand-new file prunes the oldest so the budget including it holds.
+	Keep int
 }
 
 // sessionsDir is the per-project session folder: sessions/<base>-<hash of the
@@ -107,7 +110,8 @@ func newSession(cfg Config) (*Session, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	s := &Session{ID: cfg.SessionID, Path: filepath.Join(dir, cfg.SessionID+".jsonl")}
+	_ = pruneSessions(savedSessions(cfg))
+	s := &Session{ID: cfg.SessionID, Path: filepath.Join(dir, cfg.SessionID+".jsonl"), Keep: savedSessions(cfg)}
 	if meta, err := loadSessionMeta(metaPath(s.Path)); err == nil {
 		s.Title, s.Model, s.Effort = meta.Title, meta.Model, meta.Effort
 	}
@@ -211,6 +215,14 @@ func (s *Session) append(t Turn) error {
 	s.TotalUsage.Prompt += t.Usage.Prompt
 	s.TotalUsage.Completion += t.Usage.Completion
 	s.TotalUsage.Total += t.Usage.Total
+	// A brand-new session file adds one to the folder's count, so prune
+	// before creating it and keep the configured budget including it. Blank
+	// /new sessions never touch disk and so never prune.
+	if s.Keep > 0 {
+		if _, err := os.Stat(s.Path); os.IsNotExist(err) {
+			_ = pruneSessions(s.Keep - 1)
+		}
+	}
 	f, err := os.OpenFile(s.Path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -278,4 +290,35 @@ func listSessions() ([]string, error) {
 		out = append(out, f.path)
 	}
 	return out, nil
+}
+
+// pruneSessions deletes all but the newest keep session logs (and their
+// sidecars) in the current project folder.
+func pruneSessions(keep int) error {
+	if keep <= 0 {
+		return nil
+	}
+	paths, err := listSessions()
+	if err != nil {
+		return err
+	}
+	if len(paths) <= keep {
+		return nil
+	}
+	for _, p := range paths[keep:] {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		_ = os.Remove(metaPath(p))
+	}
+	return nil
+}
+
+// deleteSessionFiles removes one session log and its metadata sidecar.
+func deleteSessionFiles(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	_ = os.Remove(metaPath(path))
+	return nil
 }

@@ -489,6 +489,52 @@ func TestTUISlotsView(t *testing.T) {
 	}
 }
 
+func TestSessionsViewDeletesSelected(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	old, err := newSession(Config{SessionID: "ses-old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := old.append(Turn{Prompt: "old work"}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	keep, err := newSession(Config{SessionID: "ses-keep"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := keep.append(Turn{Prompt: "keep work"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveSessionMeta(metaPath(old.Path), SessionMeta{Title: "old work"}); err != nil {
+		t.Fatal(err)
+	}
+
+	m.show(viewSessions)
+	items := m.sessionItems()
+	if len(items) != 2 || items[0].path != keep.Path {
+		t.Fatalf("sessions=%+v", items)
+	}
+	m.cursor = 1
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+
+	if _, err := os.Stat(old.Path); !os.IsNotExist(err) {
+		t.Fatalf("selected session file must be deleted: %v", err)
+	}
+	if _, err := os.Stat(metaPath(old.Path)); !os.IsNotExist(err) {
+		t.Fatalf("selected session meta must be deleted: %v", err)
+	}
+	if _, err := os.Stat(keep.Path); err != nil {
+		t.Fatalf("other session must survive: %v", err)
+	}
+	if m.mode != viewSessions || len(m.sessionItems()) != 1 {
+		t.Fatalf("list not refreshed: mode=%v n=%d", m.mode, len(m.sessionItems()))
+	}
+	if !strings.Contains(m.notice, "Deleted session old work") || m.noticeErr {
+		t.Fatalf("notice=%q err=%v", m.notice, m.noticeErr)
+	}
+}
+
 func TestSlotsRoundTrip(t *testing.T) {
 	p := filepath.Join(t.TempDir(), userSlotsName)
 	if err := os.WriteFile(p, []byte("# mine\n1: \"glm-5.3\" high # fast\n0: openrouter/x/y\nbad\nz: a\n"), 0o600); err != nil {

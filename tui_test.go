@@ -115,14 +115,20 @@ func TestTUISessionsListShowsTitlesAndResumes(t *testing.T) {
 		}
 		s.ensureMeta(model, effort)
 	}
-	mk("ses-alpha", "fix the login redirect bug on retry", "glm-5.3", "high")
+	mk("ses-alpha", "fix the login redirect bug on retry", "openrouter/z-ai/glm-5.3", "high")
 	mk("ses-beta", "second session prompt here", "kimi-k3", "max")
 
+	m.viewport.Width = 160 // contentWidth 120: room for full title + model
 	m.show(viewSessions)
 	text := m.renderSessionsList()
-	for _, want := range []string{"fix the login redirect bug", "second session prompt", "glm-5.3", "high", "kimi-k3"} {
+	for _, want := range []string{"fix the login redirect bug", "second session prompt", "glm-5.3", "kimi-k3"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sessions list missing %q:\n%s", want, text)
+		}
+	}
+	for _, unwanted := range []string{"openrouter/", "high", "max"} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("sessions list should not show %q:\n%s", unwanted, text)
 		}
 	}
 	items := m.sessionItems()

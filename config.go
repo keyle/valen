@@ -17,6 +17,9 @@ const (
 	defaultMaxRounds             = 300
 	defaultMaxTokens             = 16384
 	defaultRequestTimeoutSeconds = 300
+	// defaultSavedSessions bounds saved JSONL sessions per project folder; the
+	// oldest are pruned when a new session starts.
+	defaultSavedSessions = 50
 	// defaultMaxContextTokens is the fail-fast ceiling for models with no
 	// known window (see modelContextWindow): stateless transports resend
 	// all of history every round, so burn compounds as rounds × history.
@@ -69,6 +72,7 @@ type Config struct {
 	OpenCodeKey           string `toml:"opencode_key"`
 	OpenRouterKey         string `toml:"openrouter_key"`
 	SessionID             string `toml:"session_id"`
+	SavedSessions         int    `toml:"saved_sessions"`
 	System                string `toml:"system"`
 	MaxRounds             int    `toml:"max_rounds"`
 	MaxContextTokens      int    `toml:"max_context_tokens"`
@@ -121,6 +125,14 @@ type TUIConfig struct {
 	// SelectScrollMs paces the drag auto-scroll: one viewport line per
 	// interval. <= 0 means the 50ms default.
 	SelectScrollMs int `toml:"select_scroll_ms"`
+}
+
+// savedSessions is the saved-session budget per project folder, default 50.
+func savedSessions(cfg Config) int {
+	if cfg.SavedSessions <= 0 {
+		return defaultSavedSessions
+	}
+	return cfg.SavedSessions
 }
 
 // defaultSelectScrollMs paces the transcript selection drag auto-scroll.
@@ -249,6 +261,7 @@ func loadConfig(path string) (Config, error) {
 	if cfg.SessionID == "" {
 		cfg.SessionID = newSessionID()
 	}
+	cfg.SavedSessions = savedSessions(cfg)
 	for _, s := range cfg.MCPServers {
 		if s.Name == "" || s.Cmd == "" {
 			return cfg, errors.New("mcp server requires name and cmd")

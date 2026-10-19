@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -144,5 +145,71 @@ func TestListSessionsScopedToWorkdir(t *testing.T) {
 	setFileRoot(a)
 	if paths, _ := listSessions(); len(paths) != 1 {
 		t.Fatalf("project a lost its session: %v", paths)
+	}
+}
+
+func TestSessionsPruneToMax(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	dir, err := sessionsDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().Add(-time.Hour)
+	var paths []string
+	for i := 0; i < 6; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("ses-%d.jsonl", i))
+		if err := os.WriteFile(p, []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(metaPath(p), []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		mt := base.Add(time.Duration(i) * time.Minute)
+		if err := os.Chtimes(p, mt, mt); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, p)
+	}
+
+	s, err := newSession(Config{SessionID: "ses-new", SavedSessions: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := listSessions(); len(got) != 4 {
+		t.Fatalf("after newSession want 4 sessions, got %v", got)
+	}
+	if err := s.append(Turn{Prompt: "new"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := listSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 || filepath.Base(got[0]) != "ses-new.jsonl" {
+		t.Fatalf("after append want the new session plus 3 old, got %v", got)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := os.Stat(paths[i]); !os.IsNotExist(err) {
+			t.Fatalf("old session %s must be pruned", paths[i])
+		}
+		if _, err := os.Stat(metaPath(paths[i])); !os.IsNotExist(err) {
+			t.Fatalf("old session meta %s must be pruned", metaPath(paths[i]))
+		}
+	}
+	if _, err := os.Stat(paths[3]); err != nil {
+		t.Fatalf("recent session %s must survive: %v", paths[3], err)
+	}
+}
+
+func TestSavedSessionsDefaultsTo50(t *testing.T) {
+	cfg, err := loadConfig(writeConfig(t, "model = \"kimi-k3\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SavedSessions != defaultSavedSessions {
+		t.Fatalf("saved_sessions=%d, want %d", cfg.SavedSessions, defaultSavedSessions)
 	}
 }

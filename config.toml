@@ -34,6 +34,9 @@ openrouter_key = ""
 # (recent flagships while offline). A send without a key reports
 # "OpenRouter key not found" instead of failing boot.
 # session_id = "ses-stable-id"   # optional, generated per run when omitted
+# saved_sessions = 50             # saved sessions kept per project folder;
+                                # the oldest are pruned when a new session
+                                # starts (0 or less uses the default 50).
 
 # Prompt files are built in per model family. Add your own standing
 # instructions in ~/.config/valen/AGENTS.md; the project's ./AGENTS.md is

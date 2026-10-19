@@ -126,9 +126,21 @@ func (m *tuiModel) renderToolsList() string {
 	}
 	return b.String()
 }
+
+// sessionItems returns the cached sessions list, loading it on first use.
 func (m *tuiModel) sessionItems() []sessionItem {
+	if m.sessionCache == nil {
+		m.sessionCache = m.loadSessionItems()
+	}
+	return m.sessionCache
+}
+
+// loadSessionItems rescans the project's session folder, reading each JSONL
+// for its title and turn count. It runs when the view opens and after deletes,
+// never on cursor moves.
+func (m *tuiModel) loadSessionItems() []sessionItem {
 	paths, _ := listSessions()
-	var items []sessionItem
+	items := []sessionItem{}
 	for _, p := range paths {
 		info, err := os.Stat(p)
 		if err != nil {
@@ -164,6 +176,34 @@ func (m *tuiModel) sessionItems() []sessionItem {
 		items = append(items, it)
 	}
 	return items
+}
+
+// deleteSelectedSession removes the session log at the sessions-view cursor
+// and refreshes the list. The live conversation keeps its in-memory turns; a
+// later turn recreates the file if the current session was the one deleted.
+func (m *tuiModel) deleteSelectedSession() {
+	items := m.sessionItems()
+	if m.cursor < 0 || m.cursor >= len(items) {
+		return
+	}
+	it := items[m.cursor]
+	if err := deleteSessionFiles(it.path); err != nil {
+		m.notice = "Could not delete session: " + err.Error()
+		m.noticeErr = true
+		m.refreshViewport()
+		return
+	}
+	label := it.title
+	if label == "" {
+		label = strings.TrimSuffix(filepath.Base(it.path), ".jsonl")
+	}
+	m.notice = "Deleted session " + label + "."
+	m.noticeErr = false
+	m.sessionCache = m.loadSessionItems()
+	if n := len(items) - 1; n > 0 && m.cursor >= n {
+		m.cursor = n - 1
+	}
+	m.refreshViewport()
 }
 
 // resumeSessionPath loads path into the current TUI state: turns become the
@@ -568,6 +608,15 @@ func renderSessionFileText(m *tuiModel, path string) string {
 	return b.String()
 }
 
+// padCell fits s into a fixed display-width column, truncating with an
+// ellipsis and padding with spaces so later columns line up.
+func padCell(s string, w int) string {
+	if lipgloss.Width(s) > w {
+		s = truncateRunes(s, w-1)
+	}
+	return s + strings.Repeat(" ", max(0, w-lipgloss.Width(s)))
+}
+
 func (m *tuiModel) renderSessionsList() string {
 	items := m.sessionItems()
 	if len(items) == 0 {
@@ -580,20 +629,33 @@ func (m *tuiModel) renderSessionsList() string {
 		m.cursor = len(items) - 1
 	}
 	var b strings.Builder
-	b.WriteString(metaStyle.Render("Sessions — enter resumes · esc back") + "\n\n")
+	b.WriteString(metaStyle.Render("Sessions — enter resumes · x deletes · esc back") + "\n\n")
 	cw := m.contentWidth()
+	// Fixed columns: index, datetime, model, turns, current marker and the
+	// four two-space gaps. The title takes the remaining view width.
+	const (
+		modelCol  = 26
+		turnsCol  = 5
+		markerCol = 10
+	)
+	titleCol := cw - (2 + 8 + 11 + modelCol + turnsCol + markerCol)
+	if titleCol < 8 {
+		titleCol = 8
+	}
 	for i, it := range items {
 		tag := it.model
-		if it.effort != "" {
-			tag += " · " + it.effort
+		if i := strings.LastIndex(tag, "/"); i >= 0 {
+			tag = tag[i+1:]
 		}
-		line := fmt.Sprintf("%2d  %s  %s", i+1, it.when.Format("01-02 15:04"), it.title)
 		if tag != "" {
-			line += "  [" + tag + "]"
+			tag = "[" + tag + "]"
 		}
+		turns := ""
 		if it.turns > 0 {
-			line += fmt.Sprintf("  (%d)", it.turns)
+			turns = fmt.Sprintf("(%d)", it.turns)
 		}
+		line := fmt.Sprintf("%2d  %s  %s  %s  %*s", i+1, it.when.Format("01-02 15:04"),
+			padCell(it.title, titleCol), padCell(tag, modelCol), turnsCol, turns)
 		cur := ""
 		if m.session != nil && it.path == m.session.Path {
 			cur = "  ● current"
