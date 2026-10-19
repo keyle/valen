@@ -224,8 +224,26 @@ func (m *tuiModel) resumeSessionPath(path string) {
 		m.session.Title, m.session.Model, m.session.Effort = meta.Title, meta.Model, meta.Effort
 	}
 	m.pendingPrompt, m.pendingText, m.pendingThinking, m.toolStatus = "", "", "", ""
+	// Restore the footer's OpenRouter metadata from the log so a resumed
+	// session looks like the turn had just finished: the last turn's provider
+	// and throughput, the cumulative billed cost, and the model's rates.
 	m.orMeta = nil
 	m.orSpent, m.orSpentSet = 0, false
+	for _, t := range turns {
+		if t.Cost != 0 {
+			m.orSpent += t.Cost
+			m.orSpentSet = true
+		}
+		if (t.InPrice != 0 || t.OutPrice != 0) && t.Model != "" {
+			if m.orPricing == nil {
+				m.orPricing = map[string]orPricing{}
+			}
+			m.orPricing[t.Model] = orPricing{prompt: t.InPrice, completion: t.OutPrice}
+		}
+	}
+	if n := len(turns); n > 0 {
+		m.orMeta = turns[n-1].ORMeta
+	}
 	m.pendingTools = nil
 	m.cancel = nil
 	m.chatCache, m.chatCacheTurns = nil, 0

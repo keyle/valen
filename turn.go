@@ -42,15 +42,15 @@ type Event struct {
 // provider that served the request, the billed cost and the latency and
 // decode throughput measured from our own stream. Any field may be absent.
 type ORMeta struct {
-	Provider string
-	Cost     float64
-	HasCost  bool
+	Provider string  `json:"provider,omitempty"`
+	Cost     float64 `json:"cost,omitempty"`
+	HasCost  bool    `json:"has_cost,omitempty"`
 	// TTFT is seconds from request send to the first streamed token (thinking
 	// or content), so it covers prefill, cache and queueing.
-	TTFT float64
+	TTFT float64 `json:"ttft,omitempty"`
 	// TPS is the decode rate over all streamed tokens: completion tokens
 	// divided by the span from first to last token.
-	TPS float64
+	TPS float64 `json:"tps,omitempty"`
 }
 
 // parseOpenRouterMeta folds the serving provider and billed cost from one

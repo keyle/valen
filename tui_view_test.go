@@ -678,6 +678,37 @@ func TestRoutingSessionCostAccumulates(t *testing.T) {
 	}
 }
 
+// TestRoutingFooterRestoredOnResume: the footer's OpenRouter details (last
+// turn's provider/TTFT/TPS, cumulative spend, and catalog rates) are persisted
+// with the session and restored when it is resumed.
+func TestRoutingFooterRestoredOnResume(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.cfg.Model = "openrouter/moonshotai/kimi-k3"
+	m.width, m.viewport.Width = 200, 200
+	m.session.Turns = nil
+	m.orPricing = map[string]orPricing{
+		m.cfg.Model: {prompt: 0.0000001, completion: 0.0000004},
+	}
+	meta := &ORMeta{Provider: "Infermatic", TTFT: 4.9, TPS: 42.4, Cost: 0.0012, HasCost: true}
+	_, _ = m.Update(turnDoneMsg{
+		prompt: "a", answer: "1", history: []openai.ChatCompletionMessage{},
+		model: m.cfg.Model, orMeta: meta, turnCost: 0.0012, hasTurnCost: true,
+	})
+	path := m.session.Path
+
+	m.orMeta = nil
+	m.orSpent, m.orSpentSet = 0, false
+	m.orPricing = nil
+	m.session.Turns = nil
+	m.resumeSessionPath(path)
+
+	for _, want := range []string{"Infermatic", "4.9s TTFT / 42 TPS", "in $0.10/out $0.40/M", "$0.0012 used"} {
+		if got := ansi.Strip(m.footerView()); !strings.Contains(got, want) {
+			t.Fatalf("resumed footer %q missing %q", got, want)
+		}
+	}
+}
+
 // TestRoutingSessionCostWithoutBalance: the session cost is measured locally,
 // so it shows even when the credits balance never landed (plain API key).
 func TestRoutingSessionCostWithoutBalance(t *testing.T) {

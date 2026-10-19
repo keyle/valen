@@ -153,7 +153,10 @@ content delta, no extra request), and the session's cumulative billed cost
 (`usage.cost` summed across turns and tool-loop rounds; shown as
 `$X.XXXX used`, four decimals below a cent, with the session scope implicit).
 The session total is measured
-locally, so it renders without a balance and resets on a new/resumed session.
+locally, so it renders without a balance. It resets on a new session and is
+restored on resume: each turn's serving metadata, billed cost and the model's
+catalog rates are written to the JSONL, so reloading a session repopulates the
+footer as if the last turn had just finished.
 
 Transport is selected per model by `modelTransport` (live Go table, Oct 2
 2026): `grok-4.x`, `gpt-*-luna` and `muse-spark-*-contributor` are

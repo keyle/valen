@@ -184,8 +184,11 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   `pricing.prompt`/`pricing.completion`; throughput is measured locally from the
   stream (completion tokens over the first-to-last content delta), so it needs
   no extra request. The session cost sums each turn's billed cost across every
-  tool-loop round, keeps four decimals below a cent, resets on a new or resumed
-  session, and — being local — shows even without a balance. Each segment is
+  tool-loop round, keeps four decimals below a cent, resets on a new session,
+  and — being local — shows even without a balance. Resuming a session restores
+  the last turn's provider/throughput, the cumulative spend and the recorded
+  rates from the JSONL, so the footer looks as it did when the turn finished.
+  Each segment is
   independently optional and the whole suffix yields to the width rule, so a
   narrow terminal or a missing field just drops that part.
 - Autoscroll follows new turns while pinned to the bottom; PgUp/PgDn or the

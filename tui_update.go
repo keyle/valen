@@ -641,6 +641,13 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			At: msg.promptAt(), Prompt: msg.prompt, Thinking: msg.thinking, Reply: msg.answer, Tools: msg.tools,
 			Usage: Usage{Prompt: msg.usage.PromptTokens, Completion: msg.usage.CompletionTokens, Total: msg.usage.TotalTokens},
 			Model: msg.model, Effort: msg.effort, Plan: msg.plan, History: msg.history,
+			ORMeta: msg.orMeta,
+		}
+		if msg.hasTurnCost {
+			turn.Cost = msg.turnCost
+		}
+		if p, ok := m.orPricing[msg.model]; ok {
+			turn.InPrice, turn.OutPrice = p.prompt, p.completion
 		}
 		if !m.pendingSince.IsZero() {
 			m.resumeTimer()

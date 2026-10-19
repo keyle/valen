@@ -46,6 +46,15 @@ type Turn struct {
 	History  []openai.ChatCompletionMessage `json:"history,omitempty"`
 	// DurMs is wall time from submit to commit, shown as e.g. "✦ thinking (1m3s)".
 	DurMs int64 `json:"dur_ms,omitempty"`
+	// ORMeta is the last OpenRouter round's serving metadata, kept so a
+	// resumed session can restore the footer exactly as it was after the turn.
+	ORMeta *ORMeta `json:"or_meta,omitempty"`
+	// Cost is the billed cost summed across every request in this turn.
+	Cost float64 `json:"cost,omitempty"`
+	// InPrice/OutPrice are the model's per-token catalog rates at turn time,
+	// stored so the footer's $/M rates survive a restart without a refetch.
+	InPrice  float64 `json:"in_price,omitempty"`
+	OutPrice float64 `json:"out_price,omitempty"`
 }
 
 // SessionMeta is the sidecar alongside the append-only JSONL: title from the
