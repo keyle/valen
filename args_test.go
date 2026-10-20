@@ -5,6 +5,20 @@ import (
 	"testing"
 )
 
+func TestReadPromptRequiresQuotedPrintPrompt(t *testing.T) {
+	if _, err := readPrompt([]string{"review", "main.go"}, true); err == nil {
+		t.Fatal("unquoted -p prompt must be rejected")
+	}
+	got, err := readPrompt([]string{"review main.go"}, true)
+	if err != nil || got != "review main.go" {
+		t.Fatalf("readPrompt(quoted) = %q, %v", got, err)
+	}
+	got, err = readPrompt([]string{"just", "a", "prompt"}, false)
+	if err != nil || got != "just a prompt" {
+		t.Fatalf("readPrompt(headless join) = %q, %v", got, err)
+	}
+}
+
 func TestReorderFlags(t *testing.T) {
 	values := map[string]bool{"config": true, "dir": true, "dvlog": true, "f": true, "file": true}
 	cases := []struct {

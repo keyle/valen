@@ -71,14 +71,6 @@ func closeAll(closers []func()) {
 	}
 }
 
-func bufioReadLine(r io.Reader) (string, error) {
-	line, err := bufio.NewReader(r).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", err
-	}
-	return line, nil
-}
-
 func newSessionID() string {
 	return fmt.Sprintf("ses-%d", time.Now().UnixNano())
 }
@@ -93,7 +85,7 @@ func main() {
 func start() error {
 	cfgPath := flag.String("config", "", "path to config (default: ~/.config/valen/config.toml, seeded on first run)")
 	dirFlag := flag.String("dir", "", "working directory: sandbox root for file tools and shell")
-	printMode := flag.Bool("p", false, "one-shot: answer the prompt and exit")
+	printMode := flag.Bool("p", false, "one-shot: answer the quoted prompt and exit")
 	qFlag := flag.Bool("q", false, "start the TUI and run the prompt immediately")
 	planFlag := flag.Bool("plan", false, "plan mode: read-only investigation, present the plan as the reply")
 	dvFlag := flag.Bool("dv", false, "debug verbose: timestamped round/tool/size trace to stderr")
@@ -151,8 +143,8 @@ func start() error {
 	qMode := *qFlag
 	// -q forces the TUI regardless of stdin (its prompt comes from the args,
 	// not a pipe), so stdout still has to be a TTY for the alt screen.
-	if qMode && !isTTY(os.Stdout) {
-		return errors.New("-q needs a terminal (stdout is not a TTY)")
+	if qMode && (!isTTY(os.Stdin) || !isTTY(os.Stdout)) {
+		return errors.New("-q needs a terminal (stdin and stdout must be TTYs)")
 	}
 	tuiMode := qMode || (!*printMode && isTTY(os.Stdin) && isTTY(os.Stdout))
 	if tuiMode && len(attachFiles) > 0 {
@@ -204,7 +196,7 @@ func start() error {
 	// Trimmed: pasted keys with stray whitespace 401 otherwise.
 	cfg.OpenRouterKey = effectiveOpenRouterKey(cfg)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), interruptSignals()...)
 	defer stop()
 
 	registry := NewRegistry()
@@ -256,7 +248,7 @@ func start() error {
 		return runTUI(ctx, cfg, statePath, client, registry, apiKey, initial)
 	}
 
-	prompt, err := readPrompt(rest)
+	prompt, err := readPrompt(rest, *printMode)
 	if err != nil {
 		return err
 	}
@@ -350,7 +342,13 @@ func newClient(cfg Config, apiKey string) *openai.Client {
 	return openai.NewClientWithConfig(oc)
 }
 
-func readPrompt(args []string) (string, error) {
+// readPrompt resolves the one-shot prompt. With printMode the prompt must be
+// a single quoted argument: -p review main.go would silently become
+// "review main.go", so reject it instead of guessing where the prompt ends.
+func readPrompt(args []string, printMode bool) (string, error) {
+	if printMode && len(args) > 1 {
+		return "", fmt.Errorf("-p: quote the prompt as one argument (got %d); e.g. -p \"review main.go\"", len(args))
+	}
 	if p := strings.TrimSpace(strings.Join(args, " ")); p != "" {
 		return p, nil
 	}
@@ -359,6 +357,9 @@ func readPrompt(args []string) (string, error) {
 		return strings.TrimSpace(string(b)), err
 	}
 	fmt.Fprint(os.Stderr, "prompt: ")
-	line, err := bufioReadLine(os.Stdin)
-	return strings.TrimSpace(line), err
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
 }

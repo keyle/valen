@@ -3,9 +3,16 @@
 package main
 
 import (
+	"os"
 	"os/exec"
 	"syscall"
 )
+
+// interruptSignals are the signals that stop a run gracefully (MCP children
+// closed, dvlog flushed). SIGTERM covers containers and plain `kill`.
+func interruptSignals() []os.Signal {
+	return []os.Signal{os.Interrupt, syscall.SIGTERM}
+}
 
 // isolateProcessGroup puts the shell in its own process group so a timeout
 // can kill the whole tree: pipeline grandchildren inherit stdout, and a

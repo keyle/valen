@@ -659,6 +659,8 @@ go run . -p "..." -vv                  # also raw analysis, answer text and tool
 ```
 
 Headless `-v`/`-vv` stream to stderr while the final answer stays on stdout.
+`-p` takes exactly one quoted argument; unquoted words are rejected rather
+than silently joined (`valen -p review main.go` is an error, not a prompt).
 `-v` shows round markers, tool calls and thinking summaries, hiding raw
 chain-of-thought when the provider sends both (`reasoning_text` vs
 `reasoning_summary_text` on `/responses`). `-vv` adds raw analysis, streamed
