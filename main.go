@@ -105,7 +105,12 @@ func start() error {
 	var attachFiles fileFlag
 	flag.Var(&attachFiles, "f", "attach a file, folder or image (repeatable, headless)")
 	flag.Var(&attachFiles, "file", "attach a file, folder or image (alias for -f)")
-	flag.Parse()
+	// flag.Parse stops at the first positional, but prompts are commonly
+	// written before trailing flags: valen -p "..." -v. Reorder so flags win
+	// regardless of position.
+	flag.CommandLine.Parse(reorderFlags(os.Args[1:], map[string]bool{
+		"config": true, "dir": true, "dvlog": true, "f": true, "file": true,
+	}))
 
 	// Resolve paths before any chdir so relative paths keep working.
 	// Default: the user config dir, seeded from the embedded default on first
@@ -269,6 +274,33 @@ func (f *fileFlag) String() string { return strings.Join(*f, ", ") }
 func (f *fileFlag) Set(v string) error {
 	*f = append(*f, v)
 	return nil
+}
+
+// reorderFlags moves flags (and the value they consume) ahead of positional
+// args so flags may follow the prompt. A literal "--" ends flag parsing.
+func reorderFlags(args []string, takesValue map[string]bool) []string {
+	var flags, positional []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		}
+		if len(a) < 2 || a[0] != '-' {
+			positional = append(positional, a)
+			continue
+		}
+		flags = append(flags, a)
+		name := strings.TrimLeft(a, "-")
+		if strings.ContainsRune(name, '=') || !takesValue[name] {
+			continue
+		}
+		if i+1 < len(args) {
+			i++
+			flags = append(flags, args[i])
+		}
+	}
+	return append(flags, positional...)
 }
 
 // splitWorkdirArg resolves the sandbox root: an explicit -dir flag wins,
