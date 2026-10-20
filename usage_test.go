@@ -184,14 +184,14 @@ func TestFetchOpenRouterCreditsHTTPError(t *testing.T) {
 
 func TestORCreditsRemainingAndFooter(t *testing.T) {
 	c := ORCredits{TotalCredits: 20, TotalUsage: 7.555}
-	if got := c.footerText(); got != "openrouter $12.45 left" {
+	if got := c.footerText(); got != "O.R. $12.45" {
 		t.Fatalf("footer text %q", got)
 	}
 	over := ORCredits{TotalCredits: 1, TotalUsage: 2}
 	if over.Remaining() != 0 {
 		t.Fatalf("over-spend must floor at zero: %v", over.Remaining())
 	}
-	if got := over.footerText(); got != "openrouter $0.00 left" {
+	if got := over.footerText(); got != "O.R. $0.00" {
 		t.Fatalf("footer text %q", got)
 	}
 }
@@ -251,14 +251,14 @@ func TestTUIFooterHidesGoUsageOnOpenRouter(t *testing.T) {
 	}
 	_, _ = m.Update(orCreditsMsg{credits: ORCredits{TotalCredits: 20, TotalUsage: 7.5}})
 	footer := m.footerView()
-	if !strings.Contains(footer, "openrouter $12.50 left") {
+	if !strings.Contains(footer, "O.R. $12.50") {
 		t.Fatalf("footer must show the balance:\n%s", footer)
 	}
 	if strings.Contains(footer, "5h") {
 		t.Fatalf("balance footer must not leak Go usage:\n%s", footer)
 	}
 	_, _ = m.Update(orCreditsMsg{err: fmt.Errorf("boom")})
-	if !strings.Contains(m.footerView(), "openrouter $12.50 left") {
+	if !strings.Contains(m.footerView(), "O.R. $12.50") {
 		t.Fatal("balance should survive a failed refresh")
 	}
 }

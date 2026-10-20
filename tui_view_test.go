@@ -662,11 +662,23 @@ func TestRoutingFooterMetadata(t *testing.T) {
 	}
 	m.orSpent, m.orSpentSet = 0.0034, true
 	got := ansi.Strip(m.footerView())
-	for _, want := range []string{"openrouter $12.34 left", "Infermatic", "4.9s TTFT / 42 TPS", "in $0.10/out $0.40/M", "$0.0034 used"} {
+	for _, want := range []string{"O.R. $12.34", "Infermatic", "4.9s TTFT / 42 TPS", "$0.0034 used"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("footer %q missing %q", got, want)
 		}
 	}
+	if strings.Contains(got, "in $0.10/out $0.40/M") {
+		t.Fatalf("rates belong in the status row, not the footer: %q", got)
+	}
+	if status := ansi.Strip(m.statusView()); !strings.Contains(status, "in $0.10/out $0.40/M") {
+		t.Fatalf("status %q missing OpenRouter rates", status)
+	}
+	// A notice takes the row: rates and totals hide until it clears.
+	m.notice = "thinking · high"
+	if status := ansi.Strip(m.statusView()); strings.Contains(status, "in $0.10/out $0.40/M") || strings.Contains(status, "turns") {
+		t.Fatalf("notice must hide totals and rates: %q", status)
+	}
+	m.notice = ""
 
 	// Segments drop independently: no provider, no catalog rates.
 	m.orMeta = &ORMeta{TPS: 42.4}
@@ -681,7 +693,7 @@ func TestRoutingFooterMetadata(t *testing.T) {
 
 	// Nothing to add leaves the plain balance.
 	m.orMeta = nil
-	if got := ansi.Strip(m.footerView()); !strings.Contains(got, "left") || strings.Contains(got, "TPS") {
+	if got := ansi.Strip(m.footerView()); !strings.Contains(got, "O.R.") || strings.Contains(got, "TPS") {
 		t.Fatalf("empty metadata footer=%q", got)
 	}
 
@@ -748,10 +760,14 @@ func TestRoutingFooterRestoredOnResume(t *testing.T) {
 	m.session.Turns = nil
 	m.resumeSessionPath(path)
 
-	for _, want := range []string{"Infermatic", "4.9s TTFT / 42 TPS", "in $0.10/out $0.40/M", "$0.0012 used"} {
+	for _, want := range []string{"Infermatic", "4.9s TTFT / 42 TPS", "$0.0012 used"} {
 		if got := ansi.Strip(m.footerView()); !strings.Contains(got, want) {
 			t.Fatalf("resumed footer %q missing %q", got, want)
 		}
+	}
+	m.notice = ""
+	if status := ansi.Strip(m.statusView()); !strings.Contains(status, "in $0.10/out $0.40/M") {
+		t.Fatalf("resumed status %q missing OpenRouter rates", status)
 	}
 }
 
@@ -767,7 +783,7 @@ func TestRoutingSessionCostWithoutBalance(t *testing.T) {
 	if !strings.Contains(got, "$0.50 used") {
 		t.Fatalf("footer %q missing session cost without balance", got)
 	}
-	if strings.Contains(got, "left") {
+	if strings.Contains(got, "O.R.") {
 		t.Fatalf("no balance must mean no left segment: %q", got)
 	}
 }
