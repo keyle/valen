@@ -654,7 +654,16 @@ go run . -p "..." -f shot.png         # attach an image (repeat -f/--file)
 go run . -p "review @main.go"         # @path mentions attach too (headless)
 go run . -p "..." -dv 2> trace.log     # timestamped round/tool/size trace
 go run . -dvlog trace.log              # same, to a file (use in TUI mode)
+go run . -p "..." -v                   # stream thinking summaries + tool calls to stderr
+go run . -p "..." -vv                  # also raw analysis, answer text and tool results
 ```
+
+Headless `-v`/`-vv` stream to stderr while the final answer stays on stdout.
+`-v` shows round markers, tool calls and thinking summaries, hiding raw
+chain-of-thought when the provider sends both (`reasoning_text` vs
+`reasoning_summary_text` on `/responses`). `-vv` adds raw analysis, streamed
+answer text and full tool results. Both are one-shot only; the TUI already
+renders these live.
 
 Debug trace (`-dv` to stderr, `-dvlog <file>` implies `-dv`): one
 `[dv HH:MM:SS.mmm +elapsed]` line per event — turn start/end with usage,

@@ -61,6 +61,8 @@ valen -q "explain main.go"  # TUI, runs the prompt immediately
 valen -plan                 # read-only plan mode
 valen -dir ~/proj           # set the working directory
 valen -p "what broke?" -f error.png   # attach an image (repeat -f/--file)
+valen -p "review main.go" -v          # stream thinking summaries + tool calls
+valen -p "review main.go" -vv         # also raw analysis, answer text, tool results
 ```
 
 Config is seeded on first run at `~/.config/valen/config.toml`. See

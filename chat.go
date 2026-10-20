@@ -422,12 +422,13 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 
 // chat is the headless one-shot path: one prompt, one answer, stdout.
 func chat(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, prompt string, stdout, stderr io.Writer) error {
-	return chatWithAttachments(ctx, cfg, client, apiKey, hc, registry, prompt, nil, stdout, stderr)
+	return chatWithAttachments(ctx, cfg, client, apiKey, hc, registry, prompt, nil, 0, stdout, stderr)
 }
 
 // chatWithAttachments is chat plus -f/--file paths (and @path mentions, also
 // expanded headless): text rides inlined in the prompt, images on the wire only.
-func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, prompt string, files []string, stdout, stderr io.Writer) error {
+// verbose is the -v/-vv level: 0 quiet, 1 summaries and tools, 2 raw analysis.
+func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, prompt string, files []string, verbose int, stdout, stderr io.Writer) error {
 	resetTodos()
 	askPrompter = func(ctx context.Context, qs []AskQuestion) ([]string, error) {
 		in, closeIn, err := headlessAskInput()
@@ -465,11 +466,15 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 	var orMeta *ORMeta
 	var turnCost float64
 	var hasTurnCost bool
+	vt := newHeadlessVerbose(stderr, verbose)
 	onEvent := func(ev Event) {
+		vt.event(ev)
 		switch ev.Kind {
 		case "tool_start":
 			tools = append(tools, ToolRecord{ID: ev.ID, Name: ev.Text, Args: ev.Args})
-			fmt.Fprintf(stderr, "[tool %s]\n", ev.Text)
+			if vt == nil {
+				fmt.Fprintf(stderr, "[tool %s]\n", ev.Text)
+			}
 		case "tool_result":
 			for i := len(tools) - 1; i >= 0; i-- {
 				if tools[i].ID == ev.ID && tools[i].Name == ev.Text {
@@ -491,6 +496,8 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 	if reply.ReasoningContent != "" {
 		thinking = reply.ReasoningContent
 	}
+	vt.fallbackThinking(thinking)
+	vt.closeLine()
 	turn := Turn{
 		At: started, Prompt: displayPrompt, Thinking: thinking, Reply: answer, Tools: tools,
 		Usage: Usage{Prompt: usage.PromptTokens, Completion: usage.CompletionTokens, Total: usage.TotalTokens},

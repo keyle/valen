@@ -98,6 +98,8 @@ func start() error {
 	planFlag := flag.Bool("plan", false, "plan mode: read-only investigation, present the plan as the reply")
 	dvFlag := flag.Bool("dv", false, "debug verbose: timestamped round/tool/size trace to stderr")
 	dvLogFlag := flag.String("dvlog", "", "debug verbose log file (implies -dv; use in TUI mode)")
+	vFlag := flag.Bool("v", false, "headless verbose: stream thinking summaries and tool calls to stderr")
+	vvFlag := flag.Bool("vv", false, "headless very verbose: also stream raw analysis, answer text and tool results to stderr")
 	// -f / --file attach files, folders and images to the headless prompt
 	// (repeatable); @path mentions in the prompt attach too.
 	var attachFiles fileFlag
@@ -135,6 +137,12 @@ func start() error {
 	}
 	defer dvlog.Close()
 
+	verbose := 0
+	if *vvFlag {
+		verbose = 2
+	} else if *vFlag {
+		verbose = 1
+	}
 	qMode := *qFlag
 	// -q forces the TUI regardless of stdin (its prompt comes from the args,
 	// not a pipe), so stdout still has to be a TTY for the alt screen.
@@ -144,6 +152,9 @@ func start() error {
 	tuiMode := qMode || (!*printMode && isTTY(os.Stdin) && isTTY(os.Stdout))
 	if tuiMode && len(attachFiles) > 0 {
 		return errors.New("-f/--file attaches to a one-shot prompt (-p); in the TUI use @ or paste")
+	}
+	if tuiMode && verbose > 0 {
+		return errors.New("-v/-vv apply to one-shot mode (-p)")
 	}
 	// In -q mode the positional arg is the prompt, never a workdir.
 	workdir, rest := splitWorkdirArg(*dirFlag, flag.Args(), tuiMode && !qMode)
@@ -247,7 +258,7 @@ func start() error {
 	if prompt == "" {
 		return errors.New("empty prompt")
 	}
-	return chatWithAttachments(ctx, cfg, client, apiKey, newHTTPClient(cfg), registry, prompt, attachFiles, os.Stdout, os.Stderr)
+	return chatWithAttachments(ctx, cfg, client, apiKey, newHTTPClient(cfg), registry, prompt, attachFiles, verbose, os.Stdout, os.Stderr)
 }
 
 // fileFlag collects repeated -f/--file attachment paths in order.

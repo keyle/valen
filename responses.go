@@ -471,9 +471,9 @@ func responsesRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string
 		return fold(out)
 	}
 
-	emit := func(kind, text string, idx int) {
+	emit := func(kind, text string, idx int, raw bool) {
 		if onEvent != nil && text != "" {
-			onEvent(Event{Kind: kind, Text: text, Index: idx})
+			onEvent(Event{Kind: kind, Text: text, Index: idx, Raw: raw})
 		}
 	}
 	// Builders keep many small deltas linear in total response size. Complete
@@ -557,9 +557,12 @@ func responsesRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string
 					acc.text[payload.ContentIndex].WriteString(part.Text)
 				}
 				acc.text[payload.ContentIndex].WriteString(payload.Delta)
-				emit("text_delta", payload.Delta, 0)
+				emit("text_delta", payload.Delta, 0, false)
 			}
 		case "response.reasoning_summary_text.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.done", "response.reasoning_text.done":
+			// reasoning_text is the model's raw analysis; the summary stream
+			// is the short version. Headless -v shows summaries only.
+			raw := strings.HasPrefix(payload.Type, "response.reasoning_text")
 			acc := itemAt()
 			item := &acc.item
 			item.Type = "reasoning"
@@ -575,7 +578,7 @@ func responsesRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string
 				// streamed stay as-is; the committed turn takes the
 				// authoritative text and the live view keeps its preview.
 				if _, seen := acc.summary[payload.SummaryIndex]; !seen {
-					emit("thinking_delta", payload.Text, payload.SummaryIndex)
+					emit("thinking_delta", payload.Text, payload.SummaryIndex, raw)
 				}
 				delete(acc.summary, payload.SummaryIndex)
 			} else {
@@ -588,11 +591,11 @@ func responsesRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string
 					// live view never saw; emit the seed before its deltas.
 					if part.Text != "" {
 						acc.summary[payload.SummaryIndex].WriteString(part.Text)
-						emit("thinking_delta", part.Text, payload.SummaryIndex)
+						emit("thinking_delta", part.Text, payload.SummaryIndex, raw)
 					}
 				}
 				acc.summary[payload.SummaryIndex].WriteString(payload.Delta)
-				emit("thinking_delta", payload.Delta, payload.SummaryIndex)
+				emit("thinking_delta", payload.Delta, payload.SummaryIndex, raw)
 			}
 		case "response.output_item.added", "response.output_item.done":
 			if payload.Item != nil {

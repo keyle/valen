@@ -33,6 +33,10 @@ type Event struct {
 	// index concatenate exactly; the first delta of a new part starts on its
 	// own line, mirroring the committed join of separate summary parts.
 	Index int
+	// Raw marks raw chain-of-thought analysis on thinking_delta when the
+	// provider also streams a short summary (Responses reasoning_text vs
+	// reasoning_summary_text). Headless -v hides raw analysis; -vv shows it.
+	Raw bool
 	// ORMeta carries OpenRouter serving metadata (provider, billed cost,
 	// locally-measured throughput) on an "or_meta" event.
 	ORMeta *ORMeta

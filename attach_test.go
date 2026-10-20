@@ -615,7 +615,7 @@ func TestHeadlessFileFlag(t *testing.T) {
 
 	cfg := testConfig(srv.URL)
 	var stdout, stderr strings.Builder
-	err := chatWithAttachments(context.Background(), cfg, newClient(cfg, "key"), "key", nil, NewRegistry(), "hi", []string{"notes.txt", "shot.png"}, &stdout, &stderr)
+	err := chatWithAttachments(context.Background(), cfg, newClient(cfg, "key"), "key", nil, NewRegistry(), "hi", []string{"notes.txt", "shot.png"}, 0, &stdout, &stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
