@@ -437,6 +437,7 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 		defer closeIn()
 		return headlessAsk(ctx, qs, in, os.Stderr)
 	}
+	displayPrompt := prompt
 	paths := append(append([]string(nil), files...), atPaths(prompt)...)
 	refs, notices := resolveAttachments(ctx, paths, cfg)
 	for _, n := range notices {
@@ -444,18 +445,73 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 	}
 	ctx = withTurnAttachments(ctx, refs)
 	prompt = promptWithAttachments(prompt, refs)
+	// Headless runs are conversations too: record them like TUI turns so /sessions
+	// can resume them. A save failure must never cost the answer.
+	session, err := newSession(cfg)
+	if err != nil {
+		session = nil
+		fmt.Fprintln(stderr, "valen: session: "+err.Error())
+	} else {
+		session.nameSession(displayPrompt)
+	}
+	started := time.Now()
 	history := make([]openai.ChatCompletionMessage, 0, 8)
 	history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: effectiveSystem(cfg)})
 	history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: prompt})
 	dvlog.Logf("start model=%s transport=%s thinking=%s maxrounds=%d budget~%dtok schemastate~%dtok tools=%d headless prompt=%dB %q",
 		cfg.Model, modelTransport(cfg.Model), cfg.Thinking, cfg.MaxRounds, contextBudget(cfg), requestToolsTokens(registry), len(registry.Names()), len(prompt), dvlog.Preview(prompt, 200))
 
+	var tools []ToolRecord
+	var orMeta *ORMeta
+	var turnCost float64
+	var hasTurnCost bool
 	onEvent := func(ev Event) {
-		if ev.Kind == "tool_start" {
+		switch ev.Kind {
+		case "tool_start":
+			tools = append(tools, ToolRecord{ID: ev.ID, Name: ev.Text, Args: ev.Args})
 			fmt.Fprintf(stderr, "[tool %s]\n", ev.Text)
+		case "tool_result":
+			for i := len(tools) - 1; i >= 0; i-- {
+				if tools[i].ID == ev.ID && tools[i].Name == ev.Text {
+					tools[i].Output = ev.Output
+					tools[i].DurMs = ev.DurMs
+					break
+				}
+			}
+		case "or_meta":
+			orMeta = ev.ORMeta
+			if ev.ORMeta != nil && ev.ORMeta.HasCost {
+				turnCost += ev.ORMeta.Cost
+				hasTurnCost = true
+			}
 		}
 	}
 	reply, usage, err := runTurn(ctx, cfg, client, apiKey, hc, registry, &history, onEvent)
+	thinking, answer := splitThinking(reply.Content)
+	if reply.ReasoningContent != "" {
+		thinking = reply.ReasoningContent
+	}
+	turn := Turn{
+		At: started, Prompt: displayPrompt, Thinking: thinking, Reply: answer, Tools: tools,
+		Usage: Usage{Prompt: usage.PromptTokens, Completion: usage.CompletionTokens, Total: usage.TotalTokens},
+		Model: cfg.Model, Effort: cfg.Thinking, Plan: cfg.Plan, History: history, ORMeta: orMeta,
+		DurMs: time.Since(started).Milliseconds(),
+	}
+	if turn.DurMs < 1 {
+		turn.DurMs = 1
+	}
+	if hasTurnCost {
+		turn.Cost = turnCost
+	}
+	if err != nil {
+		fe := friendlyError(err)
+		turn.Error = &fe
+	}
+	if session != nil {
+		if aerr := session.append(turn); aerr == nil {
+			session.ensureMeta(cfg.Model, cfg.Thinking)
+		}
+	}
 	if err != nil {
 		return err
 	}

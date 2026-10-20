@@ -25,6 +25,10 @@ func TestMain(m *testing.M) {
 	}
 	roundRetryBase, roundRetryMax = time.Millisecond, 2*time.Millisecond
 	retryBackoff = []time.Duration{time.Millisecond, 2 * time.Millisecond}
+	// Headless turns now save sessions: keep them out of the real data dir.
+	if dir, err := os.MkdirTemp("", "valen-test-data"); err == nil {
+		os.Setenv("XDG_DATA_HOME", dir)
+	}
 	// Keep picker tests offline: unreachable Zen means the curated fallback.
 	zenBaseURL = "http://127.0.0.1:1"
 	os.Exit(m.Run())

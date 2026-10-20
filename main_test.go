@@ -225,6 +225,38 @@ func TestChatRunsToolLoop(t *testing.T) {
 	}
 }
 
+func TestHeadlessChatPersistsSession(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	srv, _ := fakeServer(t, completion(nil, "saved answer"))
+	registry := NewRegistry()
+	cfg := newTestConfig(srv.URL)
+	cfg.Model = "m"
+	cfg.Thinking = "low"
+
+	if err := chat(context.Background(), cfg, newClient(cfg, "key"), "key", nil, registry, "remember me", io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := listSessions()
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("sessions=%v err=%v", paths, err)
+	}
+	turns, err := loadSession(paths[0])
+	if err != nil || len(turns) != 1 {
+		t.Fatalf("turns=%v err=%v", turns, err)
+	}
+	turn := turns[0]
+	if turn.Prompt != "remember me" || turn.Reply != "saved answer" || turn.Model != "m" || turn.Effort != "low" {
+		t.Fatalf("turn=%+v", turn)
+	}
+	if len(turn.History) == 0 || turn.Usage.Total == 0 {
+		t.Fatalf("missing history/usage: %+v", turn)
+	}
+	meta, err := loadSessionMeta(metaPath(paths[0]))
+	if err != nil || meta.Title != "remember me" || meta.Model != "m" || meta.Effort != "low" {
+		t.Fatalf("meta=%+v err=%v", meta, err)
+	}
+}
+
 func TestChatFeedsToolFailureBackToModel(t *testing.T) {
 	srv, _ := fakeServer(t,
 		completion(toolCall("shell", `{"command":"exit 3"}`), ""),
