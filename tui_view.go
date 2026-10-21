@@ -226,25 +226,6 @@ func (m *tuiModel) statusView() string {
 	if m.showMeta {
 		right = metaStyle.Render(fmt.Sprintf("  ·  %s %s", m.cfg.Model, providerBaseURL(m.cfg)))
 	}
-	// OpenRouter per-million rates ride at the right edge while the totals
-	// are showing. A notice replaces them too, so the message gets the width.
-	if m.notice == "" {
-		if rates := m.orRateText(); rates != "" {
-			if right != "" {
-				right += metaStyle.Render("  ·  ")
-			}
-			right += metaStyle.Render(rates)
-		}
-	}
-	if m.width > 0 && !m.busy && right != "" {
-		// Keep the right-hand meta flush with the column edge, like the
-		// header and the footer line.
-		avail := m.columnWidth() - 4
-		used := lipgloss.Width(left) + lipgloss.Width(mid) + lipgloss.Width(right)
-		if used+2 <= avail {
-			mid += strings.Repeat(" ", avail-used)
-		}
-	}
 	if m.busy {
 		// Cancel hint lives here, pinned to the right edge directly above
 		// the chatbox. The scrollback no longer repeats the status line,
@@ -348,11 +329,11 @@ func (m *tuiModel) footerView() string {
 
 // orMetaSuffix is the best-effort OpenRouter metadata appended after the
 // balance: the serving provider, time-to-first-token and decode throughput,
-// and the cumulative billed cost of the session. Each segment is independently
-// optional; an empty result adds nothing, and the footer's width rule drops the
-// whole text on narrow terminals. It renders even without a balance, since the
-// session cost is measured locally from usage, not from the management API.
-// The per-million rates live in the status row instead, which has more room.
+// the per-million input/output rates, and the cumulative billed cost of the
+// session. Each segment is independently optional; an empty result adds
+// nothing, and the footer's width rule drops the whole text on narrow
+// terminals. It renders even without a balance, since the session cost is
+// measured locally from usage, not from the management API.
 func (m *tuiModel) orMetaSuffix() string {
 	var parts []string
 	if m.orMeta != nil {
@@ -370,6 +351,9 @@ func (m *tuiModel) orMetaSuffix() string {
 			parts = append(parts, strings.Join(perf, " / "))
 		}
 	}
+	if rates := m.orRateText(); rates != "" {
+		parts = append(parts, rates)
+	}
 	if m.orSpentSet {
 		parts = append(parts, formatCost(m.orSpent)+" used")
 	}
@@ -380,8 +364,8 @@ func (m *tuiModel) orMetaSuffix() string {
 }
 
 // orRateText is the OpenRouter catalog's per-million input/output price for
-// the current model, e.g. "in $0.10/out $0.40/M". Empty for other providers
-// or when the catalog has not delivered a price yet.
+// the current model, e.g. "$ 0.10/0.40". Empty for other providers or when
+// the catalog has not delivered a price yet.
 func (m *tuiModel) orRateText() string {
 	if modelProvider(m.cfg.Model) != ProviderOpenRouter {
 		return ""
@@ -390,7 +374,7 @@ func (m *tuiModel) orRateText() string {
 	if !ok || (p.prompt == 0 && p.completion == 0) {
 		return ""
 	}
-	return fmt.Sprintf("in $%.2f/out $%.2f/M", p.prompt*1e6, p.completion*1e6)
+	return fmt.Sprintf("$ %.2f/%.2f", p.prompt*1e6, p.completion*1e6)
 }
 
 // formatCost renders a billed dollar amount, keeping four decimals below a cent

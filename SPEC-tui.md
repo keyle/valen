@@ -159,14 +159,11 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 - Errors render as a pink `✗ <friendly>` block; details in Errors view.
 - Session totals render once, in the status row above the chatbox, in
   thousands (`N turn(s) · win W/B · ↑P ↓C`, e.g. `3 turns · win 45k/300k ·
-  ↑276k ↓3k`); per-turn scrollback tallies are gone. On `openrouter/…` models
-  the catalog's per-million input/output rates ride at the right edge of the
-  same row (`in $0.10/out $0.40/M`), so the footer below the chatbox has room.
-  While busy the spinner
+  ↑276k ↓3k`); per-turn scrollback tallies are gone. While busy the spinner
   row also carries loop progress (`· rd 12/300`). Informational notices
   (e.g. the mouse toggle) are transient: the next chatbox edit clears them
   and restores the totals row; errors stay until resolved. A notice replaces
-  the totals and the rates alike, then they return together.
+  the totals, then they return when it clears.
 - Go plan usage (`Go · 5h` rolling / `7d` / `30d` percent) sits dim at the right
   of the footer hint line, refreshed at startup, every minute, and after each
   turn; yellow past 80%, pink at 100% or rate-limited, with a `↻` reset hint
@@ -179,11 +176,11 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   keys 403 on `/credits`, so only the locally-measured metadata below shows
   until then.
   When OpenRouter reports it, the balance is followed by best-effort turn
-  metadata: the serving provider, throughput and the session's cumulative
-  billed cost (`O.R. $X.XX · Infermatic · 42 TPS · $0.0034 used`);
-  the cost label is just "$X used", the session scope being implicit. The
-  per-million input/output rates live in the status row above the chatbox
-  (see Session totals), keeping the footer uncluttered.
+  metadata: the serving provider, throughput, the catalog's per-million
+  input/output rates and the session's cumulative billed cost
+  (`O.R. $X.XX · Infermatic · 42 TPS · $ 0.10/0.40 · $0.0034 used`);
+  in/out and the per-million basis are implicit in the rates, and the cost
+  label is just "$X used", the session scope being implicit.
   The provider name and billed cost come from the response (top-level
   `provider`, `usage.cost`); rates come from the model catalog's
   `pricing.prompt`/`pricing.completion`; throughput is measured locally from the
@@ -192,8 +189,8 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   tool-loop round, keeps four decimals below a cent, resets on a new session,
   and — being local — shows even without a balance. Resuming a session restores
   the last turn's provider/throughput, the cumulative spend and the recorded
-  rates from the JSONL, so the footer and status row look as they did when the
-  turn finished. Each footer segment is
+  rates from the JSONL, so the footer looks as it did when the turn finished.
+  Each footer segment is
   independently optional and the whole suffix yields to the width rule, so a
   narrow terminal or a missing field just drops that part.
 - Autoscroll follows new turns while pinned to the bottom; PgUp/PgDn or the

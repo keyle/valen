@@ -662,21 +662,18 @@ func TestRoutingFooterMetadata(t *testing.T) {
 	}
 	m.orSpent, m.orSpentSet = 0.0034, true
 	got := ansi.Strip(m.footerView())
-	for _, want := range []string{"O.R. $12.34", "Infermatic", "4.9s TTFT / 42 TPS", "$0.0034 used"} {
+	for _, want := range []string{"O.R. $12.34", "Infermatic", "4.9s TTFT / 42 TPS", "$ 0.10/0.40", "$0.0034 used"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("footer %q missing %q", got, want)
 		}
 	}
-	if strings.Contains(got, "in $0.10/out $0.40/M") {
-		t.Fatalf("rates belong in the status row, not the footer: %q", got)
+	if status := ansi.Strip(m.statusView()); strings.Contains(status, "$ 0.10/0.40") {
+		t.Fatalf("rates belong in the footer, not the status row: %q", status)
 	}
-	if status := ansi.Strip(m.statusView()); !strings.Contains(status, "in $0.10/out $0.40/M") {
-		t.Fatalf("status %q missing OpenRouter rates", status)
-	}
-	// A notice takes the row: rates and totals hide until it clears.
+	// A notice takes the row: totals hide until it clears.
 	m.notice = "thinking · high"
-	if status := ansi.Strip(m.statusView()); strings.Contains(status, "in $0.10/out $0.40/M") || strings.Contains(status, "turns") {
-		t.Fatalf("notice must hide totals and rates: %q", status)
+	if status := ansi.Strip(m.statusView()); strings.Contains(status, "turns") {
+		t.Fatalf("notice must hide totals: %q", status)
 	}
 	m.notice = ""
 
@@ -684,7 +681,7 @@ func TestRoutingFooterMetadata(t *testing.T) {
 	m.orMeta = &ORMeta{TPS: 42.4}
 	m.orPricing = nil
 	got = ansi.Strip(m.footerView())
-	if strings.Contains(got, "Infermatic") || strings.Contains(got, "/M") {
+	if strings.Contains(got, "Infermatic") || strings.Contains(got, "$ 0.10") {
 		t.Fatalf("missing metadata must drop: %q", got)
 	}
 	if !strings.Contains(got, "42 TPS") {
@@ -701,7 +698,7 @@ func TestRoutingFooterMetadata(t *testing.T) {
 	m.width, m.viewport.Width = 24, 24
 	m.orMeta = &ORMeta{Provider: "Infermatic", TPS: 42}
 	m.orPricing = map[string]orPricing{"openrouter/moonshotai/kimi-k3": {prompt: 0.0000001, completion: 0.0000004}}
-	if got := ansi.Strip(m.footerView()); strings.Contains(got, "Infermatic") || strings.Contains(got, "/M") || strings.Contains(got, "used") {
+	if got := ansi.Strip(m.footerView()); strings.Contains(got, "Infermatic") || strings.Contains(got, "$ 0.10") || strings.Contains(got, "used") {
 		t.Fatalf("narrow footer must yield the suffix: %q", got)
 	}
 }
@@ -760,14 +757,10 @@ func TestRoutingFooterRestoredOnResume(t *testing.T) {
 	m.session.Turns = nil
 	m.resumeSessionPath(path)
 
-	for _, want := range []string{"Infermatic", "4.9s TTFT / 42 TPS", "$0.0012 used"} {
+	for _, want := range []string{"Infermatic", "4.9s TTFT / 42 TPS", "$ 0.10/0.40", "$0.0012 used"} {
 		if got := ansi.Strip(m.footerView()); !strings.Contains(got, want) {
 			t.Fatalf("resumed footer %q missing %q", got, want)
 		}
-	}
-	m.notice = ""
-	if status := ansi.Strip(m.statusView()); !strings.Contains(status, "in $0.10/out $0.40/M") {
-		t.Fatalf("resumed status %q missing OpenRouter rates", status)
 	}
 }
 
