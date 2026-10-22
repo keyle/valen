@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,10 +13,10 @@ func TestEnsureUserConfigSeedsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if path != filepath.Join(dir, "config.toml") {
+	if path != filepath.Join(dir, "valen.toml") {
 		t.Fatalf("path=%s", path)
 	}
-	for _, n := range []string{"config.toml", "config-ori.toml"} {
+	for _, n := range []string{"valen.toml", "config-ori.toml"} {
 		raw, err := os.ReadFile(filepath.Join(dir, n))
 		if err != nil || string(raw) != defaultConfigTOML {
 			t.Fatalf("%s not seeded: %v", n, err)
@@ -39,6 +40,27 @@ func TestEnsureUserConfigSeedsOnce(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(filepath.Join(dir, "config-ori.toml")); string(raw) != defaultConfigTOML {
 		t.Fatalf("config-ori.toml not refreshed")
+	}
+}
+
+func TestEnsureUserConfigFallsBackToLegacy(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(legacy, []byte("model = \"glm-5.3\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path, err := ensureUserConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != legacy {
+		t.Fatalf("path=%s want legacy", path)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "valen.toml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("valen.toml must not be seeded beside a legacy config: %v", err)
+	}
+	if raw, _ := os.ReadFile(legacy); string(raw) != "model = \"glm-5.3\"\n" {
+		t.Fatalf("legacy config overwritten: %q", raw)
 	}
 }
 

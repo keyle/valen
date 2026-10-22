@@ -290,7 +290,7 @@ func accessDirs(kind string) []string {
 	accessMu.Lock()
 	out := append([]string(nil), *loadAccessLocked().list(kind)...)
 	accessMu.Unlock()
-	// [sandbox] allow/deny in config.toml act as standing rules too, so the
+	// [sandbox] allow/deny in valen.toml act as standing rules too, so the
 	// file gate, shell gate and kernel policy all honor them. `allow` grants
 	// read and write, so it feeds both folder lists.
 	switch c := sandboxConf(); kind {

@@ -587,7 +587,7 @@ func helpBody() string {
 `)
 	b.WriteString(`  Thinking shows by default (ctrl+o hides); tools render inline, ctrl+u shows full output.
 `)
-	b.WriteString(`  Chatbox chrome: config.toml [input] blink=false parks the cursor steady, height=N sets the box lines.
+	b.WriteString(`  Chatbox chrome: valen.toml [input] blink=false parks the cursor steady, height=N sets the box lines.
   Selecting text: drag to select (auto-copies on release); dragging past the top/bottom edge auto-scrolls one line per [tui] select_scroll_ms (default 50ms).
   shift+drag keeps the terminal's own selection; ctrl+click opens a link.`)
 	return b.String()

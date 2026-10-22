@@ -50,7 +50,7 @@ func normalizeProviderList(in []string) []string {
 	return out
 }
 
-// Config mirrors config.toml. See SPEC.md for the full schema.
+// Config mirrors valen.toml. See SPEC.md for the full schema.
 type Config struct {
 	Model    string `toml:"model"`
 	Thinking string `toml:"thinking"`

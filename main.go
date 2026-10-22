@@ -83,7 +83,7 @@ func main() {
 }
 
 func start() error {
-	cfgPath := flag.String("config", "", "path to config (default: ~/.config/valen/config.toml, seeded on first run)")
+	cfgPath := flag.String("config", "", "path to config (default: ~/.config/valen/valen.toml, seeded on first run)")
 	dirFlag := flag.String("dir", "", "working directory: sandbox root for file tools and shell")
 	printMode := flag.Bool("p", false, "one-shot: answer the quoted prompt and exit")
 	qFlag := flag.Bool("q", false, "start the TUI and run the prompt immediately")
@@ -210,7 +210,7 @@ func start() error {
 		}
 	}
 	// Session plan tools are always present (like AskUserQuestion) so chunky
-	// work can break into small todowrite steps even when config.toml omits
+	// work can break into small todowrite steps even when valen.toml omits
 	// them. In-memory only; the call records fold into the session JSONL.
 	for _, t := range []Tool{TodoWriteTool(), TodoReadTool()} {
 		if !registry.Has(t.Name) {

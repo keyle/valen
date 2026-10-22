@@ -735,7 +735,7 @@ func TestSandboxConfigOverrides(t *testing.T) {
 	if err := (SandboxConfig{AllowBind: []string{"127.0.0.1", "::1"}, IPCAllow: []string{"~/x.sock"}}).validate(); err != nil {
 		t.Errorf("valid config rejected: %v", err)
 	}
-	// The table loads from config.toml and unknown keys stay an error.
+	// The table loads from valen.toml and unknown keys stay an error.
 	dir := t.TempDir()
 	write := func(body string) string {
 		p := filepath.Join(dir, "c.toml")

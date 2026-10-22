@@ -170,7 +170,7 @@ func friendlyStatus(code int, detail string) FriendlyError {
 	case 402:
 		return FriendlyError{"Out of credits on the OpenCode account. Add balance or switch model.", fmt.Sprintf("HTTP %d: %s", code, detail)}
 	case 404:
-		return FriendlyError{"Model not available on this plan. Pick another in config.toml.", fmt.Sprintf("HTTP %d: %s", code, detail)}
+		return FriendlyError{"Model not available on this plan. Pick another in valen.toml.", fmt.Sprintf("HTTP %d: %s", code, detail)}
 	case 429:
 		return FriendlyError{"Rate limited. Wait a moment and resend — your prompt is kept.", fmt.Sprintf("HTTP %d: %s", code, detail)}
 	case 500, 502, 503, 504:

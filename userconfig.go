@@ -19,7 +19,8 @@ import (
 var defaultConfigTOML string
 
 const (
-	userConfigName      = "config.toml"
+	userConfigName      = "valen.toml"
+	legacyConfigName    = "config.toml"
 	userConfigOrigName  = "config-ori.toml"
 	userStateName       = "state.json"
 	userFavouritesName  = "favourites.yaml"
@@ -91,19 +92,28 @@ func localAgentsSection(dir string) string {
 }
 
 // ensureUserConfig creates dir if needed and seeds it on first run:
-// config.toml (user-owned, never overwritten) and config-ori.toml, a
+// valen.toml (user-owned, never overwritten) and config-ori.toml, a
 // pristine copy of the shipped default (refreshed when the binary's
 // default changes, so users can diff after an upgrade) and access.toml (the
-// persistent access decisions, seeded empty once). It returns the config.toml
-// path.
+// persistent access decisions, seeded empty once). A pre-rename config.toml
+// is read as-is when valen.toml is absent; it is never moved or rewritten.
+// It returns the config path.
 func ensureUserConfig(dir string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
 	cfgPath := filepath.Join(dir, userConfigName)
 	if _, err := os.Stat(cfgPath); errors.Is(err, os.ErrNotExist) {
-		if err := os.WriteFile(cfgPath, []byte(defaultConfigTOML), 0o644); err != nil {
-			return "", err
+		legacyPath := filepath.Join(dir, legacyConfigName)
+		switch _, lerr := os.Stat(legacyPath); {
+		case lerr == nil:
+			cfgPath = legacyPath
+		case errors.Is(lerr, os.ErrNotExist):
+			if err := os.WriteFile(cfgPath, []byte(defaultConfigTOML), 0o644); err != nil {
+				return "", err
+			}
+		default:
+			return "", lerr
 		}
 	} else if err != nil {
 		return "", err
@@ -121,7 +131,7 @@ func ensureUserConfig(dir string) (string, error) {
 }
 
 // userState is the ephemeral, machine-written state kept beside the
-// config (state.json). config.toml stays hand-edited; valen never rewrites
+// config (state.json). valen.toml stays hand-edited; valen never rewrites
 // it. Unknown keys are preserved on save.
 type userState struct {
 	Model    string `json:"model,omitempty"`

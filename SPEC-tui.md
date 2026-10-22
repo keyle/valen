@@ -116,7 +116,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   up with ` ✦ valen`) head each block.
   A blank session's transcript is empty; its `valen <version>` label lives in
   the header (above). The AGENTS.md-first behaviour lives in the default system
-  prompt (`config.toml`), not as intro text in the transcript.
+  prompt (`valen.toml`), not as intro text in the transcript.
 - Pending user message + working status render immediately on Enter, before
   `runTurn` completes. Spinner lives in the status bar so the transcript does
   not re-render every tick.
@@ -236,7 +236,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   ANSI-stripped text; both are kept — drag for what you see, `/copy` for the
   re-usable markup.
   The row is absent while a turn is pending.
-- Chatbox chrome is configurable via `[input]` in `config.toml`: `blink`
+- Chatbox chrome is configurable via `[input]` in `valen.toml`: `blink`
   (default `true`; `false` parks the block cursor steady with no blink
   timer) and `height` (default `3` box lines; the transcript viewport
   shrinks to fit).
@@ -495,7 +495,7 @@ shows the tokens, not the bytes.
 - Switching keeps the conversation history; an incompatible thinking level
   resets to the provider default with a note.
 - Both model and thinking persist to `~/.config/valen/state.json`
-  (`$XDG_CONFIG_HOME/valen/`), never to `config.toml`, and override the
+  (`$XDG_CONFIG_HOME/valen/`), never to `valen.toml`, and override the
   config's `model`/`thinking` on the next boot (an invalid saved pair is
   ignored). Without a state path (tests, `-config <file>`) the switch is
   session-only.

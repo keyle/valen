@@ -47,7 +47,7 @@ make install         # builds and copies valen to /usr/local/bin
 
 ## Usage
 
-Set a key, or put it in `~/.config/valen/config.toml`:
+Set a key, or put it in `~/.config/valen/valen.toml`:
 
 ```sh
 export OPENCODE_API_KEY=...      # OpenCode Go / Zen
@@ -65,7 +65,8 @@ valen -p "review main.go" -v          # stream thinking summaries + tool calls
 valen -p "review main.go" -vv         # also raw analysis, answer text, tool results
 ```
 
-Config is seeded on first run at `~/.config/valen/config.toml`. See
+Config is seeded on first run at `~/.config/valen/valen.toml` (a pre-existing
+`config.toml` is still read). See
 [config.toml](config.toml) for options and [SPEC.md](SPEC.md) /
 [SPEC-tui.md](SPEC-tui.md) for the full spec.
 

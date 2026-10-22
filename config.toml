@@ -1,5 +1,5 @@
 # valen harness config. See SPEC.md for the full schema.
-# Lives at ~/.config/valen/config.toml; config-ori.toml beside it is the pristine default.
+# Lives at ~/.config/valen/valen.toml; config-ori.toml beside it is the pristine default.
 
 model = "openrouter/anthropic/claude-sonnet-5.5"
 # thinking = "high"            # optional reasoning level; omit for provider default.

@@ -426,7 +426,7 @@ func ancestorDirs(dirs []string) []string {
 // command. Only ones that exist (both backends need a real path to mask).
 // The home directory itself is hidden: reads/writes outside the workdir ask
 // first (see gateShell/checkFileAccess) and the kernel blocks unapproved
-// access, so `cat ~/.zshrc` or `cat ~/.config/valen/config.toml` cannot leak
+// access, so `cat ~/.zshrc` or `cat ~/.config/valen/valen.toml` cannot leak
 // personal info. Safe home subpaths (tool caches, approved folders, sibling
 // worktrees, the workdir itself when under $HOME) are re-allowed after this
 // deny (later SBPL rules win; bwrap re-binds after the tmpfs).

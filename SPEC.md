@@ -66,24 +66,26 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `ask.go` | `AskUserQuestion` contract, headless prompting/confirmation, answer formatting |
 | `search.go` | `web_search` (DuckDuckGo HTML) and `web_fetch` (HTML → text) |
 | `mcp.go` | stdio MCP client lifecycle, tool registration, result flattening |
-| `config.toml` | Default configuration, embedded in the binary and seeded to `~/.config/valen/` on first run |
-| `userconfig.go` | Config dir (`$XDG_CONFIG_HOME/valen`, else `~/.config/valen`): first-run seeding, `config-ori.toml`, `state.json` (last model/thinking/routing) |
+| `config.toml` | Default configuration, embedded in the binary and seeded as `valen.toml` to `~/.config/valen/` on first run |
+| `userconfig.go` | Config dir (`$XDG_CONFIG_HOME/valen`, else `~/.config/valen`): first-run seeding, `valen.toml`, legacy `config.toml` fallback, `config-ori.toml`, `state.json` (last model/thinking/routing) |
 
 ## Config location
 
 Config lives in `~/.config/valen/` (`$XDG_CONFIG_HOME/valen/`), created on
-first run: `config.toml` (yours; never overwritten), `config-ori.toml` (pristine
+first run: `valen.toml` (yours; never overwritten), `config-ori.toml` (pristine
 copy of the shipped default, refreshed on upgrade so you can diff), and
-`state.json` (ephemeral state written by valen: last model/thinking/routing). Sessions
+`state.json` (ephemeral state written by valen: last model/thinking/routing). A
+pre-rename `config.toml` is read as-is when `valen.toml` is absent; it is never
+moved or rewritten. Sessions
 and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
 `-config <file>` uses that file only: no seeding and no state overlay.
 
-## Config schema (`config.toml`)
+## Config schema (`valen.toml`)
 
 | Key | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `model` | string | — | **required.** Model ID, e.g. `glm-5.3-flash`, `kimi-k3`, `zen/claude-haiku-5-5`, or `openrouter/moonshotai/kimi-k3`. The `zen/` prefix selects OpenCode Zen (`https://opencode.ai/zen/v1`, same OpenCode key as Go; transport chosen per model: gpt/grok/muse → responses; claude and qwen3.5–3.8 plus/flash (all qwen except qwen3.8-max) → messages; qwen3.8-max and the rest → chat; Gemini models are not supported); the `openrouter/` prefix selects the OpenRouter provider (needs its key, below); bare IDs ride OpenCode Go. Switch live with `/model` (ctrl+p); persisted to `config.toml` |
-| `thinking` | string | empty (provider default) | Reasoning level, per-model (see `/effort` picker): muse-spark `minimal`/`low`/`medium`/`high`/`xhigh`, gpt/grok `low`…`max` (+`none` on gpt), glm/deepseek `low`/`high`/`max` or `high`/`max`, kimi-k3 `max` only, toggle models `none`/`high`, fixed no-control models omit. Switch live with `/effort` (`/thinking` alias) or ctrl+t (cycles low→high, wraps); persisted to `config.toml`. Unknown models fall back to the full vocabulary until a 400 teaches the valid list, cached at `$XDG_DATA_HOME/valen/thinking_levels.json` |
+| `model` | string | — | **required.** Model ID, e.g. `glm-5.3-flash`, `kimi-k3`, `zen/claude-haiku-5-5`, or `openrouter/moonshotai/kimi-k3`. The `zen/` prefix selects OpenCode Zen (`https://opencode.ai/zen/v1`, same OpenCode key as Go; transport chosen per model: gpt/grok/muse → responses; claude and qwen3.5–3.8 plus/flash (all qwen except qwen3.8-max) → messages; qwen3.8-max and the rest → chat; Gemini models are not supported); the `openrouter/` prefix selects the OpenRouter provider (needs its key, below); bare IDs ride OpenCode Go. Switch live with `/model` (ctrl+p); persisted to `valen.toml` |
+| `thinking` | string | empty (provider default) | Reasoning level, per-model (see `/effort` picker): muse-spark `minimal`/`low`/`medium`/`high`/`xhigh`, gpt/grok `low`…`max` (+`none` on gpt), glm/deepseek `low`/`high`/`max` or `high`/`max`, kimi-k3 `max` only, toggle models `none`/`high`, fixed no-control models omit. Switch live with `/effort` (`/thinking` alias) or ctrl+t (cycles low→high, wraps); persisted to `valen.toml`. Unknown models fall back to the full vocabulary until a 400 teaches the valid list, cached at `$XDG_DATA_HOME/valen/thinking_levels.json` |
 | `routing` | string | empty (`none`) | OpenRouter provider-routing variant, sent as a model-slug suffix: `floor` (cheapest; `provider.sort: "price"`), `nitro` (fastest throughput; `provider.sort: "throughput"`), `exacto` (quality-first tool-use sorting), or empty/`none` (OpenRouter's default load balancing). Switch live with `/route [none\|floor\|nitro\|exacto]` or ctrl+y (cycles none → floor → nitro → exacto, wraps); a **silent no-op on Go/Zen**. Persisted to `state.json` alongside `thinking` and stored in favourite slots; ignored on non-OpenRouter models |
 | `provider_ignore` | string[] | `["baseten"]` | OpenRouter `provider.ignore`: provider slugs skipped per request (`openrouter/…` models only; a silent no-op on Go/Zen). Unset keeps the default `["baseten"]`, an explicit `[]` disables the blacklist. Mutually exclusive with `provider_only` (which wins when both are set). The `provider` object merges with the `routing` suffix, which sets `provider.sort` |
 | `provider_only` | string[] | unset | OpenRouter `provider.only`: an allowlist instead of the blacklist. Sent as the request `provider` object alongside `routing` |
@@ -443,7 +445,7 @@ capabilities replace the all-or-nothing `network` toggle, both default on:
   the socket's folder stays hidden. Replace or disable with
   `[sandbox] ipc_allow`.
 
-The optional `[sandbox]` table in `config.toml` (before `[input]`) tunes this:
+The optional `[sandbox]` table in `valen.toml` (before `[input]`) tunes this:
 `allow` (extra rw roots), `deny` (extra hidden paths, win over every allow),
 `allow_bind`, `ipc_allow`. Omitted keys keep the defaults; relative paths and
 non-loopback bind addresses are rejected at load.
@@ -679,7 +681,7 @@ Zen and OpenRouter catalogs and
 switches; `/effort [level]` (`/thinking` alias) sets the thinking level and
 `/route [none|floor|nitro|exacto]` (ctrl+y) the OpenRouter routing variant for
 the current model (routing is a no-op elsewhere). Both persist to `state.json` in the config dir, so the last selection
-sticks across runs and overrides `config.toml`'s `model`/`thinking`/`routing`; headless
+sticks across runs and overrides `valen.toml`'s `model`/`thinking`/`routing`; headless
 mode reads the same overlay (not with `-config <file>`). `/plan` toggles plan
 mode at runtime (read-only investigation, reply is the plan; header shows
 `· plan`); it does not persist. The TUI footer also
