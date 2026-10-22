@@ -206,6 +206,63 @@ func (m *tuiModel) deleteSelectedSession() {
 	m.refreshViewport()
 }
 
+// startSessionRename opens the inline title editor prefilled with the
+// selected session's current title.
+func (m *tuiModel) startSessionRename() {
+	items := m.sessionItems()
+	if m.cursor < 0 || m.cursor >= len(items) {
+		return
+	}
+	m.renaming = true
+	m.sessionRename.SetValue(items[m.cursor].title)
+	m.sessionRename.CursorEnd()
+	m.sessionRename.Focus()
+	m.refreshViewport()
+}
+
+// cancelSessionRename drops the draft and closes the editor.
+func (m *tuiModel) cancelSessionRename() {
+	m.renaming = false
+	m.sessionRename.Blur()
+	m.refreshViewport()
+}
+
+// commitSessionRename writes the draft title to the selected session's meta
+// sidecar and refreshes the list. A blank draft keeps the current title.
+func (m *tuiModel) commitSessionRename() {
+	items := m.sessionItems()
+	if m.cursor < 0 || m.cursor >= len(items) {
+		m.cancelSessionRename()
+		return
+	}
+	it := items[m.cursor]
+	title := strings.TrimSpace(m.sessionRename.Value())
+	if title == "" {
+		title = it.title
+	}
+	meta, _ := loadSessionMeta(metaPath(it.path))
+	meta.Title = title
+	if meta.Model == "" {
+		meta.Model = it.model
+	}
+	if meta.Effort == "" {
+		meta.Effort = it.effort
+	}
+	if err := saveSessionMeta(metaPath(it.path), meta); err != nil {
+		m.notice = "Could not rename session: " + err.Error()
+		m.noticeErr = true
+		m.cancelSessionRename()
+		return
+	}
+	if m.session != nil && m.session.Path == it.path {
+		m.session.Title = title
+	}
+	m.notice = "Renamed session to " + title + "."
+	m.noticeErr = false
+	m.sessionCache = m.loadSessionItems()
+	m.cancelSessionRename()
+}
+
 // resumeSessionPath loads path into the current TUI state: turns become the
 // transcript and history is rebuilt so the resumed conversation continues.
 func (m *tuiModel) resumeSessionPath(path string) {
@@ -539,6 +596,7 @@ func helpBody() string {
 		{"ctrl+q", "quit"},
 		{"ctrl+c · ctrl+d", "cancel the turn · quit"},
 		{"ctrl+f", "filter in the model picker"},
+		{"r · x", "sessions view: rename the selected title · delete it"},
 		{"@", "file picker — type to fuzzy-match files and folders, ↑↓ move, enter inserts @path and attaches it, esc closes"},
 		{"ctrl+v", "paste a clipboard image as an attachment (or a file path as a chip)"},
 		{"alt+1…alt+0", "jump to a favourite slot"},
@@ -618,9 +676,26 @@ func padCell(s string, w int) string {
 }
 
 func (m *tuiModel) renderSessionsList() string {
+	cw := m.contentWidth()
 	items := m.sessionItems()
+	var b strings.Builder
+	if m.renaming {
+		// Same fixed-width box as the model picker's filter so typing never
+		// resizes it.
+		boxW := cw - 2
+		if boxW < 14 {
+			boxW = 14
+		}
+		tiW := boxW - 3
+		if tiW < 12 {
+			tiW = 12
+		}
+		m.sessionRename.Width = tiW
+		box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(mkBorder).Padding(0, 1).Width(boxW).Render(m.sessionRename.View())
+		b.WriteString(box + "\n\n")
+	}
 	if len(items) == 0 {
-		return emptyStyle.Render("No saved sessions yet.")
+		return b.String() + emptyStyle.Render("No saved sessions yet.")
 	}
 	if m.cursor < 0 {
 		m.cursor = 0
@@ -628,9 +703,7 @@ func (m *tuiModel) renderSessionsList() string {
 	if m.cursor >= len(items) {
 		m.cursor = len(items) - 1
 	}
-	var b strings.Builder
-	b.WriteString(metaStyle.Render("Sessions — enter resumes · x deletes · esc back") + "\n\n")
-	cw := m.contentWidth()
+	b.WriteString(metaStyle.Render("Sessions — enter resumes · r renames · x deletes · esc back") + "\n\n")
 	// Fixed columns: index, datetime, model, turns, current marker and the
 	// four two-space gaps. The title takes the remaining view width.
 	const (

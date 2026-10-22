@@ -535,6 +535,75 @@ func TestSessionsViewDeletesSelected(t *testing.T) {
 	}
 }
 
+func TestSessionsViewRenamesSelected(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	s, err := newSession(Config{SessionID: "ses-rename"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.append(Turn{Prompt: "old work"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveSessionMeta(metaPath(s.Path), SessionMeta{Title: "old work", Model: "openrouter/z-ai/glm-5.3", Effort: "high"}); err != nil {
+		t.Fatal(err)
+	}
+
+	m.show(viewSessions)
+	idx := -1
+	for i, it := range m.sessionItems() {
+		if it.path == s.Path {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("session missing from list: %+v", m.sessionItems())
+	}
+	m.cursor = idx
+
+	// r prefills the editor with the current title.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if !m.renaming || m.sessionRename.Value() != "old work" {
+		t.Fatalf("rename not open/prefilled: open=%v value=%q", m.renaming, m.sessionRename.Value())
+	}
+	// Esc cancels without saving.
+	m.sessionRename.SetValue("discard me")
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.renaming {
+		t.Fatal("esc must close the editor")
+	}
+	if meta, _ := loadSessionMeta(metaPath(s.Path)); meta.Title != "old work" {
+		t.Fatalf("esc wrote the draft: %q", meta.Title)
+	}
+
+	// Enter saves the typed title and keeps the model/effort metadata.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m.sessionRename.SetValue("")
+	for _, r := range "renamed title" {
+		_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	// Typing must repaint the viewport, not just mutate the field.
+	if !strings.Contains(m.vpContent, "renamed title") {
+		t.Fatalf("typed title not rendered:\n%s", m.vpContent)
+	}
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.renaming {
+		t.Fatal("enter must close the editor")
+	}
+	meta, err := loadSessionMeta(metaPath(s.Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Title != "renamed title" || meta.Model != "openrouter/z-ai/glm-5.3" || meta.Effort != "high" {
+		t.Fatalf("meta after rename=%+v", meta)
+	}
+	if got := m.sessionItems()[idx].title; got != "renamed title" {
+		t.Fatalf("list title=%q", got)
+	}
+	if !strings.Contains(m.notice, "Renamed session to renamed title") || m.noticeErr {
+		t.Fatalf("notice=%q err=%v", m.notice, m.noticeErr)
+	}
+}
+
 func TestSlotsRoundTrip(t *testing.T) {
 	p := filepath.Join(t.TempDir(), userSlotsName)
 	if err := os.WriteFile(p, []byte("# mine\n1: \"glm-5.3\" high # fast\n0: openrouter/x/y\nbad\nz: a\n"), 0o600); err != nil {

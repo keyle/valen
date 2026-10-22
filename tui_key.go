@@ -267,6 +267,23 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// Inline session rename: esc cancels, enter saves, everything else types.
+	// Ctrl+C/Ctrl+D fall through to the global quit/cancel handling.
+	if m.mode == viewSessions && m.renaming && s != "ctrl+c" && s != "ctrl+d" {
+		switch s {
+		case "esc":
+			m.cancelSessionRename()
+		case "enter":
+			m.commitSessionRename()
+		default:
+			var cmd tea.Cmd
+			m.sessionRename, cmd = m.sessionRename.Update(msg)
+			m.refreshViewport()
+			return m, cmd
+		}
+		return m, nil
+	}
+
 	// Global: cancel / quit.
 	switch s {
 	case "ctrl+c", "ctrl+d":
@@ -546,6 +563,10 @@ func (m *tuiModel) handleOverlayKey(msg tea.KeyMsg, s string) (tea.Model, tea.Cm
 	}
 	if m.mode == viewSlots && s == "x" {
 		m.unbindSelectedSlot()
+		return m, nil
+	}
+	if m.mode == viewSessions && s == "r" {
+		m.startSessionRename()
 		return m, nil
 	}
 	if m.mode == viewSessions && s == "x" {

@@ -425,6 +425,10 @@ type tuiModel struct {
 	// memory instead of rescanning every JSONL on disk; reloaded when the
 	// view opens and after a delete.
 	sessionCache []sessionItem
+	// renaming is set while the sessions view has its inline title editor
+	// open; sessionRename holds the draft title.
+	renaming      bool
+	sessionRename textinput.Model
 
 	// files is the @ file picker anchored above the chatbox; fileIndex is
 	// its capped workdir walk (see tui_files.go).
@@ -510,6 +514,15 @@ func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session 
 	search.TextStyle = lipgloss.NewStyle().Foreground(mkFg)
 	search.Cursor.SetMode(cursor.CursorStatic)
 
+	rename := textinput.New()
+	rename.Placeholder = "session title"
+	rename.Prompt = ""
+	rename.CharLimit = 0
+	rename.Width = 52
+	rename.PlaceholderStyle = metaStyle
+	rename.TextStyle = lipgloss.NewStyle().Foreground(mkFg)
+	rename.Cursor.SetMode(cursor.CursorStatic)
+
 	vp := viewport.New(80, 20)
 	vp.MouseWheelEnabled = true
 
@@ -517,14 +530,15 @@ func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session 
 
 	m := &tuiModel{
 		cfg: cfg, client: client, registry: registry, session: session,
-		history:     seedHistory(cfg),
-		viewport:    vp,
-		input:       ta,
-		spinner:     sp,
-		modelSearch: search,
-		showThink:   true,
-		follow:      true,
-		mode:        viewChat,
+		history:       seedHistory(cfg),
+		viewport:      vp,
+		input:         ta,
+		spinner:       sp,
+		modelSearch:   search,
+		sessionRename: rename,
+		showThink:     true,
+		follow:        true,
+		mode:          viewChat,
 	}
 	m.refreshViewport()
 	return m
@@ -664,6 +678,8 @@ func (m *tuiModel) show(mode viewMode) {
 	}
 	m.mode = mode
 	m.cursor = 0
+	m.renaming = false
+	m.sessionRename.Blur()
 	if mode == viewSessions {
 		m.sessionCache = m.loadSessionItems()
 	}

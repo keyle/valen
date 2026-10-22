@@ -345,8 +345,11 @@ soon as the UI comes up; the positional arg is the prompt, never a workdir.
   (first prompt, 60 runes) taking the remaining view width, model name as the
   last `/` segment with no thinking level — Enter
   resumes it (latest `Turn.History` checkpoint plus later legacy turns, same
-  file continues). Esc backs to the current session without arming the cancel
-  confirm, so browsing sessions never counts toward stopping a running turn.
+  file continues). `r` opens an inline title editor prefilled with the
+  selected title (`Enter` saves to the meta sidecar, `Esc` cancels); `x`
+  deletes the selected log and its meta. Esc backs to the current session
+  without arming the cancel confirm, so browsing sessions never counts toward
+  stopping a running turn.
   Legacy records reconstruct tool calls and results as well
   as prompt/reply text. Titles and the model/effort in use live in
   `<id>.jsonl.meta.json` next to the
@@ -550,7 +553,8 @@ the full height, starts at its heading and scrolls to follow the selected option
 | Ctrl+V | paste a clipboard image as an attachment chip (text falls back to the normal paste) | same |
 | Ctrl+O | toggle thinking display (shown by default) | toggle thinking display |
 | Alt+1…9, Alt+0 / Alt+Shift+1…0 | favourite slots: switch to slot / store current model + thinking in slot | same |
-| x | — | slots view: unbind the selected slot |
+| x | — | slots view: unbind the selected slot; sessions view: delete the selected session |
+| r | — | sessions view: rename the selected title (Enter saves, Esc cancels) |
 | Ctrl+B | toggle status details | toggle status details |
 | Ctrl+P / Ctrl+M | model picker | model picker |
 | `@` | file picker: ↑↓ move, Enter inserts `@path`, Esc closes | — |
