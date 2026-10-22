@@ -604,6 +604,33 @@ func TestSessionsViewRenamesSelected(t *testing.T) {
 	}
 }
 
+func TestSessionsRenameShowsTitleStartOnOpen(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.viewport.Width = 160
+	s, err := newSession(Config{SessionID: "ses-long-title"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.append(Turn{Prompt: "long title"}); err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("a", 30) + strings.Repeat("b", 30)
+	if err := saveSessionMeta(metaPath(s.Path), SessionMeta{Title: long}); err != nil {
+		t.Fatal(err)
+	}
+	m.show(viewSessions)
+	m.cursor = 0
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if got := m.sessionRename.Value(); got != long {
+		t.Fatalf("prefill=%q", got)
+	}
+	// The box is wide enough for the whole title, so opening it must show the
+	// start rather than a tail scrolled by a stale narrow width.
+	if text := ansi.Strip(m.renderSessionsList()); !strings.Contains(text, "aaaaaaaaaa") {
+		t.Fatalf("title start missing on open:\n%s", text)
+	}
+}
+
 func TestSlotsRoundTrip(t *testing.T) {
 	p := filepath.Join(t.TempDir(), userSlotsName)
 	if err := os.WriteFile(p, []byte("# mine\n1: \"glm-5.3\" high # fast\n0: openrouter/x/y\nbad\nz: a\n"), 0o600); err != nil {

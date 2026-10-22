@@ -206,6 +206,20 @@ func (m *tuiModel) deleteSelectedSession() {
 	m.refreshViewport()
 }
 
+// sessionRenameWidth is the textinput's inner width: the same fixed box
+// geometry used by the model picker's filter.
+func (m *tuiModel) sessionRenameWidth() int {
+	boxW := m.contentWidth() - 2
+	if boxW < 14 {
+		boxW = 14
+	}
+	tiW := boxW - 3
+	if tiW < 12 {
+		tiW = 12
+	}
+	return tiW
+}
+
 // startSessionRename opens the inline title editor prefilled with the
 // selected session's current title.
 func (m *tuiModel) startSessionRename() {
@@ -213,6 +227,10 @@ func (m *tuiModel) startSessionRename() {
 	if m.cursor < 0 || m.cursor >= len(items) {
 		return
 	}
+	// Width must be current before SetValue: the textinput computes its
+	// scroll offsets against Width, and a stale narrower value would show a
+	// tail scrolled out of the box until the first keystroke.
+	m.sessionRename.Width = m.sessionRenameWidth()
 	m.renaming = true
 	m.sessionRename.SetValue(items[m.cursor].title)
 	m.sessionRename.CursorEnd()
@@ -686,11 +704,7 @@ func (m *tuiModel) renderSessionsList() string {
 		if boxW < 14 {
 			boxW = 14
 		}
-		tiW := boxW - 3
-		if tiW < 12 {
-			tiW = 12
-		}
-		m.sessionRename.Width = tiW
+		m.sessionRename.Width = m.sessionRenameWidth()
 		box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(mkBorder).Padding(0, 1).Width(boxW).Render(m.sessionRename.View())
 		b.WriteString(box + "\n\n")
 	}
