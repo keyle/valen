@@ -114,10 +114,10 @@ it at anything you care about.
 ```sh
 make                 # build and run
 make install         # build and install to /usr/local/bin
-make release         # tag, publish the release and update the Homebrew tap
+make brewrelease     # tag (or reuse HEAD's tag), publish and update Homebrew
 ```
 
-`make release` needs `goreleaser` and a `GITHUB_TOKEN` with write access to
+`make brewrelease` needs `goreleaser` and a `GITHUB_TOKEN` with write access to
 `keyle/valen` and `keyle/homebrew-tap`. Tests use offline `httptest` fakes.
 
 ## License
