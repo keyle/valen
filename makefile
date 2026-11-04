@@ -16,7 +16,13 @@ test:
 	go test ./...
 
 tag:
-	@current=$$(git describe --tags --abbrev=0 2>/dev/null || echo 0.0.0); \
+	@test -z "$$(git status --porcelain)" || { echo "working tree is dirty: commit or stash first"; exit 1; }; \
+	upstream=$$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null) || { echo "no upstream branch configured"; exit 1; }; \
+	head=$$(git rev-parse HEAD); \
+	remote=$$(git rev-parse "$$upstream" 2>/dev/null) || { echo "cannot resolve $$upstream"; exit 1; }; \
+	test "$$head" = "$$remote" || { echo "HEAD is not pushed to $$upstream"; exit 1; }; \
+	tagged=$$(git describe --tags --exact-match HEAD 2>/dev/null) && { echo "HEAD already tagged: $$tagged"; exit 1; }; \
+	current=$$(git describe --tags --abbrev=0 2>/dev/null || echo 0.0.0); \
 	next=$$(echo $$current | awk -F. 'BEGIN { OFS = "." } { $$NF = $$NF + 1; print }'); \
 	echo "current tag: $$current"; \
 	echo "next tag:    $$next"; \
