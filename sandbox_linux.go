@@ -68,7 +68,7 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 	if !p.Network {
 		args = append(args, "--unshare-net")
 	}
-	args = append(args, "--die-with-parent", "--new-session", "--", "sh", "-c", command)
+	args = append(args, "--die-with-parent", "--new-session", "--", shellCommand(), "-c", command)
 	return bwrap, args, nil
 }
 

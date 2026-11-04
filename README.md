@@ -22,7 +22,7 @@ models and runs the tool loop locally.
 - Foreground `task` subagents with isolated history, up to 5 in parallel
 - Summary-style auto-compaction (on by default, `/compact` for manual)
 - Session logs (JSONL) and resume
-- Live model, reasoning-effort and OpenRouter routing switching (`/model`,
+- Live model, reasoning-effort and OpenRouter routing switching (`/models`,
   `/effort`, `/route` or ctrl+y cycles none/floor/nitro/exacto)
 - Favourite slots: `alt+1`…`alt+0` jump to a saved model + thinking level +
   routing, `alt+shift+1`…`0` stores the current one (`~/.config/valen/slots.yaml`;
@@ -30,6 +30,8 @@ models and runs the tool loop locally.
 - Shell sandbox: macOS `sandbox-exec`, Linux `bubblewrap`. It blocks writes
   outside the workdir, hides credential files and `.env` secrets, scrubs
   secret env vars, and asks before network use or destructive commands.
+  `/allow-all` skips every access prompt for a session (deny rules and `.env`
+  secrets still apply); `-shell <path>` picks the interpreter (default `sh`).
 
 Picking OpenRouter's routing affinity (`:floor`/`:nitro`/`:exacto`) as a live,
 per-model toggle is rare among harnesses — most expose it only through startup
@@ -60,6 +62,7 @@ valen -p "explain main.go"  # one-shot
 valen -q "explain main.go"  # TUI, runs the prompt immediately
 valen -plan                 # read-only plan mode
 valen -dir ~/proj           # set the working directory
+valen -shell /bin/bash      # shell interpreter for the shell tool (default: sh)
 valen -p "what broke?" -f error.png   # attach an image (repeat -f/--file)
 valen -p "review main.go" -v          # stream thinking summaries + tool calls
 valen -p "review main.go" -vv         # also raw analysis, answer text, tool results

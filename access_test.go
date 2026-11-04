@@ -755,3 +755,75 @@ func TestSandboxConfigOverrides(t *testing.T) {
 		t.Error("relative path must fail loading")
 	}
 }
+
+// /allow-all skips the file and shell prompts but keeps the hard rails.
+func TestAllowAllSkipsAccessPrompts(t *testing.T) {
+	useTempRoot(t) // no prompter: outside access would otherwise be denied
+	prev := allowAllEnabled()
+	setAllowAll(false)
+	t.Cleanup(func() { setAllowAll(prev) })
+
+	out := filepath.Join(real(t.TempDir()), "x.txt")
+	if err := os.WriteFile(out, []byte("hi"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := ReadTool().Fn(ctx, `{"path":`+quoteJSON(out)+`}`); err == nil {
+		t.Fatal("without /allow-all an outside read needs a prompter")
+	}
+
+	setAllowAll(true)
+	got, err := ReadTool().Fn(ctx, `{"path":`+quoteJSON(out)+`}`)
+	if err != nil || !strings.Contains(got, "hi") {
+		t.Fatalf("allow-all read: err=%v out=%q", err, got)
+	}
+	target := filepath.Join(filepath.Dir(out), "new.txt")
+	if err := checkFileAccess(ctx, "write", target); err != nil {
+		t.Fatal(err)
+	}
+	if !allowedWriteWithoutPrompt(getFileRoot(), real(target)) {
+		t.Fatal("allow-all write must approve the folder for the shell sandbox")
+	}
+}
+
+// /allow-all also skips network, destructive-command and outside-path prompts.
+func TestAllowAllSkipsShellPrompts(t *testing.T) {
+	useTempRoot(t) // no prompter
+	prev := allowAllEnabled()
+	setAllowAll(true)
+	t.Cleanup(func() { setAllowAll(prev) })
+
+	outside := filepath.Join(real(t.TempDir()), "x.txt")
+	if err := os.WriteFile(outside, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := gateShell(context.Background(), "git push origin main && echo hi > "+outside, true); err != nil {
+		t.Fatalf("allow-all should skip network, destructive and folder prompts: %v", err)
+	}
+	if !allowedWriteWithoutPrompt(getFileRoot(), real(outside)) {
+		t.Fatal("outside folder should be approved for the shell sandbox")
+	}
+}
+
+// Persistent deny rules survive /allow-all: only prompts are skipped.
+func TestAllowAllKeepsDenyRules(t *testing.T) {
+	useTempRoot(t)
+	useAccessFile(t)
+	prev := allowAllEnabled()
+	setAllowAll(true)
+	t.Cleanup(func() { setAllowAll(prev) })
+
+	dir := real(t.TempDir())
+	if err := saveAccessRule(ruleDeny, dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkFileAccess(context.Background(), "read", filepath.Join(dir, "f")); err == nil {
+		t.Fatal("allow-all must not override a persistent folder deny")
+	}
+	if err := saveAccessRule(ruleShellDeny, "sudo"); err != nil {
+		t.Fatal(err)
+	}
+	if err := approveShell(context.Background(), "sudo", "sudo ls"); err == nil {
+		t.Fatal("allow-all must not override a persistent shell deny")
+	}
+}

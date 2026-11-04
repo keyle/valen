@@ -284,7 +284,7 @@ func (m *tuiModel) handleCommand(text string) tea.Cmd {
 	case "/errors":
 		m.show(viewErrors)
 		return nil
-	case "/model":
+	case "/models":
 		if len(fields) == 1 {
 			return m.openModelPicker("")
 		}
@@ -318,6 +318,28 @@ func (m *tuiModel) handleCommand(text string) tea.Cmd {
 		return m.compactCmd()
 	case "/plan":
 		m.applyPlanMode(!m.cfg.Plan)
+		return nil
+	case "/allow-all":
+		on := !allowAllEnabled()
+		if len(fields) > 1 {
+			switch strings.ToLower(fields[1]) {
+			case "on", "true", "1", "yes":
+				on = true
+			case "off", "false", "0", "no":
+				on = false
+			default:
+				m.notice = "Usage: /allow-all [on|off]"
+				m.noticeErr = true
+				return nil
+			}
+		}
+		setAllowAll(on)
+		if on {
+			m.notice = "Allow-all ON: file, folder, network and command prompts are skipped this session (deny rules and .env secrets still apply)."
+		} else {
+			m.notice = "Allow-all off: permission prompts are back."
+		}
+		m.noticeErr = false
 		return nil
 	case "/quit", "/exit", "/q":
 		return tea.Quit

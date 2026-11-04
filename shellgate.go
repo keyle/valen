@@ -108,7 +108,7 @@ func shellLooksWrite(command string) bool {
 func approveShell(ctx context.Context, label, command string) error {
 	if allow, deny := accessShellRule(label); deny {
 		return fmt.Errorf("denied: %q is blocked by %s; do not retry or work around it", label, accessPathLabel())
-	} else if allow {
+	} else if allow || allowAllEnabled() {
 		return nil
 	}
 	shellMu.Lock()

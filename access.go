@@ -184,7 +184,27 @@ var (
 	accessFile  string // "" = session-only (tests, -config <file>)
 	accessCache *accessRules
 	accessErr   error // parse error of the cached file: saves refuse to clobber it
+
+	// allowAllMode skips the interactive access prompts (file/folder and shell
+	// capability) for the rest of the process, for bulk work like terraforming
+	// a machine. It only skips prompts: persistent deny rules, .env secrets,
+	// credential paths in the shell sandbox and plan mode still apply.
+	allowAllMode bool
 )
+
+// allowAllEnabled reports whether the session auto-approves access prompts.
+func allowAllEnabled() bool {
+	accessMu.Lock()
+	defer accessMu.Unlock()
+	return allowAllMode
+}
+
+// setAllowAll turns prompt skipping on or off (/allow-all).
+func setAllowAll(on bool) {
+	accessMu.Lock()
+	allowAllMode = on
+	accessMu.Unlock()
+}
 
 // setAccessFile pins the persistent rules file ("" keeps decisions
 // session-only) and drops the cache.

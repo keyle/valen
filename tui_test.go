@@ -456,6 +456,30 @@ func TestTUICommandClear(t *testing.T) {
 	}
 }
 
+func TestTUIAllowAllCommand(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	prev := allowAllEnabled()
+	setAllowAll(false)
+	t.Cleanup(func() { setAllowAll(prev) })
+
+	m.handleCommand("/allow-all")
+	if !allowAllEnabled() {
+		t.Fatal("/allow-all must enable prompt skipping")
+	}
+	m.handleCommand("/allow-all off")
+	if allowAllEnabled() {
+		t.Fatal("/allow-all off must restore prompts")
+	}
+	m.handleCommand("/allow-all on")
+	if !allowAllEnabled() {
+		t.Fatal("/allow-all on must enable prompt skipping")
+	}
+	m.handleCommand("/allow-all bogus")
+	if !m.noticeErr || !allowAllEnabled() {
+		t.Fatalf("bad arg must keep the mode and flag an error: noticeErr=%v on=%v", m.noticeErr, allowAllEnabled())
+	}
+}
+
 func TestTUINewSessionMintsBlankID(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	m.cfg.System = "sys"

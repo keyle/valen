@@ -237,7 +237,7 @@ func loadConfig(path string) (Config, error) {
 	}
 	// MaxContextTokens 0 means auto: contextBudget resolves the model's own
 	// window (modelContextWindow) or the safe default. Explicit values
-	// always win and survive /model switches.
+	// always win and survive /models switches.
 	if cfg.MaxTokens == 0 {
 		cfg.MaxTokens = defaultMaxTokens
 	}

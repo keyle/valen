@@ -34,6 +34,30 @@ import (
 // sharedTmp is the shared scratch dir shell may use without asking.
 const sharedTmp = "/tmp"
 
+// defaultShell is the interpreter used when -shell is not given.
+const defaultShell = "sh"
+
+// shellInterpreter is the shell that runs `shell` commands (always as
+// <shell> -c <command>): the -shell flag overrides the "sh" default.
+var shellInterpreter atomic.Value // string
+
+// setShellInterpreter sets the shell; an empty value restores the default.
+func setShellInterpreter(shell string) {
+	shell = strings.TrimSpace(shell)
+	if shell == "" {
+		shell = defaultShell
+	}
+	shellInterpreter.Store(shell)
+}
+
+// shellCommand returns the configured shell, or the default.
+func shellCommand() string {
+	if s, ok := shellInterpreter.Load().(string); ok && s != "" {
+		return s
+	}
+	return defaultShell
+}
+
 // sandboxPolicy is what one command may do. Root is the workdir.
 type sandboxPolicy struct {
 	Root         string

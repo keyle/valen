@@ -310,10 +310,6 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.handleAskKey(s)
 		}
 		if m.mode == viewModels {
-			if m.modelSearch.Focused() {
-				m.modelSearch.Blur() // keep the query, just leave the field
-				return m, nil
-			}
 			m.show(viewChat)
 			return m, nil
 		}
@@ -501,23 +497,6 @@ func (m *tuiModel) ensureCursorVisible() {
 
 func (m *tuiModel) handleOverlayKey(msg tea.KeyMsg, s string) (tea.Model, tea.Cmd) {
 	if m.mode == viewModels {
-		focused := m.modelSearch.Focused()
-		// Space toggles favourites: model IDs never contain spaces, so a
-		// typed space can never match the filter. Handled before the focus
-		// gate so it works while the field is focused, swallowing the key
-		// so it reaches the filter as a no-op.
-		if s == " " {
-			m.toggleFavourite()
-			return m, nil
-		}
-		if !focused {
-			switch s {
-			case "j":
-				s = "down"
-			case "k":
-				s = "up"
-			}
-		}
 		switch s {
 		case "up":
 			if m.cursor > 0 {
@@ -536,7 +515,7 @@ func (m *tuiModel) handleOverlayKey(msg tea.KeyMsg, s string) (tea.Model, tea.Cm
 		case "enter":
 			return m, m.openSelected()
 		case "ctrl+f":
-			m.modelSearch.Focus()
+			m.toggleFavourite()
 			return m, nil
 		case "pgup", "pgdown":
 			if s == "pgup" {
@@ -544,9 +523,6 @@ func (m *tuiModel) handleOverlayKey(msg tea.KeyMsg, s string) (tea.Model, tea.Cm
 			} else {
 				m.viewport.PageDown()
 			}
-			return m, nil
-		}
-		if !focused {
 			return m, nil
 		}
 		old := m.modelSearch.Value()

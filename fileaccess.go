@@ -347,6 +347,17 @@ func checkFileAccess(ctx context.Context, op, abs string) error {
 	if accessDenied(folder) || accessDenied(abs) || accessDenied(canon) {
 		return fmt.Errorf("denied: access to %s is blocked by %s; do not retry or work around it", abs, accessPathLabel())
 	}
+	// /allow-all: book the folder like a session grant without asking, so the
+	// shell sandbox picks it up too (gateShell runs checkFileAccess first).
+	if allowAllEnabled() {
+		approvedMu.Lock()
+		approvedRead[folder] = true
+		if isWriteOp(op) {
+			approvedWritable[folder] = true
+		}
+		approvedMu.Unlock()
+		return nil
+	}
 	if askPrompter == nil {
 		return fmt.Errorf("denied: %s is outside workdir %s (no interactive prompter to approve it)", abs, root)
 	}

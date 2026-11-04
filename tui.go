@@ -264,7 +264,7 @@ type sessionItem struct {
 	turns  int
 }
 
-// modelChoice is one row in the /model picker.
+// modelChoice is one row in the /models picker.
 type modelChoice struct {
 	id        string
 	current   bool
@@ -506,7 +506,7 @@ func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session 
 	ta.Focus()
 
 	search := textinput.New()
-	search.Placeholder = "ctrl+f to filter models"
+	search.Placeholder = "type to filter models"
 	search.Prompt = ""
 	search.CharLimit = 0
 	search.Width = 52
@@ -691,7 +691,7 @@ func (m *tuiModel) show(mode viewMode) {
 	} else {
 		m.input.Blur()
 		if mode == viewModels {
-			m.modelSearch.Blur() // ctrl+f focuses it; j/k/space work until then
+			m.modelSearch.Focus()
 		} else {
 			m.modelSearch.Blur()
 		}
@@ -730,12 +730,12 @@ func runTUI(ctx context.Context, cfg Config, statePath string, client *openai.Cl
 		m.client = newClient(m.cfg, "")
 	}
 	// Keyless boots still open: explain immediately which key the
-	// configured model needs so /model has context before first send.
+	// configured model needs so /models has context before first send.
 	if err := missingKeyError(m.cfg, m.apiKey); err != nil {
 		if modelProvider(m.cfg.Model) == ProviderOpenRouter {
-			m.notice = fmt.Sprintf("OpenRouter key not found — export %s=... to use %s. /model still lists both providers.", openRouterKeyEnv, m.cfg.Model)
+			m.notice = fmt.Sprintf("OpenRouter key not found — export %s=... to use %s. /models still lists both providers.", openRouterKeyEnv, m.cfg.Model)
 		} else {
-			m.notice = fmt.Sprintf("OpenCode API key not found — set %s=... to use %s. /model still lists both providers.", openCodeKeyEnv, m.cfg.Model)
+			m.notice = fmt.Sprintf("OpenCode API key not found — set %s=... to use %s. /models still lists both providers.", openCodeKeyEnv, m.cfg.Model)
 		}
 		m.noticeErr = true
 		m.refreshViewport()

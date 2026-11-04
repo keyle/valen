@@ -410,7 +410,7 @@ func TestTUIFavouriteSlotsAssignAndSwitch(t *testing.T) {
 	}
 
 	// Switch elsewhere, then alt+2 returns to glm-5.3 + high.
-	m.handleCommand("/model kimi-k2.6")
+	m.handleCommand("/models kimi-k2.6")
 	if m.cfg.Model != "kimi-k2.6" {
 		t.Fatalf("model=%q", m.cfg.Model)
 	}
@@ -448,7 +448,7 @@ func TestTUISlotsView(t *testing.T) {
 
 	// Store two slots: 2 ← glm-5.3/high, 3 ← kimi-k2.6.
 	_, _ = m.handleKey(alt('@'))
-	m.handleCommand("/model kimi-k2.6")
+	m.handleCommand("/models kimi-k2.6")
 	_, _ = m.handleKey(alt('#'))
 
 	// ctrl+s opens the slots view.

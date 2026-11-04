@@ -85,6 +85,7 @@ func main() {
 func start() error {
 	cfgPath := flag.String("config", "", "path to config (default: ~/.config/valen/valen.toml, seeded on first run)")
 	dirFlag := flag.String("dir", "", "working directory: sandbox root for file tools and shell")
+	shellFlag := flag.String("shell", "", "shell interpreter for shell commands (default: sh)")
 	printMode := flag.Bool("p", false, "one-shot: answer the quoted prompt and exit")
 	qFlag := flag.Bool("q", false, "start the TUI and run the prompt immediately")
 	planFlag := flag.Bool("plan", false, "plan mode: read-only investigation, present the plan as the reply")
@@ -101,8 +102,9 @@ func start() error {
 	// written before trailing flags: valen -p "..." -v. Reorder so flags win
 	// regardless of position.
 	flag.CommandLine.Parse(reorderFlags(os.Args[1:], map[string]bool{
-		"config": true, "dir": true, "dvlog": true, "f": true, "file": true,
+		"config": true, "dir": true, "shell": true, "dvlog": true, "f": true, "file": true,
 	}))
+	setShellInterpreter(*shellFlag)
 
 	// Resolve paths before any chdir so relative paths keep working.
 	// Default: the user config dir, seeded from the embedded default on first
@@ -191,7 +193,7 @@ func start() error {
 
 	apiKey := effectiveOpenCodeKey(cfg, "")
 	// Missing keys never fail boot: the TUI still opens so the user can
-	// browse /model, and the missing key surfaces when a model needing it
+	// browse /models, and the missing key surfaces when a model needing it
 	// is picked or a turn is sent (see missingKeyError + dispatchTurn).
 	// Trimmed: pasted keys with stray whitespace 401 otherwise.
 	cfg.OpenRouterKey = effectiveOpenRouterKey(cfg)

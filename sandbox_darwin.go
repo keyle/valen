@@ -134,5 +134,5 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 		defs = append(defs, "-D", fmt.Sprintf("E%d=%s", i, f))
 	}
 	args := append([]string{"-p", prof.String()}, defs...)
-	return sandboxExec, append(args, "sh", "-c", command), nil
+	return sandboxExec, append(args, shellCommand(), "-c", command), nil
 }

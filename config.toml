@@ -11,7 +11,7 @@ model = "openrouter/anthropic/claude-sonnet-5.5"
                                # Fixed (mimo, minimax, …): omit (default only).
                                # Unknown models learn from the provider 400 and
                                # cache to $XDG_DATA_HOME/valen/thinking_levels.json.
-                               # Switch live with /model (ctrl+p) and /effort — saved to state.json beside this file
+                               # Switch live with /models (ctrl+p) and /effort — saved to state.json beside this file
                                # (overrides model/thinking here; delete it to reset).
 thinking = "high"
 tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "grep"]
@@ -30,7 +30,7 @@ openrouter_key = ""
 # provider_ignore = ["baseten"]  # provider slugs to skip per request. Default
 #                                # ["baseten"]; an explicit [] disables it.
 # provider_only = []             # allowlist instead of the blacklist.
-# Second provider, OpenRouter: /model lists openrouter/<vendor>/<model>
+# Second provider, OpenRouter: /models lists openrouter/<vendor>/<model>
 # (recent flagships while offline). A send without a key reports
 # "OpenRouter key not found" instead of failing boot.
 # session_id = "ses-stable-id"   # optional, generated per run when omitted
@@ -59,7 +59,7 @@ openrouter_key = ""
                                # known (gemini 1M, claude 500k, gpt 400k, grok/
                                # qwen/kimi 256k, glm/minimax 200k, deepseek
                                # 128k, else 300k); explicit values override and
-                               # survive /model switches. Fail-fast per-round
+                               # survive /models switches. Fail-fast per-round
                                # budget (est. runes/4): over-budget history
                                # aborts the turn instead of a doomed oversized
                                # send. Auto-compaction (keep*3) normally fires

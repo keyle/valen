@@ -328,6 +328,18 @@ func contains(l []string, s string) bool {
 	return false
 }
 
+func TestSandboxArgvUsesConfiguredShell(t *testing.T) {
+	setShellInterpreter("/bin/bash")
+	t.Cleanup(func() { setShellInterpreter("") })
+	_, args, err := sandboxArgv("echo hi", sandboxPolicy{})
+	if err != nil {
+		t.Fatalf("sandbox backend unavailable: %v", err)
+	}
+	if len(args) < 3 || args[len(args)-3] != "/bin/bash" || args[len(args)-2] != "-c" || args[len(args)-1] != "echo hi" {
+		t.Fatalf("configured shell must wrap the command: %q", args)
+	}
+}
+
 func TestSandboxArgvKeepsCommandIntact(t *testing.T) {
 	cmd := `echo "a'b" $(date)`
 	_, args, err := sandboxArgv(cmd, sandboxPolicy{Writable: []string{"/tmp"}})

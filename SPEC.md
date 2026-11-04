@@ -84,19 +84,19 @@ and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
 
 | Key | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `model` | string | — | **required.** Model ID, e.g. `glm-5.3-flash`, `kimi-k3`, `zen/claude-haiku-5-5`, or `openrouter/moonshotai/kimi-k3`. The `zen/` prefix selects OpenCode Zen (`https://opencode.ai/zen/v1`, same OpenCode key as Go; transport chosen per model: gpt/grok/muse → responses; claude and qwen3.5–3.8 plus/flash (all qwen except qwen3.8-max) → messages; qwen3.8-max and the rest → chat; Gemini models are not supported); the `openrouter/` prefix selects the OpenRouter provider (needs its key, below); bare IDs ride OpenCode Go. Switch live with `/model` (ctrl+p); persisted to `valen.toml` |
+| `model` | string | — | **required.** Model ID, e.g. `glm-5.3-flash`, `kimi-k3`, `zen/claude-haiku-5-5`, or `openrouter/moonshotai/kimi-k3`. The `zen/` prefix selects OpenCode Zen (`https://opencode.ai/zen/v1`, same OpenCode key as Go; transport chosen per model: gpt/grok/muse → responses; claude and qwen3.5–3.8 plus/flash (all qwen except qwen3.8-max) → messages; qwen3.8-max and the rest → chat; Gemini models are not supported); the `openrouter/` prefix selects the OpenRouter provider (needs its key, below); bare IDs ride OpenCode Go. Switch live with `/models` (ctrl+p); persisted to `valen.toml` |
 | `thinking` | string | empty (provider default) | Reasoning level, per-model (see `/effort` picker): muse-spark `minimal`/`low`/`medium`/`high`/`xhigh`, gpt/grok `low`…`max` (+`none` on gpt), glm/deepseek `low`/`high`/`max` or `high`/`max`, kimi-k3 `max` only, toggle models `none`/`high`, fixed no-control models omit. Switch live with `/effort` (`/thinking` alias) or ctrl+t (cycles low→high, wraps); persisted to `valen.toml`. Unknown models fall back to the full vocabulary until a 400 teaches the valid list, cached at `$XDG_DATA_HOME/valen/thinking_levels.json` |
 | `routing` | string | empty (`none`) | OpenRouter provider-routing variant, sent as a model-slug suffix: `floor` (cheapest; `provider.sort: "price"`), `nitro` (fastest throughput; `provider.sort: "throughput"`), `exacto` (quality-first tool-use sorting), or empty/`none` (OpenRouter's default load balancing). Switch live with `/route [none\|floor\|nitro\|exacto]` or ctrl+y (cycles none → floor → nitro → exacto, wraps); a **silent no-op on Go/Zen**. Persisted to `state.json` alongside `thinking` and stored in favourite slots; ignored on non-OpenRouter models |
 | `provider_ignore` | string[] | `["baseten"]` | OpenRouter `provider.ignore`: provider slugs skipped per request (`openrouter/…` models only; a silent no-op on Go/Zen). Unset keeps the default `["baseten"]`, an explicit `[]` disables the blacklist. Mutually exclusive with `provider_only` (which wins when both are set). The `provider` object merges with the `routing` suffix, which sets `provider.sort` |
 | `provider_only` | string[] | unset | OpenRouter `provider.only`: an allowlist instead of the blacklist. Sent as the request `provider` object alongside `routing` |
-| `opencode_key` | string | empty | OpenCode API key itself, shared by Go and Zen. Empty falls back to the `OPENCODE_API_KEY` env var. Missing keys never fail boot — the TUI still opens and `/model` lists all providers; picking or sending with a Go/Zen model and no key says "OpenCode API key not found" |
-| `openrouter_key` | string | empty | OpenRouter API key itself. Empty falls back to the `OPENROUTER_API_KEY` env var. Second provider: `/model` always lists OpenRouter models (`openrouter/<vendor>/<model>`, fallback when offline) served via OpenRouter's OpenAI-compatible chat endpoint. Picking or sending with an `openrouter/…` model and no key says "OpenRouter key not found" |
+| `opencode_key` | string | empty | OpenCode API key itself, shared by Go and Zen. Empty falls back to the `OPENCODE_API_KEY` env var. Missing keys never fail boot — the TUI still opens and `/models` lists all providers; picking or sending with a Go/Zen model and no key says "OpenCode API key not found" |
+| `openrouter_key` | string | empty | OpenRouter API key itself. Empty falls back to the `OPENROUTER_API_KEY` env var. Second provider: `/models` always lists OpenRouter models (`openrouter/<vendor>/<model>`, fallback when offline) served via OpenRouter's OpenAI-compatible chat endpoint. Picking or sending with an `openrouter/…` model and no key says "OpenRouter key not found" |
 | `session_id` | string | `ses-<unixnano>` | Stable per conversation; sent as `x-opencode-session` |
 | `saved_sessions` | int | `50` | Saved session logs kept per project folder (`$XDG_DATA_HOME/valen/sessions/<workdir>-<hash>/`). The oldest JSONL plus its `.meta.json` are pruned when a new session starts; `0` or less uses the default. TUI `/sessions` (ctrl+l) lists them and `x` deletes the selected one |
 | `plan` | bool | `false` | Plan mode: read-only investigation — the plan overlay joins the system prompt, `write`/`edit`/`shell` and every MCP tool refuse with guidance, `task` is explore-only. TUI `/plan` or Tab in the chatbox toggles at runtime; `-plan` sets it headless |
 | `max_rounds` | int | `300` | Per-turn round backstop; on exhaustion the turn compacts send-side and gets exactly one more window, then stops ("across 2 compacted windows") |
 | `max_stagnant_rounds` | int | `25` | Maximum consecutive identical ordered tool batches allowed; changed tool names/normalized arguments/order reset the count. Not a limit on read-only research; the single-call third-repeat guard may stop earlier |
-| `max_context_tokens` | int | `0` (auto) | Fail-fast budget per round (est. runes/4): `0` resolves the model's own input window when known (gemini 1M, claude 500k, gpt 400k, grok/qwen/kimi 256k, glm/minimax 200k, deepseek 128k, else 300k); explicit values override and survive `/model`. Over-budget history aborts the turn with guidance instead of a doomed send |
+| `max_context_tokens` | int | `0` (auto) | Fail-fast budget per round (est. runes/4): `0` resolves the model's own input window when known (gemini 1M, claude 500k, gpt 400k, grok/qwen/kimi 256k, glm/minimax 200k, deepseek 128k, else 300k); explicit values override and survive `/models`. Over-budget history aborts the turn with guidance instead of a doomed send |
 | `request_timeout_seconds` | int | `300` | Optional deadline for each HTTP attempt, including response-body reads (SSE or unary), not the whole turn; retries each get a fresh deadline |
 | `temperature` | float | unset | Pointer semantics: unset omits the field, `0.0` sends zero |
 | `max_tokens` | int | `16384` | Explicit output cap on all three transports (`max_tokens` on Chat/Messages, `max_output_tokens` on Responses); positive configured values are honored without a floor |
@@ -366,7 +366,7 @@ Rules the registry enforces:
 
 | Tool | Args | Behaviour |
 | --- | --- | --- |
-| `shell` | `command`, `network` (bool, default false) | `sh -c` in the workdir, 60s timeout, combined stdout+stderr; non-zero exit is returned as content with `[exit N]`, a timeout as partial output with `[timed out after …]`, not as an error |
+| `shell` | `command`, `network` (bool, default false) | `<shell> -c` in the workdir (`sh` unless `-shell <path>` is given), 60s timeout, combined stdout+stderr; non-zero exit is returned as content with `[exit N]`, a timeout as partial output with `[timed out after …]`, not as an error |
 | `web_search` | `query` | DuckDuckGo HTML endpoint, up to 8 results as `N. title / url / snippet`; unwraps `/l/?uddg=` tracker links; 1 MiB body cap |
 | `web_fetch` | `url` | GET with 512 KiB cap, HTML tokenized to text (script/style/noscript dropped), truncated to 8000 chars |
 | `read` | `path`, `offset`, `limit` | Line-windowed read (default 2000 lines, max 5000, ~12KB per call with an offset hint to continue); lines prefixed with their number for `edit` context; long lines trimmed at 1000 chars. An image returns a text descriptor instead, since tool results carry no bytes: when the image rides this turn it says so (`[image shot.png 1280x720, 84 KiB] attached to this message — inspect the image part, no need to read the file`), otherwise it names the way to attach it (`… ask the user to attach it with @shot.png` inside the workdir, `… ask the user to paste the image or its path` outside it) |
@@ -393,7 +393,9 @@ interactive frontend they are denied with a clear error, so the model can
 explain and ask.
 
 `shell` runs under an OS sandbox (`sandbox.go`), enforced by the kernel so
-`eval`, `$(...)` and scripts cannot escape it:
+`eval`, `$(...)` and scripts cannot escape it. Commands run as
+`<shell> -c <command>` where `<shell>` is `sh` by default; `-shell <path>`
+selects another interpreter (e.g. `-shell /bin/bash`):
 
 - **Writes** only in the workdir, sibling git worktrees, folders approved for
   write (this session or in `access.toml`), the private temp dir and tool caches
@@ -477,6 +479,13 @@ session-only). An all-sessions answer is followed by a yes/no confirm (default
 yes; an empty Enter accepts it) naming the rule and
 `~/.config/valen/access.toml`; `No`, or cancelling the confirm, downgrades to
 the session outcome; an unrecognized answer fails closed to deny-this-session.
+
+`/allow-all` (TUI) skips every access prompt for the rest of the session:
+folder approvals are booked like session grants (so the shell sandbox inherits
+them), and shell-capability and destructive-command prompts are skipped. It is
+the bulk-work escape hatch (installing or terraforming a machine). Hard rails
+stay: persistent `deny` rules, `.env`/credential hiding, the OS sandbox and
+plan mode still apply. `/allow-all off` restores prompts.
 
 `access.toml` (seeded empty, hand-editable, written atomically, deduplicated and
 sorted):
@@ -676,7 +685,7 @@ server usage, per-tool args/output bytes with durations, batch totals,
 prune/compact actions, and HTTP attempts (status, retry sleeps). Off by
 default; zero hot-loop cost when off.
 
-TUI model controls: `/model [filter]` (ctrl+p) lists the OpenCode Go, OpenCode
+TUI model controls: `/models [filter]` (ctrl+p) lists the OpenCode Go, OpenCode
 Zen and OpenRouter catalogs and
 switches; `/effort [level]` (`/thinking` alias) sets the thinking level and
 `/route [none|floor|nitro|exacto]` (ctrl+y) the OpenRouter routing variant for

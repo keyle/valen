@@ -616,7 +616,7 @@ func newTestModelWithConfig(t *testing.T, body string) (*tuiModel, string) {
 func TestTUIModelDirectSwitchPersists(t *testing.T) {
 	t.Setenv(openCodeKeyEnv, "test-key")
 	m, path := newTestModelWithConfig(t, "model = \"glm-5.3-flash\"\nthinking = \"max\"\nbase_url = \"https://unused\"\n")
-	m.handleCommand("/model kimi-k2.6")
+	m.handleCommand("/models kimi-k2.6")
 	if m.cfg.Model != "kimi-k2.6" {
 		t.Fatalf("model=%q notice=%q", m.cfg.Model, m.notice)
 	}
@@ -634,7 +634,7 @@ func TestTUIModelDirectSwitchPersists(t *testing.T) {
 
 func TestTUIModelSwitchSessionOnlyWithoutPath(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
-	m.handleCommand("/model glm-5.3")
+	m.handleCommand("/models glm-5.3")
 	if m.cfg.Model != "glm-5.3" {
 		t.Fatalf("model=%q", m.cfg.Model)
 	}
@@ -679,10 +679,10 @@ func TestTUIModelPickerFavouritesFloatAndToggle(t *testing.T) {
 		t.Fatalf("favourite must render a star:\n%s", text)
 	}
 
-	// Space on the highlighted favourite unstars it and persists.
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+	// ctrl+f on the highlighted favourite unstars it and persists.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlF})
 	if m.isFavourite("gpt-5.6-luna") {
-		t.Fatal("space must unstar the highlighted model")
+		t.Fatal("ctrl+f must unstar the highlighted model")
 	}
 	if m.modelChoices[m.cursor].id != "gpt-5.6-luna" {
 		t.Fatalf("cursor should stay on the toggled model: cursor=%d choices=%v", m.cursor, m.modelChoices)
@@ -691,16 +691,16 @@ func TestTUIModelPickerFavouritesFloatAndToggle(t *testing.T) {
 		t.Fatalf("unstar must persist: %q", raw)
 	}
 
-	// Space on a plain row stars it, floats it to the top and writes the file.
+	// ctrl+f on a plain row stars it, floats it to the top and writes the file.
 	m.cursor = 0
 	for i, c := range m.modelChoices {
 		if c.id == "glm-5.3" {
 			m.cursor = i
 		}
 	}
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlF})
 	if !m.isFavourite("glm-5.3") {
-		t.Fatal("space must star glm-5.3")
+		t.Fatal("ctrl+f must star glm-5.3")
 	}
 	if m.modelChoices[0].id != "glm-5.3" {
 		t.Fatalf("new favourite must float to top: %v", m.modelChoices)
@@ -716,24 +716,23 @@ func TestTUIModelPickerFavouritesFloatAndToggle(t *testing.T) {
 	}
 }
 
-func TestTUIModelPickerSpaceFavouritesWhileFilterFocused(t *testing.T) {
+func TestTUIModelPickerCtrlFTogglesFavourite(t *testing.T) {
 	m, statePath := newTestModelWithConfig(t, "model = \"m\"\nbase_url = \"https://unused\"\n")
 	favPath := filepath.Join(filepath.Dir(statePath), userFavouritesName)
 	_, _ = m.Update(modelsLoadedMsg{ids: []string{"alpha", "j-model", "k-model"}})
 
-	// Focus the filter and narrow to a single row.
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlF})
+	// The filter is focused on open; typing narrows to a single row.
 	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	if !m.modelSearch.Focused() || len(m.modelChoices) != 1 || m.modelChoices[0].id != "j-model" {
 		t.Fatalf("setup: focused=%v choices=%v", m.modelSearch.Focused(), m.modelChoices)
 	}
-	// Space stars the highlighted model without leaking into the query.
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+	// ctrl+f stars the highlighted model without leaking into the query.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlF})
 	if m.modelSearch.Value() != "j" {
-		t.Fatalf("space must not enter the filter: query=%q", m.modelSearch.Value())
+		t.Fatalf("ctrl+f must not enter the filter: query=%q", m.modelSearch.Value())
 	}
 	if !m.isFavourite("j-model") {
-		t.Fatal("space while the filter is focused must star the highlighted model")
+		t.Fatal("ctrl+f must star the highlighted model")
 	}
 	if raw, _ := os.ReadFile(favPath); !strings.Contains(string(raw), "- j-model") {
 		t.Fatalf("star must persist: %q", raw)
@@ -772,22 +771,17 @@ func TestTUIModelPickerSearchAndEscape(t *testing.T) {
 	if m.mode != viewModels {
 		t.Fatalf("mode=%v", m.mode)
 	}
-	if text := ansi.Strip(m.renderViewportContent()); !strings.Contains(text, "ctrl+f to filter models") {
+	if !m.modelSearch.Focused() {
+		t.Fatal("the filter must be focused on open")
+	}
+	if text := ansi.Strip(m.renderViewportContent()); !strings.Contains(text, "type to filter models") {
 		t.Fatalf("picker should render its search box:\n%s", text)
 	}
 
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	if m.cursor != 1 || m.modelSearch.Value() != "" {
-		t.Fatalf("unfocused j should move down: cursor=%d query=%q", m.cursor, m.modelSearch.Value())
-	}
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
-	if m.cursor != 0 {
-		t.Fatalf("unfocused k should move up: cursor=%d", m.cursor)
-	}
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlF})
+	// Typing filters immediately; arrows still move the selection.
 	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	if m.modelSearch.Value() != "j" || len(m.modelChoices) != 1 || m.modelChoices[0].id != "j-model" {
-		t.Fatalf("j should filter instead of moving the cursor: query=%q choices=%v cursor=%d", m.modelSearch.Value(), m.modelChoices, m.cursor)
+		t.Fatalf("j should filter: query=%q choices=%v cursor=%d", m.modelSearch.Value(), m.modelChoices, m.cursor)
 	}
 	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
 	if m.cursor != 0 || m.modelSearch.Value() != "j" {
@@ -796,20 +790,12 @@ func TestTUIModelPickerSearchAndEscape(t *testing.T) {
 	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyBackspace})
 	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
 	if m.modelSearch.Value() != "k" || len(m.modelChoices) != 1 || m.modelChoices[0].id != "k-model" {
-		t.Fatalf("k should filter instead of moving the cursor: query=%q choices=%v cursor=%d", m.modelSearch.Value(), m.modelChoices, m.cursor)
+		t.Fatalf("k should filter: query=%q choices=%v cursor=%d", m.modelSearch.Value(), m.modelChoices, m.cursor)
 	}
 
 	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
-	if m.mode != viewModels || m.modelSearch.Focused() || m.modelSearch.Value() != "k" {
-		t.Fatalf("first esc should only unfocus the field: mode=%v query=%q", m.mode, m.modelSearch.Value())
-	}
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	if m.modelSearch.Value() != "k" || m.cursor != 0 {
-		t.Fatalf("unfocused j must navigate, not type: query=%q cursor=%d", m.modelSearch.Value(), m.cursor)
-	}
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
 	if m.mode != viewChat {
-		t.Fatalf("esc without field focus should close the picker: mode=%v", m.mode)
+		t.Fatalf("esc should close the picker: mode=%v", m.mode)
 	}
 }
 

@@ -430,7 +430,7 @@ func (m *tuiModel) renderModelsList() string {
 
 	var b strings.Builder
 	b.WriteString(searchBox + "\n\n")
-	b.WriteString(metaStyle.Render("Models — ↑/↓/j/k select · enter switches · space favourites · ctrl+f filter · esc back") + "\n\n")
+	b.WriteString(metaStyle.Render("Models — ↑/↓ select · enter switches · ctrl+f favourites · type to filter · esc back") + "\n\n")
 	if len(m.modelChoices) == 0 {
 		query := strings.TrimSpace(m.modelFilter)
 		if query == "" {
@@ -613,7 +613,7 @@ func helpBody() string {
 		{"ctrl+s", "favourite slots"},
 		{"ctrl+q", "quit"},
 		{"ctrl+c · ctrl+d", "cancel the turn · quit"},
-		{"ctrl+f", "filter in the model picker"},
+		{"ctrl+f", "toggle a favourite in the model picker"},
 		{"r · x", "sessions view: rename the selected title · delete it"},
 		{"@", "file picker — type to fuzzy-match files and folders, ↑↓ move, enter inserts @path and attaches it, esc closes"},
 		{"ctrl+v", "paste a clipboard image as an attachment (or a file path as a chip)"},
@@ -635,10 +635,11 @@ func helpBody() string {
 		{"/tools", "full tool output"},
 		{"/slots", "favourite slots — enter switches · x unbinds"},
 		{"/errors", "error log"},
-		{"/model [filter]", "list and switch models (provider-prefixed)"},
+		{"/models [filter]", "list and switch models (provider-prefixed)"},
 		{"/effort [level]", "thinking level for the current model (/thinking)"},
 		{"/route", "OpenRouter provider routing; a no-op on Go/Zen"},
 		{"/plan", "toggle plan mode (same as tab)"},
+		{"/allow-all [on|off]", "auto-approve every access prompt this session"},
 		{"/compact", "prune + summarize older history (/summarize)"},
 		{"/copy", "copy the last reply to the clipboard"},
 		{"/save", "save the transcript"},
@@ -646,12 +647,14 @@ func helpBody() string {
 		{"/clear", "clear the input"},
 		{"/quit", "quit (also :q)"},
 	}))
-	b.WriteString("  /model picker: ↑↓/j/k select · enter switches · space stars a favourite · ctrl+f filters.\n")
+	b.WriteString("  /models picker: ↑↓ select · enter switches · ctrl+f stars a favourite · type filters.\n")
 	b.WriteString("  /copy also by clicking the underlined \"copy response\" under the reply.\n")
 	b.WriteString("  /copy and \"copy response\" copy the reply as markdown source; drag-selecting transcript text copies the rendered text you see. Both are useful.\n")
 
 	b.WriteString("\n" + metaStyle.Render("Notes") + "\n")
 	b.WriteString(`  AskUserQuestion: ↑↓/jk move · enter select · space toggles multi-select · type your own · enter confirms.
+`)
+	b.WriteString(`  /allow-all skips file/folder, network and destructive-command prompts until /allow-all off; deny rules and .env secrets still apply.
 `)
 	b.WriteString(`  Go plan usage (5h / 7d / 30d) shows in the footer: dim, yellow past 80%, pink at the cap.
 `)

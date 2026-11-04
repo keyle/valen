@@ -320,8 +320,8 @@ Events, so compaction cannot erase them. `AskUserQuestion` blocks the
 background turn on `askPrompter`; the UI thread serves `questionMsg` in the
 question overlay and replies with confirmed answers, leaving history and the
 transport converters unchanged. Slash commands
-(`/clear` `/think` `/save` `/help` `/history` `/sessions` `/tools` `/slots` `/errors` `/model`
-`/effort` `/route` `/copy` `/new` `/compact` `/plan` `/quit`) resolve inside `submit`/`handleCommand`; `/model` fetches
+(`/clear` `/think` `/save` `/help` `/history` `/sessions` `/tools` `/slots` `/errors` `/models`
+`/effort` `/route` `/copy` `/new` `/compact` `/plan` `/allow-all` `/quit`) resolve inside `submit`/`handleCommand`; `/models` fetches
 the catalog asynchronously via `modelsLoadedMsg`. The footer quota refreshes
 via `orCreditsMsg`/`usageMsg` from `fetchQuotaCmd` at `Init`, on each
 one-minute `usageTickMsg`, after each `turnDoneMsg`, and on every model
@@ -451,12 +451,14 @@ shows the tokens, not the bytes.
 
 ## Model switching
 
-- `/model` (ctrl+p, or ctrl+m where the terminal sends disambiguated ctrl+m)
+- `/models` (ctrl+p, or ctrl+m where the terminal sends disambiguated ctrl+m)
   fetches the live catalogs — OpenCode Go (`GET {base_url}/models`), OpenCode
   Zen (`GET https://opencode.ai/zen/v1/models`, same OpenCode key as Go) plus
   OpenRouter (`GET https://openrouter.ai/api/v1/models`) — and opens
-  a picker: ↑↓ move, Enter switches, Space stars/unstars (focused or not — model IDs hold no spaces, so a typed space can never match the filter), j/k also move, Ctrl+F focuses the search field (ghost hint
-  "ctrl+f to filter models"; Esc unfocuses it, a second Esc backs out). The
+  a picker: ↑↓ move, Enter switches, Ctrl+F stars/unstars the highlighted row.
+  The filter field is always focused (ghost hint "type to filter models"), so
+  typing narrows the list immediately; j/k are ordinary filter characters and
+  Esc closes the picker. The
   picker search box is
   pinned to the full content width (like the chatbox) so typing never resizes
   it. All three providers list even
@@ -476,7 +478,7 @@ shows the tokens, not the bytes.
   `openrouter/…` prefix) at
   `~/.config/valen/favourites.yaml` (`$XDG_CONFIG_HOME/valen/`). Starred
   models sort to the top of the picker with a ★, alphabetically within each
-  group, and the cursor stays on the toggled row. Space writes the file;
+  group, and the cursor stays on the toggled row. Ctrl+F writes the file;
   without a state path (tests, `-config <file>`) favourites are session-only.
 - Favourite slots: ten assignable model + thinking-level + routing triples, like
   weapon slots. `alt+1`…`alt+9`, `alt+0` (the tenth) switch to the triple
@@ -493,8 +495,8 @@ shows the tokens, not the bytes.
   overlays (not during a question). Terminals must send Option/Alt as Meta;
   alt+shift+digit arrives as the US shifted symbol (`alt+!`) or, under Kitty
   disambiguate mode, CSI `<digit>;4u`.
-- `/model <filter>` switches directly on an exact or unique-substring match,
-  otherwise opens the filtered picker. `/model <known-id>` works offline.
+- `/models <filter>` switches directly on an exact or unique-substring match,
+  otherwise opens the filtered picker. `/models <known-id>` works offline.
 - Switching keeps the conversation history; an incompatible thinking level
   resets to the provider default with a note.
 - Both model and thinking persist to `~/.config/valen/state.json`
@@ -560,14 +562,16 @@ the full height, starts at its heading and scrolls to follow the selected option
 | `@` | file picker: ↑↓ move, Enter inserts `@path`, Esc closes | — |
 | Ctrl+S | favourite slots view | favourite slots view |
 | Ctrl+Q | quit | quit |
-| ↑↓ / j/k | textarea cursor (PgUp scrolls); ↑ on an empty box recalls the last prompt | move selection (view scrolls to follow) |
+| ↑↓ / j/k | textarea cursor (PgUp scrolls); ↑ on an empty box recalls the last prompt | move selection (models: ↑↓; view scrolls to follow) |
 | Space / Enter / Esc | — | question overlay: toggle / select+confirm / dismiss |
 
 Function keys are gone; the footer only points at `/help`, which lists every
 shortcut (and the shortcut line above).
 
 Slash commands: `/help` `/history` `/sessions` (`/resume`, `/continue` — resume most recent) `/tools` `/slots` `/errors` `/think` `/save` `/copy`
-`/clear` `/new` `/compact` (`/summarize` alias) `/plan` `/model [filter]` `/effort [level]` (`/thinking` alias) `/route [none|floor|nitro|exacto]` `/quit` (`:q` alias).
+`/clear` `/new` `/compact` (`/summarize` alias) `/plan` `/allow-all [on|off]` `/models [filter]` `/effort [level]` (`/thinking` alias) `/route [none|floor|nitro|exacto]` `/quit` (`:q` alias).
+`/allow-all` skips file/folder, network and destructive-command prompts for the
+session (persistent deny rules and `.env` secrets still apply).
 
 ## Streaming (live)
 
@@ -588,7 +592,7 @@ retries the round unary.
 
 - Pure model tests (no TTY): instant user echo before `turnDoneMsg`, reply +
   headers + usage on success, friendly 402, history/tools/model/effort views +
-  detail, `/clear` `/think` `/model` `/effort` `/route` unknown-command paths, no
+  detail, `/clear` `/think` `/models` `/effort` `/route` unknown-command paths, no
   `user:`/`assistant:` prefixes, thinking visible by default.
 - Question overlay tests: multi-select, type-your-own, confirmation submit,
   and dismiss paths.
