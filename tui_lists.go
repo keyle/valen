@@ -344,6 +344,7 @@ func (m *tuiModel) resumeSessionPath(path string) {
 	// and throughput, the cumulative billed cost, and the model's rates.
 	m.orMeta = nil
 	m.orSpent, m.orSpentSet = 0, false
+	m.pendingCost, m.pendingCostSet = 0, false
 	for _, t := range turns {
 		if t.Cost != 0 {
 			m.orSpent += t.Cost

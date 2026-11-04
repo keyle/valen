@@ -294,11 +294,18 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 	var eventErr error
 	var terminal bool
 	orMeta := ORMeta{}
+	sentProvider, sentCost := false, false
 	var firstDelta, lastDelta time.Time
 	markDelta := func() {
 		now := time.Now()
 		if firstDelta.IsZero() {
 			firstDelta = now
+			// TTFT is known at the first token: report it while the model is
+			// still reasoning instead of waiting for the round to end.
+			if onEvent != nil && modelProvider(cfg.Model) == ProviderOpenRouter {
+				m := ORMeta{Provider: orMeta.Provider, TTFT: now.Sub(start).Seconds()}
+				onEvent(Event{Kind: "or_meta", ORMeta: &m})
+			}
 		}
 		lastDelta = now
 	}
@@ -324,6 +331,18 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 		}
 		if modelProvider(cfg.Model) == ProviderOpenRouter {
 			parseOpenRouterMeta([]byte(ev.data), &orMeta.Provider, &orMeta.Cost, &orMeta.HasCost)
+			if onEvent != nil {
+				if !sentProvider && orMeta.Provider != "" {
+					sentProvider = true
+					m := ORMeta{Provider: orMeta.Provider}
+					onEvent(Event{Kind: "or_meta", ORMeta: &m})
+				}
+				if !sentCost && orMeta.HasCost {
+					sentCost = true
+					m := ORMeta{Provider: orMeta.Provider, Cost: orMeta.Cost, HasCost: true}
+					onEvent(Event{Kind: "or_meta", ORMeta: &m})
+				}
+			}
 		}
 		for _, choice := range chunk.Choices {
 			if choice.Index != 0 {
@@ -394,9 +413,17 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 				orMeta.TPS = float64(usage.CompletionTokens) / lastDelta.Sub(firstDelta).Seconds()
 			}
 		}
-		if onEvent != nil && (orMeta.Provider != "" || orMeta.HasCost || orMeta.TTFT > 0 || orMeta.TPS > 0) {
+		if onEvent != nil {
 			m := orMeta
-			onEvent(Event{Kind: "or_meta", ORMeta: &m})
+			// The cost event already reached the UI (and the caller's
+			// accumulator) as soon as the usage chunk arrived; repeating it
+			// here would bill the round twice.
+			if sentCost {
+				m.Cost, m.HasCost = 0, false
+			}
+			if m.Provider != "" || m.HasCost || m.TTFT > 0 || m.TPS > 0 {
+				onEvent(Event{Kind: "or_meta", ORMeta: &m})
+			}
 		}
 	}
 	var calls []openai.ToolCall
@@ -484,7 +511,7 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 				}
 			}
 		case "or_meta":
-			orMeta = ev.ORMeta
+			orMeta = mergeORMeta(orMeta, ev.ORMeta)
 			if ev.ORMeta != nil && ev.ORMeta.HasCost {
 				turnCost += ev.ORMeta.Cost
 				hasTurnCost = true

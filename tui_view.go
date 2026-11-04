@@ -354,8 +354,8 @@ func (m *tuiModel) orMetaSuffix() string {
 	if rates := m.orRateText(); rates != "" {
 		parts = append(parts, rates)
 	}
-	if m.orSpentSet {
-		parts = append(parts, formatCost(m.orSpent)+" used")
+	if m.orSpentSet || m.pendingCostSet {
+		parts = append(parts, formatCost(m.orSpent+m.pendingCost)+" used")
 	}
 	if len(parts) == 0 {
 		return ""

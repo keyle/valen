@@ -57,6 +57,33 @@ type ORMeta struct {
 	TPS float64 `json:"tps,omitempty"`
 }
 
+// mergeORMeta folds freshly parsed metadata into a running value. Partial
+// events (provider from the first chunk, TTFT from the first token, cost from
+// the usage chunk) update only the fields they carry, so live UI updates never
+// clear what an earlier event already reported.
+func mergeORMeta(dst, src *ORMeta) *ORMeta {
+	if src == nil {
+		return dst
+	}
+	if dst == nil {
+		c := *src
+		return &c
+	}
+	if src.Provider != "" {
+		dst.Provider = src.Provider
+	}
+	if src.HasCost {
+		dst.Cost, dst.HasCost = src.Cost, true
+	}
+	if src.TTFT > 0 {
+		dst.TTFT = src.TTFT
+	}
+	if src.TPS > 0 {
+		dst.TPS = src.TPS
+	}
+	return dst
+}
+
 // parseOpenRouterMeta folds the serving provider and billed cost from one
 // completion body (unary) or SSE chunk into the targets. Missing fields leave
 // them untouched; `usage.cost` is preferred, falling back to

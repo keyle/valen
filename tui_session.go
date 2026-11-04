@@ -42,6 +42,7 @@ func (m *tuiModel) startFreshSession() {
 	m.lastTurnDur = 0
 	m.orMeta = nil
 	m.orSpent, m.orSpentSet = 0, false
+	m.pendingCost, m.pendingCostSet = 0, false
 	m.pendingTools = nil
 	m.pendingText = ""
 	m.pendingThinking = ""

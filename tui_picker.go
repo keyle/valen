@@ -273,7 +273,7 @@ func (m *tuiModel) applySlot(key string) tea.Cmd {
 			m.notice += fmt.Sprintf(" (%s unavailable)", s.thinking)
 		}
 	}
-	return m.fetchQuotaCmd()
+	return tea.Batch(m.fetchQuotaCmd(), m.fetchPricingCmd())
 }
 
 // slotRoutingSuffix names a slot's routing in a notice, empty when none.

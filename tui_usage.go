@@ -76,3 +76,30 @@ func (m *tuiModel) fetchQuotaCmd() tea.Cmd {
 func usageTick() tea.Cmd {
 	return tea.Tick(time.Minute, func(time.Time) tea.Msg { return usageTickMsg{} })
 }
+
+// fetchPricingCmd loads the OpenRouter catalog's per-token prices when the
+// current model is served by OpenRouter and the footer has no rate for it yet.
+// It runs at boot and on a model switch, so the input/output cost is known
+// while the turn is still running instead of only after a picker fetch.
+func (m *tuiModel) fetchPricingCmd() tea.Cmd {
+	if m.httpClient == nil || modelProvider(m.cfg.Model) != ProviderOpenRouter {
+		return nil
+	}
+	if _, ok := m.orPricing[m.cfg.Model]; ok {
+		return nil
+	}
+	key := effectiveOpenRouterKey(m.cfg)
+	if key == "" {
+		return nil
+	}
+	hc := m.httpClient
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, prices, err := fetchOpenRouterCatalog(ctx, hc, openRouterBaseURL, key)
+		if err != nil {
+			return orPricingMsg{}
+		}
+		return orPricingMsg{pricing: prices}
+	}
+}

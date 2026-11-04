@@ -197,6 +197,7 @@ type toolEventMsg struct {
 	id     string // tool call ID: matches rows by call, not by name
 	durMs  int64  // wall execution time on tool_result
 	idx    int    // reasoning part index on thinking_delta (see Event.Index)
+	orMeta *ORMeta
 }
 
 // pendingTool is one in-flight or finished tool call in the live transcript.
@@ -304,6 +305,12 @@ type orCreditsMsg struct {
 	err     error
 }
 
+// orPricingMsg carries OpenRouter catalog prices into the UI thread so the
+// footer's input/output rates are available before the first turn finishes.
+type orPricingMsg struct {
+	pricing map[string]orPricing
+}
+
 // usageTickMsg triggers a periodic quota refresh.
 type usageTickMsg struct{}
 
@@ -343,6 +350,10 @@ type tuiModel struct {
 	orPricing     map[string]orPricing // catalog per-token prices, keyed by stored model ID
 	orSpent       float64              // cumulative billed cost across the session
 	orSpentSet    bool                 // a turn reported cost at least once
+	// pendingCost is the billed cost accrued by the busy turn so far. The
+	// footer shows orSpent+pendingCost live; turnDone moves it into orSpent.
+	pendingCost    float64
+	pendingCostSet bool
 
 	viewport viewport.Model
 	// vpContent is the exact string handed to the viewport by the last
@@ -562,6 +573,9 @@ func (m *tuiModel) Init() tea.Cmd {
 	}
 	cmds = append(cmds, m.spinner.Tick)
 	if c := m.fetchQuotaCmd(); c != nil {
+		cmds = append(cmds, c)
+	}
+	if c := m.fetchPricingCmd(); c != nil {
 		cmds = append(cmds, c)
 	}
 	cmds = append(cmds, usageTick())

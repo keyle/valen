@@ -263,6 +263,46 @@ func TestTUIFooterHidesGoUsageOnOpenRouter(t *testing.T) {
 	}
 }
 
+// TestFetchPricingCmdOpenRouter: the footer's input/output rates are fetched
+// for the current OpenRouter model at boot, skipped once known, and never
+// requested for Go/Zen models.
+func TestFetchPricingCmdOpenRouter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"id":"moonshotai/kimi-k3","pricing":{"prompt":"0.0000001","completion":"0.0000004"}}]}`)
+	}))
+	defer srv.Close()
+	oldBase := openRouterBaseURL
+	openRouterBaseURL = srv.URL
+	defer func() { openRouterBaseURL = oldBase }()
+
+	m := newTestModel(t, orTestConfig("https://unused"))
+	m.cfg.Model = "openrouter/moonshotai/kimi-k3"
+	m.httpClient = srv.Client()
+	cmd := m.fetchPricingCmd()
+	if cmd == nil {
+		t.Fatal("missing pricing should fetch the OpenRouter catalog")
+	}
+	msg, ok := cmd().(orPricingMsg)
+	if !ok {
+		t.Fatalf("pricing cmd returned %T", cmd())
+	}
+	if p := msg.pricing[m.cfg.Model]; p.prompt != 0.0000001 || p.completion != 0.0000004 {
+		t.Fatalf("pricing = %+v", msg.pricing)
+	}
+
+	m.orPricing = map[string]orPricing{m.cfg.Model: {prompt: 1, completion: 1}}
+	if cmd := m.fetchPricingCmd(); cmd != nil {
+		t.Fatal("known pricing must not refetch")
+	}
+
+	gm := newTestModel(t, testConfig("https://unused"))
+	gm.httpClient = srv.Client()
+	if cmd := gm.fetchPricingCmd(); cmd != nil {
+		t.Fatal("Go models need no OpenRouter pricing")
+	}
+}
+
 func TestFetchQuotaCmdDispatchesByProvider(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

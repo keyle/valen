@@ -83,10 +83,10 @@ func TestChatStreamsOpenRouterTTFTAndTPS(t *testing.T) {
 			}
 		}
 		time.Sleep(30 * time.Millisecond)
-		write("data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}\n\n")
+		write("data: {\"id\":\"1\",\"provider\":\"Infermatic\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}\n\n")
 		time.Sleep(30 * time.Millisecond)
-		write("data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}]}\n\n")
-		write("data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":10,\"total_tokens\":20}}\n\n")
+		write("data: {\"id\":\"1\",\"provider\":\"Infermatic\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}]}\n\n")
+		write("data: {\"id\":\"1\",\"provider\":\"Infermatic\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":10,\"total_tokens\":20,\"cost\":0.0012}}\n\n")
 		write("data: [DONE]\n\n")
 	}))
 	defer srv.Close()
@@ -97,9 +97,21 @@ func TestChatStreamsOpenRouterTTFTAndTPS(t *testing.T) {
 	cfg := orTestConfig(srv.URL)
 	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}
 	var meta *ORMeta
+	var kinds []string
+	var providerAt, deltaAt, costEvents = -1, -1, 0
 	onEvent := func(ev Event) {
+		kinds = append(kinds, ev.Kind)
 		if ev.Kind == "or_meta" {
-			meta = ev.ORMeta
+			meta = mergeORMeta(meta, ev.ORMeta)
+			if ev.ORMeta.Provider != "" && providerAt < 0 {
+				providerAt = len(kinds) - 1
+			}
+			if ev.ORMeta.HasCost {
+				costEvents++
+			}
+		}
+		if ev.Kind == "text_delta" && deltaAt < 0 {
+			deltaAt = len(kinds) - 1
 		}
 	}
 	if _, _, err := runChatTurn(context.Background(), cfg, nil, "or-key", srv.Client(), NewRegistry(), &history, onEvent); err != nil {
@@ -107,6 +119,15 @@ func TestChatStreamsOpenRouterTTFTAndTPS(t *testing.T) {
 	}
 	if meta == nil || meta.TTFT <= 0 || meta.TPS <= 0 {
 		t.Fatalf("meta=%+v", meta)
+	}
+	if meta.Provider != "Infermatic" || !meta.HasCost {
+		t.Fatalf("merged meta=%+v", meta)
+	}
+	if providerAt < 0 || deltaAt < 0 || providerAt > deltaAt {
+		t.Fatalf("provider must arrive before the first delta: kinds=%v", kinds)
+	}
+	if costEvents != 1 {
+		t.Fatalf("cost must be reported once, got %d: kinds=%v", costEvents, kinds)
 	}
 	if meta.TTFT < 0.02 || meta.TTFT > 1 {
 		t.Fatalf("TTFT=%v, want roughly the 30ms prefill delay", meta.TTFT)

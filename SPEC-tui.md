@@ -181,15 +181,24 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   (`O.R. $X.XX · Infermatic · 42 TPS · $ 0.10/0.40 · $0.0034 used`);
   in/out and the per-million basis are implicit in the rates, and the cost
   label is just "$X used", the session scope being implicit.
-  The provider name and billed cost come from the response (top-level
-  `provider`, `usage.cost`); rates come from the model catalog's
-  `pricing.prompt`/`pricing.completion`; throughput is measured locally from the
-  stream (completion tokens over the first-to-last content delta), so it needs
-  no extra request. The session cost sums each turn's billed cost across every
-  tool-loop round, keeps four decimals below a cent, resets on a new session,
-  and — being local — shows even without a balance. Resuming a session restores
-  the last turn's provider/throughput, the cumulative spend and the recorded
-  rates from the JSONL, so the footer looks as it did when the turn finished.
+  The metadata is live: the provider lands with the first response chunk and
+  TTFT with the first token, so both are visible while the model is still
+  reasoning; a round's billed cost lands with its usage chunk and shows while
+  tools run, before the turn's result exists. TPS is measured when the round's
+  stream ends. The `used` total includes the busy turn's accrued cost, then
+  rolls into the session total on commit without double counting.
+  The provider is named by the completion body (top-level `provider`); the
+  billed cost comes from `usage.cost`; rates
+  come from the model catalog's `pricing.prompt`/`pricing.completion`, fetched
+  at boot for the current OpenRouter model when no rate is already known (the
+  picker and resumed sessions supply them otherwise); throughput is measured
+  locally from the stream (completion tokens over the first-to-last content
+  delta), so it needs no extra request. The session cost sums each turn's
+  billed cost across every tool-loop round, keeps four decimals below a cent,
+  resets on a new session, and — being local — shows even without a balance.
+  Resuming a session restores the last turn's provider/throughput, the
+  cumulative spend and the recorded rates from the JSONL, so the footer looks
+  as it did when the turn finished.
   Each footer segment is
   independently optional and the whole suffix yields to the width rule, so a
   narrow terminal or a missing field just drops that part.

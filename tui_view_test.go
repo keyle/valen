@@ -799,6 +799,58 @@ func TestRoutingFooterMetadata(t *testing.T) {
 	}
 }
 
+// TestRoutingLiveMetadataWhileBusy: provider/TTFT and the running turn cost
+// update the footer as OpenRouter events stream in, before turnDone commits the
+// turn. The pending cost rolls into the session total exactly once.
+func TestRoutingLiveMetadataWhileBusy(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.cfg.Model = "openrouter/moonshotai/kimi-k3"
+	m.width, m.viewport.Width = 200, 200
+	m.orPricing = map[string]orPricing{
+		m.cfg.Model: {prompt: 0.0000001, completion: 0.0000004},
+	}
+	m.orSpent, m.orSpentSet = 0.0034, true
+	m.busy = true
+	m.pendingSince = time.Now()
+
+	_, _ = m.Update(toolEventMsg{kind: "or_meta", orMeta: &ORMeta{Provider: "Infermatic", TTFT: 4.9}})
+	got := ansi.Strip(m.footerView())
+	for _, want := range []string{"Infermatic", "4.9s TTFT", "$ 0.10/0.40", "$0.0034 used"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("live footer %q missing %q", got, want)
+		}
+	}
+
+	_, _ = m.Update(toolEventMsg{kind: "or_meta", orMeta: &ORMeta{Cost: 0.0012, HasCost: true}})
+	if got := ansi.Strip(m.footerView()); !strings.Contains(got, "$0.0046 used") {
+		t.Fatalf("pending cost not shown live: %q", got)
+	}
+	if m.orSpent != 0.0034 || !m.orSpentSet {
+		t.Fatalf("pending cost must not move session spend yet: %v", m.orSpent)
+	}
+
+	// TPS-only final event merges without clearing the earlier fields.
+	_, _ = m.Update(toolEventMsg{kind: "or_meta", orMeta: &ORMeta{TPS: 42}})
+	got = ansi.Strip(m.footerView())
+	for _, want := range []string{"Infermatic", "4.9s TTFT / 42 TPS", "$0.0046 used"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("final live footer %q missing %q", got, want)
+		}
+	}
+
+	_, _ = m.Update(turnDoneMsg{
+		prompt: "a", answer: "1", history: []openai.ChatCompletionMessage{}, model: m.cfg.Model,
+		orMeta:   &ORMeta{Provider: "Infermatic", TTFT: 4.9, TPS: 42, Cost: 0.0012, HasCost: true},
+		turnCost: 0.0012, hasTurnCost: true,
+	})
+	if m.pendingCost != 0 || m.pendingCostSet {
+		t.Fatalf("turnDone must clear pending cost: %v set=%v", m.pendingCost, m.pendingCostSet)
+	}
+	if got := formatCost(m.orSpent); got != "$0.0046" {
+		t.Fatalf("session spend = %s, want $0.0046", got)
+	}
+}
+
 // TestRoutingSessionCostAccumulates: each OpenRouter turn's billed cost (summed
 // across tool-loop rounds) adds to a running session total, a costless turn
 // leaves it alone, and a new session zeroes it.

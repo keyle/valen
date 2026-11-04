@@ -119,6 +119,8 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	m.pendingText = ""
 	m.pendingThinking = ""
 	m.pendingThinkIdx = 0
+	m.orMeta = nil
+	m.pendingCost, m.pendingCostSet = 0, false
 	m.lastStreamFlush = time.Time{}
 	m.notice = ""
 	m.done = make(chan struct{})
@@ -173,14 +175,14 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 			case "thinking_delta":
 				thinking, thinkIdx = appendThinkingDelta(thinking, ev.Text, ev.Index, thinkIdx)
 			case "or_meta":
-				orMeta = ev.ORMeta
+				orMeta = mergeORMeta(orMeta, ev.ORMeta)
 				if ev.ORMeta != nil && ev.ORMeta.HasCost {
 					turnCost += ev.ORMeta.Cost
 					hasTurnCost = true
 				}
 			}
 			if prog != nil {
-				prog.Send(toolEventMsg{kind: ev.Kind, text: ev.Text, args: ev.Args, output: ev.Output, id: ev.ID, durMs: ev.DurMs, idx: ev.Index})
+				prog.Send(toolEventMsg{kind: ev.Kind, text: ev.Text, args: ev.Args, output: ev.Output, id: ev.ID, durMs: ev.DurMs, idx: ev.Index, orMeta: ev.ORMeta})
 			}
 		}
 		reply, usage, err := runTurn(ctx, cfg, client, apiKey, httpClient, registry, &h, onEvent)
@@ -237,6 +239,7 @@ func (m *tuiModel) handleCommand(text string) tea.Cmd {
 		m.clearAttachments()
 		resetTodos()
 		m.lastTurnDur = 0
+		m.pendingCost, m.pendingCostSet = 0, false
 		if m.session != nil {
 			m.session.Turns = nil
 			m.session.TotalUsage = Usage{}
@@ -477,7 +480,14 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flushStream()
 			return m, nil
 		case "or_meta":
-			// Serving metadata rides turnDoneMsg; nothing live to render.
+			if msg.orMeta == nil {
+				return m, nil
+			}
+			m.orMeta = mergeORMeta(m.orMeta, msg.orMeta)
+			if msg.orMeta.HasCost {
+				m.pendingCost += msg.orMeta.Cost
+				m.pendingCostSet = true
+			}
 			return m, nil
 		default:
 			m.toolStatus = msg.text
@@ -501,6 +511,17 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil {
 			c := msg.credits
 			m.orCredits = &c
+		}
+		return m, nil
+
+	case orPricingMsg:
+		if len(msg.pricing) > 0 {
+			if m.orPricing == nil {
+				m.orPricing = map[string]orPricing{}
+			}
+			for id, p := range msg.pricing {
+				m.orPricing[id] = p
+			}
 		}
 		return m, nil
 
@@ -590,7 +611,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case 1:
 				m.applyModelSwitch(matched[0])
-				return m, m.fetchQuotaCmd()
+				return m, tea.Batch(m.fetchQuotaCmd(), m.fetchPricingCmd())
 			}
 		}
 		sort.Strings(ids)
@@ -708,6 +729,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.orSpent += msg.turnCost
 			m.orSpentSet = true
 		}
+		m.pendingCost, m.pendingCostSet = 0, false
 		m.toolStatus = ""
 		m.roundCur, m.roundMax = 0, 0
 		m.pendingTools = nil
@@ -842,7 +864,7 @@ func (m *tuiModel) openSelected() tea.Cmd {
 			return nil
 		}
 		m.applyModelSwitch(m.modelChoices[m.cursor].id)
-		return m.fetchQuotaCmd()
+		return tea.Batch(m.fetchQuotaCmd(), m.fetchPricingCmd())
 	case viewEffort:
 		if m.cursor < 0 || m.cursor >= len(m.effortLevels) {
 			return nil
