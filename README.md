@@ -40,6 +40,16 @@ config, if at all. Try a fast OpenRouter model with `high` effort and `nitro`
 
 ## Install
 
+### Homebrew (macOS and Linux, recommended)
+
+```sh
+brew install keyle/tap/valen
+```
+
+On Linux this also installs `bubblewrap` for the shell sandbox.
+
+### From source
+
 Requires Go and, on Linux, `bubblewrap`.
 
 ```sh
@@ -99,16 +109,16 @@ Config is seeded on first run at `~/.config/valen/valen.toml` (a pre-existing
 Review what an agent is allowed to do before pointing
 it at anything you care about.
 
-## Usage
+## Development
 
 ```sh
-	# run
-	make
-	# install
-	make install
+make                 # build and run
+make install         # build and install to /usr/local/bin
+make release         # tag, publish the release and update the Homebrew tap
 ```
 
-Tests use offline `httptest` fakes.
+`make release` needs `goreleaser` and a `GITHUB_TOKEN` with write access to
+`keyle/valen` and `keyle/homebrew-tap`. Tests use offline `httptest` fakes.
 
 ## License
 

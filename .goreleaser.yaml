@@ -1,0 +1,59 @@
+version: 2
+
+project_name: valen
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: valen
+    main: .
+    binary: valen
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: valen
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  github:
+    owner: keyle
+    name: valen
+
+brews:
+  - name: valen
+    repository:
+      owner: keyle
+      name: homebrew-tap
+      branch: main
+    directory: Formula
+    homepage: https://github.com/keyle/valen
+    description: Lightweight coding-agent harness in a single Go binary
+    license: MIT
+    install: |
+      bin.install "valen"
+    test: |
+      system "#{bin}/valen", "-h"
+    dependencies:
+      - name: bubblewrap
+        os: linux

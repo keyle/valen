@@ -1,4 +1,4 @@
-# Release: `git tag 1.0.2 && make prod`. Override with `make prod VERSION=1.0.2`.
+# Build: `make prod` (or `make release` to tag and publish to Homebrew).
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 default:
@@ -33,6 +33,13 @@ tag:
 	git tag $$next || exit 1; \
 	git push origin $$next || exit 1; \
 	echo "tagged and pushed $$next"
+
+# Tag, build release archives, publish the GitHub release and update the
+# Homebrew tap (keyle/tap). Needs goreleaser and GITHUB_TOKEN.
+release: tag
+	@command -v goreleaser >/dev/null 2>&1 || { echo "goreleaser not found: brew install goreleaser"; exit 1; }
+	@test -n "$$GITHUB_TOKEN" || { echo "GITHUB_TOKEN is required (repo scope for keyle/homebrew-tap)"; exit 1; }
+	goreleaser release --clean
 
 install: prod
 	@mkdir -p /usr/local/bin
