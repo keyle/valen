@@ -26,6 +26,8 @@ func friendlyError(err error) FriendlyError {
 	switch {
 	case errors.Is(err, context.Canceled):
 		return FriendlyError{"Cancelled. Your message is kept; resend when ready.", msg}
+	case errors.Is(err, errOutputLimit):
+		return FriendlyError{"The model ran out of output tokens before finishing (reasoning counts toward max_tokens). Raise max_tokens or lower thinking, then resend.", msg}
 	case errors.Is(err, context.DeadlineExceeded), strings.Contains(lower, "timeout"), strings.Contains(lower, "deadline exceeded"):
 		return FriendlyError{"The request timed out. Check your network and resend.", msg}
 	case strings.Contains(lower, "no such host"), strings.Contains(lower, "connection refused"), strings.Contains(lower, "dial tcp"), strings.Contains(lower, "network is unreachable"):

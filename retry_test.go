@@ -80,6 +80,37 @@ func TestShouldRetryRoundStatus(t *testing.T) {
 	}
 }
 
+// A round cut off at the output cap must not be resent: same request, same cap.
+func TestOutputLimitIsNotRetried(t *testing.T) {
+	calls := 0
+	_, usage, err := roundWithRetry(context.Background(), nil, nil,
+		func(context.Context, []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
+			calls++
+			return openai.ChatCompletionMessage{}, openai.Usage{CompletionTokens: 7}, chatFinishError("length")
+		})
+	if !errors.Is(err, errOutputLimit) || calls != 1 || usage.CompletionTokens != 7 {
+		t.Fatalf("err=%v calls=%d usage=%d", err, calls, usage.CompletionTokens)
+	}
+}
+
+func TestOutputLimitSentinelAcrossTransports(t *testing.T) {
+	ctx := context.Background()
+	responsesErr := parseResponsesError(0, []byte(`{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}`))
+	if !errors.Is(responsesErr, errOutputLimit) || shouldRetryRound(ctx, responsesErr) {
+		t.Fatalf("responses: err=%v must be a non-retryable output limit", responsesErr)
+	}
+	if errors.Is(parseResponsesError(0, []byte(`{"type":"error","error":{"message":"boom"}}`)), errOutputLimit) {
+		t.Fatal("responses: unrelated failure marked as output limit")
+	}
+	_, messagesErr := messagesReplyToOpenAI(messagesResponse{StopReason: "max_tokens"})
+	if !errors.Is(messagesErr, errOutputLimit) || shouldRetryRound(ctx, messagesErr) {
+		t.Fatalf("messages: err=%v must be a non-retryable output limit", messagesErr)
+	}
+	if !errors.Is(chatFinishError("length"), errOutputLimit) {
+		t.Fatal("chat: length must wrap errOutputLimit")
+	}
+}
+
 func TestRoundWithRetryNoRetryOnCancelOrMissingKey(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	calls := 0

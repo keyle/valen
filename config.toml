@@ -68,7 +68,7 @@ openrouter_key = ""
                                # oversized turn cannot shrink and may still
                                # fail fast.
 # temperature = 0.2               # omit entirely for provider defaults
-# max_tokens = 16384             # output cap on all three transports; positive
+# max_tokens = 65536             # output cap on all three transports; reasoning counts; positive
                                 # explicit values are honored without a floor.
 
 [compaction]                    # summary-mode, send-side only (disk JSONL stays lossless).

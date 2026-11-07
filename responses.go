@@ -224,6 +224,32 @@ func splitResponsesInputNative(history []openai.ChatCompletionMessage, native ma
 }
 
 func parseResponsesError(status int, body []byte) *transportError {
+	te := responsesErrorDetail(status, body)
+	if responsesOutputLimited(body) {
+		te.Cause = errOutputLimit
+	}
+	return te
+}
+
+// responsesOutputLimited reports an incomplete response stopped at the output
+// cap, at the top level or nested under "response" (stream events).
+func responsesOutputLimited(body []byte) bool {
+	type incomplete struct {
+		IncompleteDetails struct {
+			Reason string `json:"reason"`
+		} `json:"incomplete_details"`
+	}
+	var v struct {
+		incomplete
+		Response incomplete `json:"response"`
+	}
+	if json.Unmarshal(body, &v) != nil {
+		return false
+	}
+	return v.IncompleteDetails.Reason == "max_output_tokens" || v.Response.IncompleteDetails.Reason == "max_output_tokens"
+}
+
+func responsesErrorDetail(status int, body []byte) *transportError {
 	var detail func(any) string
 	detail = func(v any) string {
 		if s, ok := v.(string); ok {
@@ -534,6 +560,14 @@ func responsesRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string
 		}
 		switch payload.Type {
 		case "error", "response.failed", "response.incomplete":
+			// The failed/incomplete response still reports the tokens it spent;
+			// count them before failing so a truncated round is billed honestly.
+			if r := payload.Response; r != nil {
+				usage = openai.Usage{PromptTokens: r.Usage.InputTokens, CompletionTokens: r.Usage.OutputTokens, TotalTokens: r.Usage.TotalTokens}
+				if usage.TotalTokens == 0 {
+					usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+				}
+			}
 			eventErr = parseResponsesError(0, []byte(ev.data))
 			return false
 		case "response.output_text.delta", "response.output_text.done":

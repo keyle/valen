@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -179,6 +180,19 @@ func TestChatRoundRejectsInvalidCompletion(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A length stop still reports the usage chunk that follows finish_reason, so
+// the tokens burned on a truncated round reach the counter.
+func TestChatLengthStreamKeepsUsage(t *testing.T) {
+	var bodies []string
+	srv := sseServer(t, &bodies, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"length\"}]}\n\n"+
+		"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":65536,\"total_tokens\":65546}}\n\n"+
+		"data: [DONE]\n\n")
+	_, usage, err := chatRoundStream(context.Background(), newTestConfig(srv.URL), "", srv.Client(), openai.ChatCompletionRequest{}, nil)
+	if !errors.Is(err, errOutputLimit) || usage.CompletionTokens != 65536 {
+		t.Fatalf("err=%v usage=%+v", err, usage)
 	}
 }
 

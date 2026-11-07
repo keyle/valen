@@ -217,10 +217,16 @@ func chatRoundOnce(ctx context.Context, cfg Config, apiKey string, hc *http.Clie
 // errContentFilter marks a round the provider cut off with a content filter.
 var errContentFilter = errors.New("content filter")
 
+// errOutputLimit marks a round cut off at the output cap (max_tokens, which
+// reasoning also spends). Resending the same request hits the same cap.
+var errOutputLimit = errors.New("output limit")
+
 func chatFinishError(reason string) error {
 	switch reason {
 	case "", "stop", "tool_calls", "function_call":
 		return nil
+	case "length":
+		return fmt.Errorf("api: chat: incomplete response (%s): %w", reason, errOutputLimit)
 	case "content_filter":
 		return fmt.Errorf("api: chat: incomplete response (%s): %w", reason, errContentFilter)
 	default:
@@ -291,7 +297,7 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 	var content, thinking strings.Builder
 	accs := map[int]*chatToolAcc{}
 	var order []int
-	var eventErr error
+	var eventErr, finishErr error
 	var terminal bool
 	orMeta := ORMeta{}
 	sentProvider, sentCost := false, false
@@ -349,8 +355,13 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 				continue
 			}
 			if err := chatFinishError(string(choice.FinishReason)); err != nil {
-				eventErr = err
-				return false
+				if !errors.Is(err, errOutputLimit) {
+					eventErr = err
+					return false
+				}
+				// Keep reading: the usage chunk follows the finish_reason
+				// chunk, and a truncated round's tokens still count.
+				finishErr = err
 			}
 			if choice.FinishReason != "" {
 				terminal = true
@@ -399,6 +410,9 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 	})
 	if eventErr != nil {
 		return openai.ChatCompletionMessage{}, usage, eventErr
+	}
+	if finishErr != nil {
+		return openai.ChatCompletionMessage{}, usage, finishErr
 	}
 	if scanErr != nil {
 		return openai.ChatCompletionMessage{}, usage, scanErr

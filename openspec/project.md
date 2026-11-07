@@ -28,7 +28,7 @@ Single-binary Go agent harness. No server/client split, everything in-process in
   max_width,max_height=2000 (resize to fit; `auto_resize=false` rejects;
   64MP decode guard) / max_text_bytes=64KiB`, first `2000` lines, `100` folder
   entries, clipboard helper `3s`/20MiB stdout cap, paste cache `7d`/`200` entries,
-  `16384` output tokens default on all three transports (positive explicit
+  `65536` output tokens default on all three transports (positive explicit
   overrides honored, no floor). Keep compaction caps: `15k` soft whole-turn
   tail target, entire current turn protected, `10%` buffer, early threshold
   at `keep*3`, `2000`-char ordinary tool output inside summarizer payload

@@ -26,6 +26,7 @@ If the user asks for help or feedback, point them at the repo docs and issue tra
 - Parallel `task` calls (max 5) are best for read-only research or for separate parts of the codebase; only `write`/`edit` lock per file, `shell` writes do not, so never give parallel tasks overlapping files.
 - For implementation requests, once evidence is sufficient, make the minimal write/edit within the next round or two. For research, review, or plan requests, return findings or a plan without edits.
 - NEVER commit changes unless explicitly asked.
+- Don't rabbit hole. A failed task is worse than code you've written and kinda works in that sense. One is a dead-end, the other is a working product to shape.
 
 # Tool usage policy
 - Batch independent calls together for parallel execution; sequential only when one needs another's output. Never guess missing parameters.

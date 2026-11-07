@@ -38,6 +38,15 @@ func responsesDetailedTestRound(t *testing.T, body string, onEvent func(Event)) 
 	return responsesRoundStreamDetailed(context.Background(), Config{BaseURL: srv.URL}, "key", srv.Client(), responsesRequest{Stream: true}, onEvent)
 }
 
+// A streamed output-cap stop must still bill the tokens it spent.
+func TestResponsesIncompleteStreamKeepsUsage(t *testing.T) {
+	body := `{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":10,"output_tokens":65536,"total_tokens":65546}}}`
+	_, usage, _, err := responsesDetailedTestRound(t, responsesSSE(`{"type":"response.output_text.delta","delta":"partial"}`, body), nil)
+	if !errors.Is(err, errOutputLimit) || usage.CompletionTokens != 65536 || usage.TotalTokens != 65546 {
+		t.Fatalf("err=%v usage=%+v", err, usage)
+	}
+}
+
 func TestResponsesStreamFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name, terminal, want string

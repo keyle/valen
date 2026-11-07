@@ -133,7 +133,7 @@ cheapest fallback per model) summarizes.
 | `max_rounds` | 300 | Per-turn backstop per window (one compact-and-continue extension), not an expected task duration |
 | `max_stagnant_rounds` | 25 | Consecutive identical ordered batches allowed; not mutation-based stagnation |
 | `max_context_tokens` | 0 = auto (model window or 300000) | Approximate fail-fast budget; auto resolves the model's own input window when known, else the safe default — not a guarantee against every provider's limit |
-| `max_tokens` (all transports) | 16384, no floor for positive overrides | Explicit output bound, Responses uses `max_output_tokens` |
+| `max_tokens` (all transports) | 65536, no floor for positive overrides | Explicit output bound, Responses uses `max_output_tokens` |
 | Tool output | 16000 bytes in registry, same fresh wire output | UTF-8-safe cap; session tool records keep this output |
 | Compaction `keep_tokens` | 15000 soft whole-turn target | Entire current turn protected even when oversized |
 | Compaction `buffer` | 10% of budget | Headroom so the summary + tail + reply fit under the fail-fast line |
@@ -315,7 +315,7 @@ log, and registry are transport-agnostic. Model ID selects the transport
 | Active-turn reasoning | native `ReasoningContent` | native thinking/signature/redacted blocks replayed in order | native reasoning/encrypted content and output phases replayed, stateless |
 | Beyond active loop / resume | native Chat reasoning checkpointed | display thinking stored, native blocks/signatures not persisted | display summaries stored, native items/encryption/phases not persisted |
 | Caching | server prefix over stable bytes | + 3 explicit breakpoints | server prefix over stable bytes |
-| Answer cap | `max_tokens` (16384 default) | `max_tokens` (16384 default) | `max_output_tokens` (16384 default) |
+| Answer cap | `max_tokens` (65536 default) | `max_tokens` (65536 default) | `max_output_tokens` (65536 default) |
 | Unknown thinking | full vocabulary until a 400 teaches the list, cached to disk | same | same |
 
 ## 11. TUI lifecycle (where the pixels come from)

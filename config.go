@@ -15,7 +15,7 @@ const (
 	openCodeKeyEnv               = "OPENCODE_API_KEY"
 	openRouterKeyEnv             = "OPENROUTER_API_KEY"
 	defaultMaxRounds             = 300
-	defaultMaxTokens             = 16384
+	defaultMaxTokens             = 65536
 	defaultRequestTimeoutSeconds = 300
 	// defaultSavedSessions bounds saved JSONL sessions per project folder; the
 	// oldest are pruned when a new session starts.

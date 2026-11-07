@@ -35,6 +35,7 @@ type transportError struct {
 	Status    int
 	Message   string
 	Raw       string
+	Cause     error // optional sentinel, e.g. errOutputLimit
 }
 
 func (e *transportError) Error() string {
@@ -43,6 +44,8 @@ func (e *transportError) Error() string {
 	}
 	return fmt.Sprintf("api: %s: %s", e.Transport, e.Message)
 }
+
+func (e *transportError) Unwrap() error { return e.Cause }
 
 func messagesEndpoint(baseURL string) string {
 	return strings.TrimRight(baseURL, "/") + "/messages"
@@ -417,7 +420,7 @@ func callMessagesOnce(ctx context.Context, hc *http.Client, cfg Config, apiKey s
 // (opaque) is dropped.
 func messagesReplyToOpenAI(resp messagesResponse) (openai.ChatCompletionMessage, error) {
 	if resp.StopReason == "max_tokens" {
-		return openai.ChatCompletionMessage{}, errors.New("api: messages: incomplete response (max_tokens)")
+		return openai.ChatCompletionMessage{}, fmt.Errorf("api: messages: incomplete response (max_tokens): %w", errOutputLimit)
 	}
 	var text, thinking []string
 	var calls []openai.ToolCall

@@ -99,7 +99,7 @@ and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
 | `max_context_tokens` | int | `0` (auto) | Fail-fast budget per round (est. runes/4): `0` resolves the model's own input window when known (gemini 1M, claude 500k, gpt 400k, grok/qwen/kimi 256k, glm/minimax 200k, deepseek 128k, else 300k); explicit values override and survive `/models`. Over-budget history aborts the turn with guidance instead of a doomed send |
 | `request_timeout_seconds` | int | `300` | Optional deadline for each HTTP attempt, including response-body reads (SSE or unary), not the whole turn; retries each get a fresh deadline |
 | `temperature` | float | unset | Pointer semantics: unset omits the field, `0.0` sends zero |
-| `max_tokens` | int | `16384` | Explicit output cap on all three transports (`max_tokens` on Chat/Messages, `max_output_tokens` on Responses); positive configured values are honored without a floor |
+| `max_tokens` | int | `65536` | Explicit output cap on all three transports (`max_tokens` on Chat/Messages, `max_output_tokens` on Responses); positive configured values are honored without a floor |
 | `compaction` | table | `auto=true, keep_tokens=15000, buffer=10%, thinking=medium` | Summary-mode, send-side only (prior disk records remain intact): `auto` prunes and summarizes before send and retries once after provider context overflow; `keep_tokens` is a soft whole-turn tail target, always protecting the entire current turn; `buffer` headroom below `max_context_tokens`; `model` summarizer override (empty = session model); `thinking` independent of top-level effort (default `medium` when accepted, cheapest fallback per model) |
 | `[tui]` | table | `max_lines=1000`, `sound=true`, `select_scroll_ms=50` | Transcript rendering (TUI only). `max_lines` bounds the rendered committed scrollback so the viewport never re-parses an ever-growing transcript (the slowdown after long sessions). Over budget, older turns collapse their reasoning (user prompts, tool lines and replies are kept whole, never cut), then drop oldest-first behind a `… N earlier turn(s) trimmed` row; disk history stays lossless and ctrl+h/recall views still expand everything. `0` disables trimming. `sound` (default `true`) rings the terminal bell (BEL) when a question appears or a turn finishes (not on cancel); `false` mutes it. `select_scroll_ms` (default `50`) paces the selection drag auto-scroll: one viewport line per interval while dragging past the top/bottom edge |
 | `[sandbox]` | table | `allow`, `deny`, `allow_bind`, `ipc_allow` (all unset = built-in defaults) | Shell sandbox policy (see "Shell sandbox"); declared before `[input]` |
@@ -190,7 +190,7 @@ round and fold the reply back, so the TUI, session log and tool registry are
 transport-agnostic.
 
 - `messages` (`messages.go`): Anthropic wire format. `POST {base}/messages`
-  with `model`, required `max_tokens` (`max_tokens` config, default 16384),
+  with `model`, required `max_tokens` (`max_tokens` config, default 65536),
   `system` (single cached text block), `messages`, `tools` (`input_schema`),
   `tool_choice: {type: auto}` when tools exist. Assistant `tool_calls` become
   `tool_use` blocks, tool messages become user `tool_result` blocks. Three
@@ -289,7 +289,10 @@ backstop stays terminal there.
 - `resp.Choices` empty is an error, not a panic.
 - API errors are returned wrapped (`api: ...`) with the provider's message.
   Transient 429/502/503/504 and network errors retry with backoff (3 attempts)
-  before surfacing, so overloads back off instead of failing the turn.
+  before surfacing, so overloads back off instead of failing the turn. A round
+  stopped at the output cap (`length`, `max_tokens`, `max_output_tokens`) is not
+  retried: it reports the friendly "ran out of output tokens" error, and its
+  usage still counts.
   Each HTTP attempt has a `request_timeout_seconds` deadline including body
   reads; connection setup also has 10s dial/TLS and 60s response-header limits.
   Retryable bodies close without a blocking drain. This is not an idle timeout

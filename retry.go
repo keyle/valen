@@ -55,7 +55,9 @@ func shouldRetryRound(ctx context.Context, err error) bool {
 	}
 	// Context overflow is recovered by compaction, and content filters
 	// already get their own single retry; repeating either only burns time.
-	if isContextOverflow(err) || errors.Is(err, errContentFilter) {
+	// An output-limit stop is deterministic for the same cap: resending
+	// burns another full cap of output tokens for the same result.
+	if isContextOverflow(err) || errors.Is(err, errContentFilter) || errors.Is(err, errOutputLimit) {
 		return false
 	}
 	// 4xx means the request itself was refused (bad payload, key, credits,
