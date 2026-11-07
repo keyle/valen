@@ -48,6 +48,19 @@ func (m *tuiModel) lastReply() string {
 	return m.session.Turns[len(m.session.Turns)-1].Reply
 }
 
+// copyRow is the right-aligned footer under the newest reply: the time it
+// landed and the turn's wall time, then the copy action. Duration is omitted
+// when unknown (sessions saved before DurMs existed).
+func (m *tuiModel) copyRow() string {
+	t := m.session.Turns[len(m.session.Turns)-1]
+	meta := t.At.Format("15:04")
+	if t.DurMs > 0 {
+		meta += " · " + formatThinkDur(time.Duration(t.DurMs)*time.Millisecond)
+	}
+	row := metaStyle.Render(meta+" · ") + copyStyle.Render(copyLabel)
+	return strings.Repeat(" ", max(m.contentWidth()-lipgloss.Width(row), 0)) + row
+}
+
 // copyLastReply copies the newest reply (markdown source) and sets a notice.
 func (m *tuiModel) copyLastReply() {
 	r := m.lastReply()
@@ -71,7 +84,7 @@ func (m *tuiModel) copyClicked(msg tea.MouseMsg) bool {
 	if row < 0 || row >= len(lines) || m.viewport.YOffset+row != m.viewport.TotalLineCount()-1 {
 		return false
 	}
-	return strings.TrimSpace(ansi.Strip(lines[row])) == copyLabel
+	return strings.HasSuffix(strings.TrimSpace(ansi.Strip(lines[row])), copyLabel)
 }
 
 // lineCount is the rendered line count of one turn, used to budget the

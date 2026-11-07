@@ -236,10 +236,14 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 - Link text in the transcript (glamour renders a markdown link as its text plus
   the resolved URL) opens on ctrl+left-click via the platform opener (`open` on
   macOS, `xdg-open` elsewhere); only http(s) URLs open, and a ctrl+click on
-  non-link text is a no-op. ctrl is used rather than alt because
+  non-link text is a no-op. A URL the wrap split across rows opens the whole
+  URL from either row: the rows around the click are joined, and only a URL the
+  transcript quotes (prompt, reply, tool output, error) is accepted, so a word
+  the wrap glues on never opens. ctrl is used rather than alt because
   iTerm2/Terminal.app bind Option to native selection bypass.
 - After a finished turn with a reply, an underlined dim `copy response` row, right-aligned, ends the
-  transcript; a left click on it (or `/copy`) writes the last reply's markdown
+  transcript, prefixed by the reply's end time and the turn's wall time (e.g. `23:11 · 4m15s · copy response`;
+  the duration is omitted when unknown); a left click on it (or `/copy`) writes the last reply's markdown
   source to the clipboard via OSC 52 (needs terminal support; works over ssh).
   This is the markdown *source*, unlike a drag-copy which yields the rendered,
   ANSI-stripped text; both are kept — drag for what you see, `/copy` for the

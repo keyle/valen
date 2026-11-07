@@ -104,6 +104,15 @@ func TestFilesValenTuned(t *testing.T) {
 	}
 }
 
+func TestDefaultPromptForbidsGuessedPaths(t *testing.T) {
+	def := ForModel("glm-5.3-flash")
+	for _, want := range []string{"Never guess absolute paths", "/Users", "glob/read first"} {
+		if !strings.Contains(def, want) {
+			t.Fatalf("default prompt missing %q", want)
+		}
+	}
+}
+
 func TestPlanCtx(t *testing.T) {
 	pctx := WithPlanMode(context.Background())
 	if !IsPlanMode(pctx) || IsPlanMode(context.Background()) || IsPlanMode(nil) {

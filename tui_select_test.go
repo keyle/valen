@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -340,6 +341,76 @@ func TestTUILinkCtrlClickNonLinkNoop(t *testing.T) {
 	m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Ctrl: true, X: 1, Y: 1})
 	if len(opened) != 0 {
 		t.Fatalf("non-link ctrl+click opened %v", opened)
+	}
+}
+
+// A link the wrap split across two rows opens the whole URL from either row.
+func TestTUILinkWrappedOpensFromEitherRow(t *testing.T) {
+	var opened []string
+	old := openURL
+	openURL = func(u string) error { opened = append(opened, u); return nil }
+	t.Cleanup(func() { openURL = old })
+
+	first, rest := "https://example.com/aaaaaaaa", "aaaa/bbbbbbbb"
+	url := first + rest
+	m := selectionModel(t, 80, 20, "see "+first+"\n"+rest+" ok")
+	m.session.Turns = []Turn{{Prompt: "q", Reply: "see " + url + " ok"}}
+	m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Ctrl: true, X: 6, Y: 1})
+	m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Ctrl: true, X: 2, Y: 2})
+	if len(opened) != 2 || opened[0] != url || opened[1] != url {
+		t.Fatalf("wrapped ctrl+click opened %v, want %q from both rows", opened, url)
+	}
+}
+
+// Same as above but through the real renderer: glamour breaks a long URL
+// mid-token, and a click on either physical row must open the whole link.
+func TestTUILinkWrappedRealRender(t *testing.T) {
+	var opened []string
+	old := openURL
+	openURL = func(u string) error { opened = append(opened, u); return nil }
+	t.Cleanup(func() { openURL = old })
+
+	url := "https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbb"
+	m := newTestModel(t, testConfig("https://unused"))
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
+	m.session.Turns = []Turn{{At: time.Now(), Prompt: "q", Reply: "read " + url + " now"}}
+	m.refreshViewport()
+	lines := strings.Split(m.vpContent, "\n")
+	first, second := -1, -1
+	for i, l := range lines {
+		if strings.Contains(ansi.Strip(l), "https://") && first < 0 {
+			first = i
+		} else if first >= 0 && second < 0 && strings.Contains(ansi.Strip(l), "com/aaa") {
+			second = i
+		}
+	}
+	if first < 0 || second < 0 {
+		t.Fatalf("URL did not wrap across rows:\n%s", m.vpContent)
+	}
+	// Click on the link text, not the block indent in front of it.
+	m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Ctrl: true, X: 6, Y: first + 1})
+	m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Ctrl: true, X: 2, Y: second + 1})
+	if len(opened) != 2 || opened[0] != url || opened[1] != url {
+		t.Fatalf("real-render ctrl+click opened %v, want %q twice", opened, url)
+	}
+}
+
+// A word the wrap glues onto a link's last row is not part of the URL.
+func TestTUILinkWrappedGluedWordNoLink(t *testing.T) {
+	var opened []string
+	old := openURL
+	openURL = func(u string) error { opened = append(opened, u); return nil }
+	t.Cleanup(func() { openURL = old })
+
+	m := selectionModel(t, 80, 20, "see https://example.com/x\nyz more")
+	m.session.Turns = []Turn{{Prompt: "q", Reply: "see https://example.com/x yz more"}}
+	m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Ctrl: true, X: 1, Y: 2})
+	if len(opened) != 0 {
+		t.Fatalf("glued word opened %v", opened)
+	}
+	m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Ctrl: true, X: 6, Y: 1})
+	if len(opened) != 1 || opened[0] != "https://example.com/x" {
+		t.Fatalf("link ctrl+click opened %v", opened)
 	}
 }
 

@@ -462,7 +462,7 @@ func linkSpans(gl gridLine) []linkSpan {
 	var spans []linkSpan
 	for _, loc := range urlRe.FindAllStringIndex(text, -1) {
 		raw := text[loc[0]:loc[1]]
-		url := strings.TrimRight(raw, ")]}.,;:!?\"'")
+		url := trimURL(raw)
 		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 			continue
 		}
@@ -484,6 +484,82 @@ func cellAtByte(gl gridLine, off int) int {
 	return gl.width
 }
 
+// trimURL drops the punctuation a sentence or markdown wraps around a URL.
+func trimURL(raw string) string {
+	return strings.TrimRight(raw, ")]}.,;:!?\"'")
+}
+
+// linkWindow is how many rows either side of a ctrl+click are joined when
+// looking for a URL that the wrap split across lines.
+const linkWindow = 16
+
+var httpStartRe = regexp.MustCompile(`https?://`)
+
+// quotedURLs is the set of URLs the transcript quotes (prompts, reasoning,
+// replies, tool args and output, errors, the live reply) and the longest one's
+// length. A wrapped link only opens when it matches one of these.
+func (m *tuiModel) quotedURLs() (map[string]bool, int) {
+	var b strings.Builder
+	if m.session != nil {
+		for _, t := range m.session.Turns {
+			b.WriteString(t.Prompt + "\n" + t.Thinking + "\n" + t.Reply + "\n")
+			for _, tr := range t.Tools {
+				b.WriteString(tr.Args + "\n" + tr.Output + "\n")
+			}
+			if t.Error != nil {
+				b.WriteString(t.Error.Details + "\n")
+			}
+		}
+	}
+	b.WriteString(m.pendingPrompt + "\n" + m.pendingThinking + "\n" + m.pendingText)
+	urls, maxLen := map[string]bool{}, 0
+	for _, raw := range urlRe.FindAllString(b.String(), -1) {
+		u := trimURL(raw)
+		urls[u] = true
+		maxLen = max(maxLen, len(u))
+	}
+	return urls, maxLen
+}
+
+// wrappedLinkURL resolves the URL under cell col of row line when the wrap
+// split it across rows. The rows around the click are joined back into one
+// string; the longest span covering the click that the transcript quotes wins.
+// Either half of a split link therefore resolves to the whole URL, and a word
+// glued on by the wrap never does, since it is not a quoted URL.
+func (m *tuiModel) wrappedLinkURL(lines []string, line, col int) (string, bool) {
+	var j strings.Builder
+	click := -1
+	for r := max(0, line-linkWindow); r < min(len(lines), line+linkWindow+1); r++ {
+		gl := buildGridLine(lines[r])
+		for _, c := range gl.cells {
+			if c.col < gl.cStart || c.col >= gl.cEnd {
+				continue
+			}
+			if r == line && c.col <= col && col < c.col+c.w {
+				click = j.Len()
+			}
+			j.WriteString(c.text)
+		}
+	}
+	if click < 0 {
+		return "", false
+	}
+	text := j.String()
+	urls, maxLen := m.quotedURLs()
+	for _, loc := range httpStartRe.FindAllStringIndex(text, -1) {
+		s := loc[0]
+		if s > click {
+			break
+		}
+		for e := min(len(text), s+maxLen); e > click; e-- {
+			if urls[text[s:e]] {
+				return text[s:e], true
+			}
+		}
+	}
+	return "", false
+}
+
 // openLinkAt opens the link under a ctrl+click. Non-link clicks are a no-op.
 func (m *tuiModel) openLinkAt(x, y int) {
 	p, ok := m.mapCell(x, y)
@@ -494,16 +570,22 @@ func (m *tuiModel) openLinkAt(x, y int) {
 	if p.line < 0 || p.line >= len(lines) {
 		return
 	}
-	gl := buildGridLine(lines[p.line])
-	for _, sp := range linkSpans(gl) {
-		if p.col >= sp.start && p.col < sp.end {
-			if err := openURL(sp.url); err != nil {
-				m.notice, m.noticeErr = "Could not open link: "+err.Error(), true
-			} else {
-				m.notice, m.noticeErr = "Opening link…", false
+	url, found := m.wrappedLinkURL(lines, p.line, p.col)
+	if !found {
+		for _, sp := range linkSpans(buildGridLine(lines[p.line])) {
+			if p.col >= sp.start && p.col < sp.end {
+				url, found = sp.url, true
+				break
 			}
-			return
 		}
+	}
+	if !found {
+		return
+	}
+	if err := openURL(url); err != nil {
+		m.notice, m.noticeErr = "Could not open link: "+err.Error(), true
+	} else {
+		m.notice, m.noticeErr = "Opening link…", false
 	}
 }
 

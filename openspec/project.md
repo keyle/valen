@@ -24,6 +24,7 @@ Single-binary Go agent harness. No server/client split, everything in-process in
   `32768`-byte cap on the sideloaded `~/.config/valen/AGENTS.md`,
   `100` grep matches, `1MiB/512KiB` search/fetch caps, `8000` fetch runes,
   `@` file picker index `20000` entries / `200` fuzzy choices / `8` visible rows,
+  wrapped-link join window `16` rows either side of a ctrl+click,
   attachments `[attachments] max_bytes=20MiB / max_base64_bytes=5MiB /
   max_width,max_height=2000 (resize to fit; `auto_resize=false` rejects;
   64MP decode guard) / max_text_bytes=64KiB`, first `2000` lines, `100` folder

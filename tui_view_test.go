@@ -316,18 +316,21 @@ func TestTUICopyLastReply(t *testing.T) {
 	if got != "" || !m.noticeErr {
 		t.Fatalf("empty session must not copy: %q %q", got, m.notice)
 	}
-	m.session.Turns = append(m.session.Turns, Turn{At: time.Now(), Prompt: "q", Reply: "**answer**"})
+	m.session.Turns = append(m.session.Turns, Turn{At: time.Date(2026, 1, 2, 23, 11, 0, 0, time.Local), Prompt: "q", Reply: "**answer**", DurMs: 255000})
 	m.viewport.Width, m.viewport.Height = 80, 10
 	m.pinBottom()
 	lines := strings.Split(m.viewport.View(), "\n")
 	row := -1
 	for i, l := range lines {
-		if strings.TrimSpace(ansi.Strip(l)) == copyLabel {
+		if strings.HasSuffix(strings.TrimSpace(ansi.Strip(l)), copyLabel) {
 			row = i
 		}
 	}
 	if row < 0 {
 		t.Fatalf("no copy row in view:\n%s", m.viewport.View())
+	}
+	if got := strings.TrimSpace(ansi.Strip(lines[row])); got != "23:11 · 4m15s · "+copyLabel {
+		t.Fatalf("copy row = %q, want time · duration · copy", got)
 	}
 	click := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: row + 1}
 	_, _ = m.Update(click)
