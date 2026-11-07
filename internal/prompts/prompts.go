@@ -47,6 +47,11 @@ var (
 // copilot→copilot, gemini→gemini, kimi→kimi, trinity→trinity, else default.
 func ForModel(model string) string {
 	l := strings.ToLower(strings.TrimSpace(model))
+	// Provider and vendor prefixes never decide the family: "openai/gpt-6",
+	// "openrouter/openai/gpt-6" and "zen/gpt-6" all route on "gpt-6".
+	for _, p := range []string{"openrouter/", "openai/", "zen/"} {
+		l = strings.TrimPrefix(l, p)
+	}
 	switch {
 	case strings.Contains(l, "muse"):
 		return meta
@@ -62,7 +67,7 @@ func ForModel(model string) string {
 		return beast
 	case strings.Contains(l, "gpt-6"):
 		return gptAstra
-	case strings.Contains(l, "gpt"), strings.Contains(l, "grok"):
+	case strings.Contains(l, "gpt"), strings.Contains(l, "grok"), strings.Contains(l, "chatgpt"):
 		return gpt
 	case strings.Contains(l, "gemini"):
 		return gemini
@@ -73,17 +78,18 @@ func ForModel(model string) string {
 	}
 }
 
-// hasOSeries matches opencode's o1/o3 routing without catching substrings
-// like "mimo" or "protocol": token-boundary match on o1/o3 variants.
+// hasOSeries matches opencode's o1/o3/o4 routing without catching substrings
+// like "mimo" or "protocol": token-boundary match on o-series variants.
 func hasOSeries(l string) bool {
 	for _, tok := range strings.FieldsFunc(l, func(r rune) bool {
 		return r == '-' || r == '_' || r == '/' || r == ' ' || r == ':'
 	}) {
-		if tok == "o1" || tok == "o3" || strings.HasPrefix(tok, "o1-") || strings.HasPrefix(tok, "o3-") {
+		if tok == "o1" || tok == "o3" || tok == "o4" ||
+			strings.HasPrefix(tok, "o1-") || strings.HasPrefix(tok, "o3-") || strings.HasPrefix(tok, "o4-") {
 			return true
 		}
 	}
-	return strings.HasPrefix(l, "o1") || strings.HasPrefix(l, "o3")
+	return strings.HasPrefix(l, "o1") || strings.HasPrefix(l, "o3") || strings.HasPrefix(l, "o4")
 }
 
 // FriendlyName mirrors opencode's {{MODEL_NAME}} for the muse family.

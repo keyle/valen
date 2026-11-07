@@ -13,6 +13,7 @@ import (
 func TestMissingKeyErrorDistinguishesProviders(t *testing.T) {
 	t.Setenv(openCodeKeyEnv, "")
 	t.Setenv(openRouterKeyEnv, "")
+	t.Setenv(openAIKeyEnv, "")
 
 	goCfg := Config{Model: "glm-5.3-flash", MaxRounds: 1}
 	if err := missingKeyError(goCfg, ""); err == nil || !strings.Contains(err.Error(), openCodeKeyEnv) {
@@ -43,12 +44,24 @@ func TestMissingKeyErrorDistinguishesProviders(t *testing.T) {
 	if err := missingKeyError(orCfg, ""); err != nil {
 		t.Fatalf("or with key must pass: %v", err)
 	}
+
+	aiCfg := Config{Model: "openai/gpt-6", MaxRounds: 1}
+	if err := missingKeyError(aiCfg, "go-key"); err == nil || !strings.Contains(err.Error(), openAIKeyEnv) {
+		t.Fatalf("openai missing err=%v", err)
+	} else if fe := friendlyError(err); !strings.Contains(fe.Title, "OpenAI key not found") {
+		t.Fatalf("openai title=%q", fe.Title)
+	}
+	aiCfg.OpenAIKey = " sk-live "
+	if err := missingKeyError(aiCfg, ""); err != nil {
+		t.Fatalf("openai with key must pass: %v", err)
+	}
 }
 
 // dispatchTurn with missing keys must not touch the network.
 func TestDispatchTurnMissingKeyMakesNoNetworkCall(t *testing.T) {
 	t.Setenv(openCodeKeyEnv, "")
 	t.Setenv(openRouterKeyEnv, "")
+	t.Setenv(openAIKeyEnv, "")
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -56,7 +69,7 @@ func TestDispatchTurnMissingKeyMakesNoNetworkCall(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	for _, model := range []string{"glm-5.3-flash", "openrouter/moonshotai/kimi-k3"} {
+	for _, model := range []string{"glm-5.3-flash", "openrouter/moonshotai/kimi-k3", "openai/gpt-6"} {
 		cfg := Config{Model: model, BaseURL: srv.URL, MaxRounds: 1, MaxContextTokens: 100000, RequestTimeoutSeconds: 5}
 		h := seedHistory(cfg)
 		_, _, err := dispatchTurn(context.Background(), cfg, newClient(cfg, ""), "", srv.Client(), NewRegistry(), &h, nil)

@@ -25,27 +25,32 @@ func TestForModelFamily(t *testing.T) {
 
 func TestRoutingTable(t *testing.T) {
 	cases := map[string]string{
-		"muse-spark-1.3":    meta,
-		"claude-opus-4":     anthropic,
-		"anthropic-x":       anthropic,
-		"trinity-1":         trinity,
-		"gpt-codex":         codex,
-		"copilot-gpt-5":     copilot,
-		"gpt-4o":            beast,
-		"o1-preview":        beast,
-		"my-o3-mini":        beast,
-		"gpt-6-luna":        gptAstra,
-		"gpt-5.6-luna":      gpt,
-		"grok-4.7":          gpt,
-		"gemini-2.5-pro":    gemini,
-		"kimi-k3":           kimi,
-		"glm-5.3-flash":     def,
-		"deepseek-v4-pro":   def,
-		"mimo-v2.6-pro":     def,
-		"minimax-m3":        def,
-		"qwen3.8-max":       def,
-		"longcat-2.0":       def,
-		"something-unknown": def,
+		"muse-spark-1.3":               meta,
+		"claude-opus-4":                anthropic,
+		"anthropic-x":                  anthropic,
+		"trinity-1":                    trinity,
+		"gpt-codex":                    codex,
+		"copilot-gpt-5":                copilot,
+		"gpt-4o":                       beast,
+		"o1-preview":                   beast,
+		"my-o3-mini":                   beast,
+		"gpt-6-luna":                   gptAstra,
+		"openai/gpt-6-luna":            gptAstra,
+		"openrouter/openai/gpt-6-luna": gptAstra,
+		"gpt-5.6-luna":                 gpt,
+		"openai/gpt-5.6":               gpt,
+		"openai/o4-mini":               beast,
+		"openai/chatgpt-5":             gpt,
+		"grok-4.7":                     gpt,
+		"gemini-2.5-pro":               gemini,
+		"kimi-k3":                      kimi,
+		"glm-5.3-flash":                def,
+		"deepseek-v4-pro":              def,
+		"mimo-v2.6-pro":                def,
+		"minimax-m3":                   def,
+		"qwen3.8-max":                  def,
+		"longcat-2.0":                  def,
+		"something-unknown":            def,
 	}
 	for model, want := range cases {
 		if got := ForModel(model); got != want {
@@ -57,6 +62,9 @@ func TestRoutingTable(t *testing.T) {
 	}
 	if hasOSeries("mimo-v2.6-pro") || hasOSeries("protocol-x") {
 		t.Fatal("o-series matcher too greedy")
+	}
+	if !hasOSeries("o4-mini") || !hasOSeries("openai/o4-mini") {
+		t.Fatal("o4 models must route to the reasoning prompt")
 	}
 }
 

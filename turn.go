@@ -217,19 +217,45 @@ func effectiveOpenRouterKey(cfg Config) string {
 	return strings.TrimSpace(os.Getenv(openRouterKeyEnv))
 }
 
+// effectiveOpenAIKey resolves the OpenAI credential the same way.
+func effectiveOpenAIKey(cfg Config) string {
+	if k := strings.TrimSpace(cfg.OpenAIKey); k != "" {
+		return k
+	}
+	return strings.TrimSpace(os.Getenv(openAIKeyEnv))
+}
+
+// effectiveAPIKey resolves the credential for the model's provider: OpenRouter
+// and OpenAI use their own keys, Go/Zen share the OpenCode key.
+func effectiveAPIKey(cfg Config, apiKey string) string {
+	switch modelProvider(cfg.Model) {
+	case ProviderOpenRouter:
+		return effectiveOpenRouterKey(cfg)
+	case ProviderOpenAI:
+		return effectiveOpenAIKey(cfg)
+	default:
+		return effectiveOpenCodeKey(cfg, apiKey)
+	}
+}
+
 // missingKeyError is nil when the model in cfg can be called; otherwise an
 // "is not set" error naming the env var the provider needs. Boot never
 // fails on this — it surfaces on model pick (TUI notice) and on send
 // (dispatchTurn), where friendlyError turns it into a transcript message.
 func missingKeyError(cfg Config, apiKey string) error {
-	if modelProvider(cfg.Model) == ProviderOpenRouter {
+	switch modelProvider(cfg.Model) {
+	case ProviderOpenRouter:
 		if effectiveOpenRouterKey(cfg) == "" {
 			return fmt.Errorf("%s is not set (required by model %q)", openRouterKeyEnv, cfg.Model)
 		}
-		return nil
-	}
-	if effectiveOpenCodeKey(cfg, apiKey) == "" {
-		return fmt.Errorf("%s is not set (required by model %q)", openCodeKeyEnv, cfg.Model)
+	case ProviderOpenAI:
+		if effectiveOpenAIKey(cfg) == "" {
+			return fmt.Errorf("%s is not set (required by model %q)", openAIKeyEnv, cfg.Model)
+		}
+	default:
+		if effectiveOpenCodeKey(cfg, apiKey) == "" {
+			return fmt.Errorf("%s is not set (required by model %q)", openCodeKeyEnv, cfg.Model)
+		}
 	}
 	return nil
 }
@@ -247,8 +273,10 @@ func dispatchTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey
 	// Refresh from the live env so an export after boot works without a
 	// restart; downstream transports must see the usable credential, not
 	// the possibly-empty boot snapshot.
-	apiKey = effectiveOpenCodeKey(cfg, apiKey)
 	cfg.OpenRouterKey = effectiveOpenRouterKey(cfg)
+	cfg.OpenAIKey = effectiveOpenAIKey(cfg)
+	apiKey = effectiveAPIKey(cfg, apiKey)
+	hc = providerHTTPClient(cfg, hc)
 	t0 := time.Now()
 	dvlog.Logf("turn start transport=%s %s", modelTransport(cfg.Model), dvlog.HistoryLine(*history, estimateTokens(*history)))
 	before := estimateTokens(*history)

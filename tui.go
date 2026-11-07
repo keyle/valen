@@ -740,16 +740,20 @@ func runTUI(ctx context.Context, cfg Config, statePath string, client *openai.Cl
 	m.initialPrompt = initialPrompt
 	m.apiKey = effectiveOpenCodeKey(cfg, apiKey)
 	m.cfg.OpenRouterKey = effectiveOpenRouterKey(cfg)
+	m.cfg.OpenAIKey = effectiveOpenAIKey(cfg)
 	if m.apiKey == "" && m.client == nil {
 		m.client = newClient(m.cfg, "")
 	}
 	// Keyless boots still open: explain immediately which key the
 	// configured model needs so /models has context before first send.
 	if err := missingKeyError(m.cfg, m.apiKey); err != nil {
-		if modelProvider(m.cfg.Model) == ProviderOpenRouter {
-			m.notice = fmt.Sprintf("OpenRouter key not found — export %s=... to use %s. /models still lists both providers.", openRouterKeyEnv, m.cfg.Model)
-		} else {
-			m.notice = fmt.Sprintf("OpenCode API key not found — set %s=... to use %s. /models still lists both providers.", openCodeKeyEnv, m.cfg.Model)
+		switch modelProvider(m.cfg.Model) {
+		case ProviderOpenRouter:
+			m.notice = fmt.Sprintf("OpenRouter key not found — export %s=... to use %s. /models still lists all configured providers.", openRouterKeyEnv, m.cfg.Model)
+		case ProviderOpenAI:
+			m.notice = fmt.Sprintf("OpenAI key not found — export %s=... to use %s. /models lists OpenAI once a key is set.", openAIKeyEnv, m.cfg.Model)
+		default:
+			m.notice = fmt.Sprintf("OpenCode API key not found — set %s=... to use %s. /models still lists all configured providers.", openCodeKeyEnv, m.cfg.Model)
 		}
 		m.noticeErr = true
 		m.refreshViewport()

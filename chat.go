@@ -30,10 +30,15 @@ var openRouterHTTPClient = &http.Client{Transport: sharedTransport}
 // OpenAI-compatible chat endpoint with the OpenRouter key and no Go session
 // header. It returns the endpoint URL, headers, send config and client.
 func chatTarget(cfg Config, apiKey string, hc *http.Client) (string, map[string]string, Config, *http.Client) {
-	if modelProvider(cfg.Model) == ProviderOpenRouter {
+	switch modelProvider(cfg.Model) {
+	case ProviderOpenRouter:
 		sendCfg := cfg
 		sendCfg.SessionID = ""
 		return openRouterBaseURL + "/chat/completions", openRouterHeaders(cfg.OpenRouterKey), sendCfg, openRouterHTTPClient
+	case ProviderOpenAI:
+		sendCfg := cfg
+		sendCfg.SessionID = ""
+		return chatEndpoint(openAIBaseURL), chatHeaders(cfg.OpenAIKey), sendCfg, upstreamHTTPClient
 	}
 	return chatEndpoint(providerBaseURL(cfg)), chatHeaders(apiKey), cfg, hc
 }
@@ -42,8 +47,11 @@ func chatTarget(cfg Config, apiKey string, hc *http.Client) (string, map[string]
 // failures must not be reported as Go ("chat") ones, or the wrong env var
 // gets blamed.
 func chatTransportLabel(cfg Config) string {
-	if modelProvider(cfg.Model) == ProviderOpenRouter {
+	switch modelProvider(cfg.Model) {
+	case ProviderOpenRouter:
 		return "openrouter"
+	case ProviderOpenAI:
+		return "openai"
 	}
 	return "chat"
 }

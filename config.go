@@ -14,6 +14,7 @@ const (
 	defaultBaseURL               = "https://opencode.ai/zen/go/v1"
 	openCodeKeyEnv               = "OPENCODE_API_KEY"
 	openRouterKeyEnv             = "OPENROUTER_API_KEY"
+	openAIKeyEnv                 = "OPENAI_API_KEY"
 	defaultMaxRounds             = 300
 	defaultMaxTokens             = 65536
 	defaultRequestTimeoutSeconds = 300
@@ -65,12 +66,13 @@ type Config struct {
 	ProviderIgnore []string `toml:"provider_ignore"`
 	ProviderOnly   []string `toml:"provider_only"`
 	BaseURL        string   `toml:"base_url"`
-	// OpenCodeKey / OpenRouterKey are the API keys themselves. Empty by
-	// default: the OPENCODE_API_KEY / OPENROUTER_API_KEY env vars are
-	// used instead. persistModelSelection only writes model/thinking
-	// lines, and nothing logs these.
+	// OpenCodeKey / OpenRouterKey / OpenAIKey are the API keys themselves.
+	// Empty by default: the OPENCODE_API_KEY / OPENROUTER_API_KEY /
+	// OPENAI_API_KEY env vars are used instead. persistModelSelection only
+	// writes model/thinking lines, and nothing logs these.
 	OpenCodeKey           string `toml:"opencode_key"`
 	OpenRouterKey         string `toml:"openrouter_key"`
+	OpenAIKey             string `toml:"openai_key"`
 	SessionID             string `toml:"session_id"`
 	SavedSessions         int    `toml:"saved_sessions"`
 	System                string `toml:"system"`

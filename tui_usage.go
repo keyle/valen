@@ -69,6 +69,8 @@ func (m *tuiModel) fetchQuotaCmd() tea.Cmd {
 		return m.fetchORCreditsCmd()
 	case ProviderZen:
 		return nil // Zen is pay-as-you-go: no plan quota to show
+	case ProviderOpenAI:
+		return nil // OpenAI has no plan quota to poll
 	}
 	return m.fetchUsageCmd()
 }

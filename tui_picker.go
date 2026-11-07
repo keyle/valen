@@ -11,11 +11,12 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
-// openModelPicker fetches the live catalogs off the UI thread: Go plus
-// OpenRouter (models arrive stored with their provider prefix). Both are
-// listed even without keys — fallbacks cover unreachable catalogs — so a
-// missing key surfaces on pick/send, never as a boot crash. With a filter,
-// an exact or unique-substring match switches directly; otherwise the
+// openModelPicker fetches the live catalogs off the UI thread: Go, Zen,
+// OpenRouter and (when its key is set) OpenAI, with models stored under their
+// provider prefix. Go/Zen/OpenRouter are listed even without keys — fallbacks
+// cover unreachable catalogs — so a missing key surfaces on pick/send, never
+// as a boot crash; OpenAI is optional and only appears once configured. With a
+// filter, an exact or unique-substring match switches directly; otherwise the
 // filtered picker opens.
 func (m *tuiModel) openModelPicker(filter string) tea.Cmd {
 	m.notice = "Loading models…"
@@ -41,6 +42,7 @@ func (m *tuiModel) fetchModelsCmd(filter string, refresh bool) tea.Cmd {
 	cfg := m.cfg
 	goKey := effectiveOpenCodeKey(cfg, m.apiKey)
 	orKey := effectiveOpenRouterKey(cfg)
+	aiKey := effectiveOpenAIKey(cfg)
 	cachePath := modelsCachePathFor(m.statePath)
 	client := m.client
 	if client == nil && goKey != "" {
@@ -64,6 +66,15 @@ func (m *tuiModel) fetchModelsCmd(filter string, refresh bool) tea.Cmd {
 			zenIDs = prefixedZenModels(fallbackZenModels)
 		}
 		ids = append(ids, zenIDs...)
+		// OpenAI is optional: list it only once a key is configured, so a
+		// keyless picker stays exactly the Go/Zen/OpenRouter set.
+		if aiKey != "" {
+			aiIDs, aiErr := fetchOpenAIModels(ctx, nil, openAIBaseURL, aiKey)
+			if aiErr != nil || len(aiIDs) == 0 {
+				aiIDs = prefixedOpenAIModels(fallbackOpenAIModels)
+			}
+			ids = append(ids, aiIDs...)
+		}
 		orIDs, orPrices, orErr := fetchOpenRouterCatalog(ctx, nil, openRouterBaseURL, orKey)
 		if orErr != nil || len(orIDs) == 0 {
 			orIDs = prefixedOpenRouterFallback()
@@ -332,9 +343,12 @@ func (m *tuiModel) applyModelSwitch(id string) {
 		m.noticeErr = false
 	}
 	if err := missingKeyError(m.cfg, m.apiKey); err != nil {
-		if modelProvider(id) == ProviderOpenRouter {
+		switch modelProvider(id) {
+		case ProviderOpenRouter:
 			m.notice = fmt.Sprintf("Switched to %s. OpenRouter key not found — export %s=... to use it.", id, openRouterKeyEnv)
-		} else {
+		case ProviderOpenAI:
+			m.notice = fmt.Sprintf("Switched to %s. OpenAI key not found — export %s=... to use it.", id, openAIKeyEnv)
+		default:
 			m.notice = fmt.Sprintf("Switched to %s. OpenCode API key not found — set %s=... to use it.", id, openCodeKeyEnv)
 		}
 		m.noticeErr = true

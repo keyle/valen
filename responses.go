@@ -289,8 +289,18 @@ func responsesResponseError(resp responsesResponse) error {
 	return nil
 }
 
+// responsesSendConfig drops the Go session affinity header for OpenAI: it is
+// meaningless upstream of the official API.
+func responsesSendConfig(cfg Config) Config {
+	if modelProvider(cfg.Model) == ProviderOpenAI {
+		cfg.SessionID = ""
+	}
+	return cfg
+}
+
 func callResponsesOnce(ctx context.Context, hc *http.Client, cfg Config, apiKey string, req responsesRequest) (responsesResponse, error) {
 	var out responsesResponse
+	cfg = responsesSendConfig(cfg)
 	if !req.Store && len(req.Include) == 0 {
 		req.Include = []string{"reasoning.encrypted_content"}
 	}
@@ -454,6 +464,7 @@ func responsesRoundStream(ctx context.Context, cfg Config, apiKey string, hc *ht
 // no native metadata is emitted to the UI or stored in ordinary history.
 func responsesRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string, hc *http.Client, req responsesRequest, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, []responsesOutputItem, error) {
 	var usage openai.Usage
+	cfg = responsesSendConfig(cfg)
 	if !req.Store && len(req.Include) == 0 {
 		req.Include = []string{"reasoning.encrypted_content"}
 	}

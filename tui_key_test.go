@@ -95,6 +95,41 @@ func TestTUIModelPickerMergesProviders(t *testing.T) {
 	}
 }
 
+// TestTUIModelPickerListsOpenAIWhenKeySet: OpenAI is optional, so its catalog
+// only joins the picker once OPENAI_API_KEY (or openai_key) is configured.
+func TestTUIModelPickerListsOpenAIWhenKeySet(t *testing.T) {
+	goSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"object":"list","data":[{"id":"glm-5.3-flash","object":"model"}]}`)
+	}))
+	defer goSrv.Close()
+	aiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer sk-test" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"id":"gpt-6"}]}`)
+	}))
+	defer aiSrv.Close()
+	oldAI, oldZen, oldOR := openAIBaseURL, zenBaseURL, openRouterBaseURL
+	openAIBaseURL, zenBaseURL, openRouterBaseURL = aiSrv.URL, "http://[IP_ADDRESS]:1", "http://[IP_ADDRESS]:1"
+	defer func() { openAIBaseURL, zenBaseURL, openRouterBaseURL = oldAI, oldZen, oldOR }()
+
+	m := newTestModel(t, testConfig(goSrv.URL))
+	m.cfg.OpenAIKey = "sk-test"
+	loaded, ok := m.openModelPicker("")().(modelsLoadedMsg)
+	if !ok {
+		t.Fatal("expected modelsLoadedMsg")
+	}
+	for _, id := range loaded.ids {
+		if id == "openai/gpt-6" {
+			return
+		}
+	}
+	t.Fatalf("openai rows missing: %v", loaded.ids)
+}
+
 // TestTUIModelPickerOpenRouterFallback: an unreachable OpenRouter catalog
 // falls back to the curated list instead of dropping the provider.
 func TestTUIModelPickerOpenRouterFallback(t *testing.T) {

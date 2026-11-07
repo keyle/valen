@@ -104,6 +104,8 @@ func TestModelTransport(t *testing.T) {
 		"zen/kimi-k3":                           "chat",
 		"zen/big-pickle":                        "chat",
 		"zen/gemini-3.8-flash":                  "gemini",
+		"openai/gpt-6":                          "responses",
+		"openai/o4-mini":                        "responses",
 	}
 	for id, want := range cases {
 		if got := modelTransport(id); got != want {
@@ -274,6 +276,8 @@ func TestModelProviderForms(t *testing.T) {
 		"openrouter/moonshotai/kimi-k3":    ProviderOpenRouter,
 		"OpenRouter/anthropic/claude-x":    ProviderOpenRouter,
 		"  openrouter/z-ai/glm-5.3-flash ": ProviderOpenRouter,
+		"openai/gpt-6":                     ProviderOpenAI,
+		"  OpenAI/o4-mini ":                ProviderOpenAI,
 	} {
 		if got := modelProvider(id); got != want {
 			t.Fatalf("%q provider=%s want %s", id, got, want)
@@ -285,6 +289,9 @@ func TestModelProviderForms(t *testing.T) {
 	if got := wireModelID("glm-5.3-flash"); got != "glm-5.3-flash" {
 		t.Fatalf("go wire must pass through: %q", got)
 	}
+	if got := wireModelID("openai/gpt-6"); got != "gpt-6" {
+		t.Fatalf("openai wire=%q", got)
+	}
 	if got := displayModelID("glm-5.3-flash"); got != "go/glm-5.3-flash" {
 		t.Fatalf("go display must prefix: %q", got)
 	}
@@ -295,6 +302,7 @@ func TestModelProviderForms(t *testing.T) {
 		"openrouter/moonshotai/kimi-k3": "kimi-k3",
 		"openrouter/z-ai/glm-5.3":       "glm-5.3",
 		"glm-5.3-flash":                 "glm-5.3-flash",
+		"openai/gpt-6":                  "gpt-6",
 	} {
 		if got := modelBaseID(id); got != want {
 			t.Fatalf("%q base=%q want %q", id, got, want)
@@ -589,6 +597,77 @@ func TestFetchZenModelsDropsGeminiAndPrefixes(t *testing.T) {
 	}
 	if len(ids) != 2 || ids[0] != "zen/big-pickle" || ids[1] != "zen/claude-haiku-5-5" {
 		t.Fatalf("ids=%v", ids)
+	}
+}
+
+func TestOpenAIProviderRouting(t *testing.T) {
+	if got := wireModelID("openai/gpt-6"); got != "gpt-6" {
+		t.Fatalf("wire=%q", got)
+	}
+	if got := displayModelID("openai/gpt-6"); got != "openai/gpt-6" {
+		t.Fatalf("display=%q", got)
+	}
+	if got := modelBaseID("openai/gpt-6"); got != "gpt-6" {
+		t.Fatalf("base=%q", got)
+	}
+	cfg := Config{Model: "openai/gpt-6", BaseURL: defaultBaseURL}
+	if providerBaseURL(cfg) != openAIBaseURL {
+		t.Fatalf("openai base=%q", providerBaseURL(cfg))
+	}
+	if err := validateModelID("openai/o4-mini"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFetchOpenAIModelsDropsNonChatAndPrefixes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" || r.Header.Get("Authorization") != "Bearer k" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		fmt.Fprint(w, `{"data":[{"id":"gpt-6"},{"id":"o4-mini"},{"id":"text-embedding-3-large"},{"id":"gpt-4o-audio-preview"},{"id":"dall-e-3"},{"id":"whisper-1"}]}`)
+	}))
+	defer srv.Close()
+	ids, err := fetchOpenAIModels(context.Background(), srv.Client(), srv.URL, "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 || ids[0] != "openai/gpt-6" || ids[1] != "openai/o4-mini" {
+		t.Fatalf("ids=%v", ids)
+	}
+}
+
+// TestOpenAITurnUsesResponsesEndpointAndKey: an openai/ model posts to
+// {openai}/responses with the bare model ID, the OpenAI key, and no Go
+// session header.
+func TestOpenAITurnUsesResponsesEndpointAndKey(t *testing.T) {
+	var path, auth, model, session string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, auth, session = r.URL.Path, r.Header.Get("Authorization"), r.Header.Get("x-opencode-session")
+		var body struct {
+			Model string `json:"model"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		model = body.Model
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"r","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"hello"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`)
+	}))
+	defer srv.Close()
+	old := openAIBaseURL
+	openAIBaseURL = srv.URL
+	defer func() { openAIBaseURL = old }()
+
+	cfg := newTestConfig("http://[IP_ADDRESS]:1")
+	cfg.Model = "openai/gpt-6"
+	cfg.OpenAIKey = "sk-test"
+	if err := chat(context.Background(), cfg, newClient(cfg, ""), "", srv.Client(), NewRegistry(), "hi", io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if path != "/responses" || model != "gpt-6" || auth != "Bearer sk-test" {
+		t.Fatalf("path=%q model=%q auth=%q", path, model, auth)
+	}
+	if session != "" {
+		t.Fatalf("OpenAI must not get the Go session header: %q", session)
 	}
 }
 

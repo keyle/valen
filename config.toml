@@ -16,9 +16,11 @@ model = "openrouter/anthropic/claude-sonnet-5.5"
 thinking = "high"
 tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "grep"]
 # API keys: empty by default, falling back to the env vars
-# OPENCODE_API_KEY / OPENROUTER_API_KEY. Set a value here to override.
+# OPENCODE_API_KEY / OPENROUTER_API_KEY / OPENAI_API_KEY. Set a value here to
+# override.
 opencode_key = ""
 openrouter_key = ""
+openai_key = ""
 # OpenRouter routing variants (openrouter/… models only; ignored on Go/Zen):
 # routing = "floor"           # "" none (default load balancing) | floor
 #                             # (cheapest) | nitro (fastest tps) | exacto
@@ -33,6 +35,10 @@ openrouter_key = ""
 # Second provider, OpenRouter: /models lists openrouter/<vendor>/<model>
 # (recent flagships while offline). A send without a key reports
 # "OpenRouter key not found" instead of failing boot.
+# Third provider, OpenAI (optional): with openai_key or OPENAI_API_KEY set,
+# /models lists openai/<model> (live /v1/models, curated fallback offline) and
+# sends ride the OpenAI Responses API at https://api.openai.com/v1. OpenAI is
+# hidden from the picker while no key is configured.
 # session_id = "ses-stable-id"   # optional, generated per run when omitted
 # saved_sessions = 50             # saved sessions kept per project folder;
                                 # the oldest are pruned when a new session

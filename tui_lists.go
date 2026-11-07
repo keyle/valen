@@ -300,6 +300,7 @@ func (m *tuiModel) resumeSessionPath(path string) {
 	m.httpClient = newHTTPClient(m.cfg)
 	m.apiKey = effectiveOpenCodeKey(m.cfg, m.apiKey)
 	m.cfg.OpenRouterKey = effectiveOpenRouterKey(m.cfg)
+	m.cfg.OpenAIKey = effectiveOpenAIKey(m.cfg)
 	m.client = newClient(m.cfg, m.apiKey)
 	for _, t := range turns {
 		m.session.TotalUsage.Prompt += t.Usage.Prompt

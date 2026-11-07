@@ -43,15 +43,17 @@ var fallbackGoModels = []string{
 	"muse-spark-1.2-contributor",
 }
 
-// Providers. Go models are stored bare ("glm-5.3-flash"); OpenRouter models
-// carry an "openrouter/" prefix ("openrouter/moonshotai/kimi-k3") so the
-// stored model ID is self-describing: requests, thinking levels and the
-// picker all derive the provider from it, with no extra state to keep in
-// sync. Bare IDs always mean Go, so existing configs load unchanged.
+// Providers. Go models are stored bare ("glm-5.3-flash"); other providers
+// carry a prefix ("openrouter/moonshotai/kimi-k3", "zen/claude-haiku-5-5",
+// "openai/gpt-6") so the stored model ID is self-describing: requests,
+// thinking levels and the picker all derive the provider from it, with no
+// extra state to keep in sync. Bare IDs always mean Go, so existing configs
+// load unchanged.
 const (
 	ProviderGo         = "go"
 	ProviderOpenRouter = "openrouter"
 	ProviderZen        = "zen"
+	ProviderOpenAI     = "openai"
 )
 
 // zenBaseURL is OpenCode Zen's gateway (same OpenCode key as Go). A var so
@@ -99,11 +101,15 @@ func prefixedZenModels(ids []string) []string {
 	return out
 }
 
-// providerBaseURL is the API base for the model's provider: Zen has its own
-// gateway; Go (and anything else non-OpenRouter) rides cfg.BaseURL.
+// providerBaseURL is the API base for the model's provider: Zen and OpenAI
+// have their own gateways; Go (and anything else non-OpenRouter) rides
+// cfg.BaseURL.
 func providerBaseURL(cfg Config) string {
-	if modelProvider(cfg.Model) == ProviderZen {
+	switch modelProvider(cfg.Model) {
+	case ProviderZen:
 		return zenBaseURL
+	case ProviderOpenAI:
+		return openAIBaseURL
 	}
 	return cfg.BaseURL
 }
@@ -111,6 +117,10 @@ func providerBaseURL(cfg Config) string {
 // openRouterBaseURL is a var (not const) so offline tests can point it at a
 // fake server; production uses the OpenRouter v1 API.
 var openRouterBaseURL = "https://openrouter.ai/api/v1"
+
+// openAIBaseURL is the official OpenAI API base (ChatGPT models via
+// OPENAI_API_KEY). A var so offline tests can point it at a fake server.
+var openAIBaseURL = "https://api.openai.com/v1"
 
 // fallbackOpenRouterModels is a curated recent-flags list (from the live
 // /models catalog, Oct 2026) used when the live list cannot be reached.
@@ -155,13 +165,42 @@ func prefixedOpenRouterFallback() []string {
 	return out
 }
 
+// fallbackOpenAIModels is a curated OpenAI chat-model list used when the live
+// /models catalog cannot be reached. Stored bare (no provider prefix); the
+// picker prefixes them on merge.
+var fallbackOpenAIModels = []string{
+	"gpt-6.1-sol",
+	"gpt-6-luna",
+	"gpt-5.6",
+	"gpt-5.5",
+	"gpt-5-codex",
+	"gpt-5",
+	"gpt-4.1",
+	"o4-mini",
+	"o3",
+}
+
+// prefixedOpenAIModels returns the curated fallback list in stored
+// (openai/-prefixed) form for picker merges.
+func prefixedOpenAIModels(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, ProviderOpenAI+"/"+id)
+	}
+	return out
+}
+
 // modelProvider reports which provider serves a stored model ID.
 func modelProvider(id string) string {
-	if strings.HasPrefix(normalizeModelID(id), ProviderOpenRouter+"/") {
+	n := normalizeModelID(id)
+	if strings.HasPrefix(n, ProviderOpenRouter+"/") {
 		return ProviderOpenRouter
 	}
-	if strings.HasPrefix(normalizeModelID(id), ProviderZen+"/") {
+	if strings.HasPrefix(n, ProviderZen+"/") {
 		return ProviderZen
+	}
+	if strings.HasPrefix(n, ProviderOpenAI+"/") {
+		return ProviderOpenAI
 	}
 	return ProviderGo
 }
@@ -183,6 +222,8 @@ func wireModelID(id string, routing ...string) string {
 		}
 	case ProviderZen:
 		base = base[len(ProviderZen)+1:]
+	case ProviderOpenAI:
+		base = base[len(ProviderOpenAI)+1:]
 	}
 	return base
 }
@@ -198,7 +239,7 @@ func displayModelID(id string) string {
 
 // modelBaseID folds a stored ID down to the family lookup key: provider
 // prefix off, then the vendor segment off ("openrouter/moonshotai/kimi-k3"
-// → "kimi-k3"). Bare Go IDs pass through untouched.
+// → "kimi-k3", "openai/gpt-6" → "gpt-6"). Bare Go IDs pass through untouched.
 func modelBaseID(id string) string {
 	base := wireModelID(id)
 	if i := strings.Index(base, "/"); i >= 0 {
@@ -213,11 +254,13 @@ func modelBaseID(id string) string {
 // Anthropic Messages). OpenRouter models always ride OpenRouter's
 // OpenAI-compatible chat endpoint, whatever the upstream vendor.
 func modelTransport(id string) string {
-	if modelProvider(id) == ProviderOpenRouter {
+	switch modelProvider(id) {
+	case ProviderOpenRouter:
 		return "chat"
-	}
-	if modelProvider(id) == ProviderZen {
+	case ProviderZen:
 		return zenTransport(wireModelID(id))
+	case ProviderOpenAI:
+		return "responses"
 	}
 	l := strings.ToLower(strings.TrimSpace(id))
 	switch {
@@ -267,6 +310,9 @@ var knownContextWindows = []struct {
 	{"gemini", 1000000},
 	{"claude", 500000},
 	{"gpt-", 400000},
+	{"o1", 200000},
+	{"o3", 200000},
+	{"o4", 200000},
 	{"grok-", 256000},
 	{"qwen", 256000},
 	{"kimi-", 256000},
@@ -391,6 +437,9 @@ func lookupKnownLevels(l string) ([]string, bool) {
 		return []string{"minimal", "low", "medium", "high", "xhigh"}, true
 	case strings.HasPrefix(l, "gpt-"):
 		return []string{"none", "low", "medium", "high", "xhigh", "max"}, true
+	case strings.HasPrefix(l, "o1"), strings.HasPrefix(l, "o3"), strings.HasPrefix(l, "o4"):
+		// OpenAI o-series reasoning models: no "none", no xhigh/max.
+		return []string{"low", "medium", "high"}, true
 	case strings.HasPrefix(l, "grok-"):
 		return []string{"low", "medium", "high", "xhigh"}, true
 	}

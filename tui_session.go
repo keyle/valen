@@ -37,6 +37,7 @@ func (m *tuiModel) startFreshSession() {
 	m.httpClient = newHTTPClient(m.cfg)
 	m.apiKey = effectiveOpenCodeKey(m.cfg, m.apiKey)
 	m.cfg.OpenRouterKey = effectiveOpenRouterKey(m.cfg)
+	m.cfg.OpenAIKey = effectiveOpenAIKey(m.cfg)
 	m.client = newClient(m.cfg, m.apiKey)
 	m.pendingPrompt = ""
 	m.lastTurnDur = 0

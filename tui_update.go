@@ -83,10 +83,14 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	// fail fast with a notice (not a crash) when the current model has no key.
 	m.apiKey = effectiveOpenCodeKey(m.cfg, m.apiKey)
 	m.cfg.OpenRouterKey = effectiveOpenRouterKey(m.cfg)
+	m.cfg.OpenAIKey = effectiveOpenAIKey(m.cfg)
 	if err := missingKeyError(m.cfg, m.apiKey); err != nil {
-		if modelProvider(m.cfg.Model) == ProviderOpenRouter {
+		switch modelProvider(m.cfg.Model) {
+		case ProviderOpenRouter:
 			m.notice = fmt.Sprintf("OpenRouter key not found — export %s=... to use %s.", openRouterKeyEnv, m.cfg.Model)
-		} else {
+		case ProviderOpenAI:
+			m.notice = fmt.Sprintf("OpenAI key not found — export %s=... to use %s.", openAIKeyEnv, m.cfg.Model)
+		default:
 			m.notice = fmt.Sprintf("OpenCode API key not found — set %s=... to use %s.", openCodeKeyEnv, m.cfg.Model)
 		}
 		m.noticeErr = true
@@ -577,16 +581,18 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		ids := msg.ids
 		if msg.err != nil || len(ids) == 0 {
-			// Go live list failed: keep any OpenRouter rows already merged
-			// (live or fallback) and backfill Go with the curated list, so
-			// keyless boots still browse both providers.
-			var orKeep, zenKeep []string
+			// Go live list failed: keep any non-Go rows already merged (live
+			// or fallback) and backfill Go with the curated list, so keyless
+			// boots still browse every configured provider.
+			var orKeep, zenKeep, aiKeep []string
 			for _, id := range msg.ids {
 				switch modelProvider(id) {
 				case ProviderOpenRouter:
 					orKeep = append(orKeep, id)
 				case ProviderZen:
 					zenKeep = append(zenKeep, id)
+				case ProviderOpenAI:
+					aiKeep = append(aiKeep, id)
 				}
 			}
 			if len(orKeep) == 0 {
@@ -595,7 +601,11 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(zenKeep) == 0 {
 				zenKeep = prefixedZenModels(fallbackZenModels)
 			}
+			if len(aiKeep) == 0 && effectiveOpenAIKey(m.cfg) != "" {
+				aiKeep = prefixedOpenAIModels(fallbackOpenAIModels)
+			}
 			ids = append(append([]string(nil), fallbackGoModels...), zenKeep...)
+			ids = append(ids, aiKeep...)
 			ids = append(ids, orKeep...)
 			m.notice = "Live model list unreachable — showing known models."
 			m.noticeErr = false

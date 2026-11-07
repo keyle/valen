@@ -6,8 +6,9 @@ The aim is the same agent loop at a small fraction of the resource footprint:
 about 50 MB of RAM in use, and less than 10% cpu per agent running.
 
 valen has a terminal chat UI and a one-shot headless mode. It talks to
-[OpenCode Go/Zen](https://opencode.ai) and [OpenRouter](https://openrouter.ai)
-models and runs the tool loop locally.
+[OpenCode Go/Zen](https://opencode.ai), [OpenRouter](https://openrouter.ai)
+and, optionally, OpenAI (ChatGPT models via `OPENAI_API_KEY`) and runs the
+tool loop locally.
 
 ## Features
 
@@ -64,6 +65,7 @@ Set a key, or put it in `~/.config/valen/valen.toml`:
 ```sh
 export OPENCODE_API_KEY=...      # OpenCode Go / Zen
 export OPENROUTER_API_KEY=...    # OpenRouter
+export OPENAI_API_KEY=...        # optional: OpenAI / ChatGPT models
 ```
 
 ```sh
@@ -86,7 +88,8 @@ Config is seeded on first run at `~/.config/valen/valen.toml` (a pre-existing
 ## Limitations
 
 - **Platforms:** macOS and Linux only. 
-- **Providers:** OpenCode Go / OpenCode Zen and OpenRouter only.
+- **Providers:** OpenCode Go / OpenCode Zen, OpenRouter, and optionally the
+  OpenAI API (`openai/…` models, enabled by `OPENAI_API_KEY`).
 - **Agents:** subagents run in the foreground, nest one level deep, and up to 5
   `task` calls in one model turn run in parallel. There are no background
   agents. `write`/`edit` lock per file; `shell` writes are not locked, so

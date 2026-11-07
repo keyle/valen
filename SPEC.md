@@ -84,13 +84,14 @@ and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
 
 | Key | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `model` | string | — | **required.** Model ID, e.g. `glm-5.3-flash`, `kimi-k3`, `zen/claude-haiku-5-5`, or `openrouter/moonshotai/kimi-k3`. The `zen/` prefix selects OpenCode Zen (`https://opencode.ai/zen/v1`, same OpenCode key as Go; transport chosen per model: gpt/grok/muse → responses; claude and qwen3.5–3.8 plus/flash (all qwen except qwen3.8-max) → messages; qwen3.8-max and the rest → chat; Gemini models are not supported); the `openrouter/` prefix selects the OpenRouter provider (needs its key, below); bare IDs ride OpenCode Go. Switch live with `/models` (ctrl+p); persisted to `valen.toml` |
+| `model` | string | — | **required.** Model ID, e.g. `glm-5.3-flash`, `kimi-k3`, `zen/claude-haiku-5-5`, `openrouter/moonshotai/kimi-k3`, or `openai/gpt-6`. The `zen/` prefix selects OpenCode Zen (`https://opencode.ai/zen/v1`, same OpenCode key as Go; transport chosen per model: gpt/grok/muse → responses; claude and qwen3.5–3.8 plus/flash (all qwen except qwen3.8-max) → messages; qwen3.8-max and the rest → chat; Gemini models are not supported); the `openrouter/` prefix selects the OpenRouter provider (needs its key, below); the `openai/` prefix selects the optional OpenAI API (`https://api.openai.com/v1`, `OPENAI_API_KEY`, always the Responses transport); bare IDs ride OpenCode Go. Switch live with `/models` (ctrl+p); persisted to `valen.toml` |
 | `thinking` | string | empty (provider default) | Reasoning level, per-model (see `/effort` picker): muse-spark `minimal`/`low`/`medium`/`high`/`xhigh`, gpt/grok `low`…`max` (+`none` on gpt), glm/deepseek `low`/`high`/`max` or `high`/`max`, kimi-k3 `max` only, toggle models `none`/`high`, fixed no-control models omit. Switch live with `/effort` (`/thinking` alias) or ctrl+t (cycles low→high, wraps); persisted to `valen.toml`. Unknown models fall back to the full vocabulary until a 400 teaches the valid list, cached at `$XDG_DATA_HOME/valen/thinking_levels.json` |
 | `routing` | string | empty (`none`) | OpenRouter provider-routing variant, sent as a model-slug suffix: `floor` (cheapest; `provider.sort: "price"`), `nitro` (fastest throughput; `provider.sort: "throughput"`), `exacto` (quality-first tool-use sorting), or empty/`none` (OpenRouter's default load balancing). Switch live with `/route [none\|floor\|nitro\|exacto]` or ctrl+y (cycles none → floor → nitro → exacto, wraps); a **silent no-op on Go/Zen**. Persisted to `state.json` alongside `thinking` and stored in favourite slots; ignored on non-OpenRouter models |
 | `provider_ignore` | string[] | `["baseten"]` | OpenRouter `provider.ignore`: provider slugs skipped per request (`openrouter/…` models only; a silent no-op on Go/Zen). Unset keeps the default `["baseten"]`, an explicit `[]` disables the blacklist. Mutually exclusive with `provider_only` (which wins when both are set). The `provider` object merges with the `routing` suffix, which sets `provider.sort` |
 | `provider_only` | string[] | unset | OpenRouter `provider.only`: an allowlist instead of the blacklist. Sent as the request `provider` object alongside `routing` |
 | `opencode_key` | string | empty | OpenCode API key itself, shared by Go and Zen. Empty falls back to the `OPENCODE_API_KEY` env var. Missing keys never fail boot — the TUI still opens and `/models` lists all providers; picking or sending with a Go/Zen model and no key says "OpenCode API key not found" |
 | `openrouter_key` | string | empty | OpenRouter API key itself. Empty falls back to the `OPENROUTER_API_KEY` env var. Second provider: `/models` always lists OpenRouter models (`openrouter/<vendor>/<model>`, fallback when offline) served via OpenRouter's OpenAI-compatible chat endpoint. Picking or sending with an `openrouter/…` model and no key says "OpenRouter key not found" |
+| `openai_key` | string | empty | OpenAI API key itself. Empty falls back to the `OPENAI_API_KEY` env var. Optional third provider: when a key is configured, `/models` lists `openai/<model>` from the live `/v1/models` catalog (curated fallback offline), served over the OpenAI Responses API. Without a key the provider stays hidden; picking or sending an `openai/…` model anyway says "OpenAI key not found" |
 | `session_id` | string | `ses-<unixnano>` | Stable per conversation; sent as `x-opencode-session` |
 | `saved_sessions` | int | `50` | Saved session logs kept per project folder (`$XDG_DATA_HOME/valen/sessions/<workdir>-<hash>/`). The oldest JSONL plus its `.meta.json` are pruned when a new session starts; `0` or less uses the default. TUI `/sessions` (ctrl+l) lists them and `x` deletes the selected one |
 | `plan` | bool | `false` | Plan mode: read-only investigation — the plan overlay joins the system prompt, `write`/`edit`/`shell` and every MCP tool refuse with guidance, `task` is explore-only. TUI `/plan` or Tab in the chatbox toggles at runtime; `-plan` sets it headless |
@@ -121,7 +122,7 @@ Validation errors (missing `model`, MCP entry without `cmd`, unreadable file)
 exit non-zero before any network call. Missing API keys are not validation
 errors: boot always succeeds and the missing key surfaces on model pick
 (TUI notice) and on send (friendly transcript error naming
-`opencode_key` vs `openrouter_key`).
+`opencode_key`, `openrouter_key` or `openai_key`).
 
 ## Provider contract
 
@@ -180,6 +181,11 @@ filtered out of the catalog as unsupported.
 `X-Title: valen`, no Go session header) with the vendor/model ID on the
 wire and `reasoning_effort` for thinking; family levels resolve through
 the vendor segment (`openrouter/moonshotai/kimi-k3` → `kimi-k3` rules).
+`openai/…` models always use OpenAI's Responses API
+(`POST https://api.openai.com/v1/responses`, bearer `OPENAI_API_KEY`, no Go
+session header) with the bare model ID on the wire and `reasoning.effort` for
+thinking; the catalog comes from `GET https://api.openai.com/v1/models`,
+filtered to text chat families (gpt/o-series/chatgpt).
 OpenRouter returns reasoning as `reasoning` (not `reasoning_content`); it is
 captured into `ReasoningContent` and sent back on assistant messages as both
 fields, since thinking-mode upstreams 400 when it is not passed back.
@@ -614,8 +620,11 @@ deterministic. Tools are registered as
   and the OpenRouter chat wire shape (stripped model, OR key, no session
   header, `reasoning_effort`). Zen: `zenTransport` per model, provider
   prefix/wire/base forms, catalog fetch filtering Gemini, and the shared
-  OpenCode key resolving Go and Zen alike. TUI picker merge/fallback across
-  all three catalogs rides with the other picker tests.
+  OpenCode key resolving Go and Zen alike. OpenAI: `openai/` prefix/wire/base
+  forms, Responses transport, catalog fetch filtering non-chat models, the
+  Responses endpoint + bare model + OpenAI key with no Go session header, and
+  the optional key gating the picker. TUI picker merge/fallback across the
+  catalogs rides with the other picker tests.
 - `errors_test.go` — friendly mapping incl. `transportError` (messages 429,
   responses 401).
 - `transports_test.go` — one model per transport pinned to its endpoint path

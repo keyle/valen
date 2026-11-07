@@ -158,8 +158,11 @@ func probeThinkingLevels(ctx context.Context, cfg Config, apiKey string, hc *htt
 	var body any
 	sendCfg := cfg
 	// Resolve live keys so a post-boot export still probes correctly.
-	apiKey = effectiveOpenCodeKey(cfg, apiKey)
 	sendCfg.OpenRouterKey = effectiveOpenRouterKey(cfg)
+	sendCfg.OpenAIKey = effectiveOpenAIKey(cfg)
+	sendCfg = responsesSendConfig(sendCfg)
+	apiKey = effectiveAPIKey(cfg, apiKey)
+	hc = providerHTTPClient(cfg, hc)
 	headers := chatHeaders(apiKey)
 	if modelProvider(cfg.Model) == ProviderOpenRouter {
 		// No Go session affinity on OpenRouter: the session header

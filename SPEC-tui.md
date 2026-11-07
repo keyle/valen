@@ -170,7 +170,8 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   on hot windows. The `Go` label names the plan; narrow terminals keep
   `Go · 5h N%`. Hidden when `{base_url}/usage` is unavailable (non-Go keys).
   On `zen/…` models the right of the footer shows just `Zen` (pay-as-you-go,
-  no plan quota, nothing fetched).
+  no plan quota, nothing fetched). On `openai/…` models it shows just `OpenAI`
+  (official API usage is not polled).
   On `openrouter/…` models the Go quota stays hidden and the footer shows the
   OpenRouter balance (`O.R. $X.XX`) once the credits fetch lands; plain API
   keys 403 on `/credits`, so only the locally-measured metadata below shows
@@ -298,6 +299,7 @@ Rules:
 - Plan quota refreshes share one in-flight fetch per provider: the minute tick
   and the post-turn refresh never overlap on slow networks. The refresh
   dispatches by provider (`fetchQuotaCmd`): the OpenRouter balance on
+  `openrouter/…` models, nothing on `zen/…` or `openai/…`, and
   `openrouter/…` models, the Go plan quota otherwise, and nothing on `zen/…`
   models (pay-as-you-go, no plan quota) — the hidden provider never refreshes.
 
@@ -467,21 +469,24 @@ shows the tokens, not the bytes.
 - `/models` (ctrl+p, or ctrl+m where the terminal sends disambiguated ctrl+m)
   fetches the live catalogs — OpenCode Go (`GET {base_url}/models`), OpenCode
   Zen (`GET https://opencode.ai/zen/v1/models`, same OpenCode key as Go) plus
-  OpenRouter (`GET https://openrouter.ai/api/v1/models`) — and opens
+  OpenRouter (`GET https://openrouter.ai/api/v1/models`) and, when
+  `OPENAI_API_KEY`/`openai_key` is set, OpenAI
+  (`GET https://api.openai.com/v1/models`) — and opens
   a picker: ↑↓ move, Enter switches, Ctrl+F stars/unstars the highlighted row.
   The filter field is always focused (ghost hint "type to filter models"), so
   typing narrows the list immediately; j/k are ordinary filter characters and
   Esc closes the picker. The
   picker search box is
   pinned to the full content width (like the chatbox) so typing never resizes
-  it. All three providers list even
-  without keys (curated fallbacks when offline/unkeyed); picking or sending
-  with a model whose key is missing reports "OpenCode API key not found"
-  or "OpenRouter key not found" naming the env var, instead of failing boot.
-  Every row carries its
-  provider prefix (`go/…`, `zen/…`, `openrouter/…`); Go and Zen transports
-  (`/chat`, `/responses`, `/messages`) are marked, OpenRouter rows always
-  converse over its OpenAI-compatible chat endpoint.
+  it. Go/Zen/OpenRouter list even
+  without keys (curated fallbacks when offline/unkeyed); OpenAI is optional
+  and appears only once a key is configured. Picking or sending
+  with a model whose key is missing reports "OpenCode API key not found",
+  "OpenRouter key not found" or "OpenAI key not found" naming the env var,
+  instead of failing boot. Every row carries its
+  provider prefix (`go/…`, `zen/…`, `openrouter/…`, `openai/…`); Go, Zen and
+  OpenAI transports (`/chat`, `/responses`, `/messages`) are marked, and
+  OpenRouter rows always converse over its OpenAI-compatible chat endpoint.
 - The merged list is cached at `~/.config/valen/models.json` (beside
   `state.json`). With a cache the picker opens instantly from it and, if still
   open 5 seconds later, fetches live and swaps the catalog in place (search

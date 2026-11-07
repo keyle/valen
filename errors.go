@@ -33,8 +33,11 @@ func friendlyError(err error) FriendlyError {
 	case strings.Contains(lower, "no such host"), strings.Contains(lower, "connection refused"), strings.Contains(lower, "dial tcp"), strings.Contains(lower, "network is unreachable"):
 		return FriendlyError{"Couldn't reach the provider. Check network/VPN and resend.", msg}
 	case strings.Contains(lower, "is not set"):
-		if strings.Contains(lower, "openrouter") {
+		switch {
+		case strings.Contains(lower, "openrouter"):
 			return FriendlyError{"OpenRouter key not found — set openrouter_key in config or export OPENROUTER_API_KEY.", msg}
+		case strings.Contains(lower, "openai"):
+			return FriendlyError{"OpenAI key not found — set openai_key in config or export OPENAI_API_KEY.", msg}
 		}
 		return FriendlyError{"OpenCode API key not found — set opencode_key in config or export OPENCODE_API_KEY.", msg}
 	case strings.Contains(lower, "empty choices"):

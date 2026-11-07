@@ -308,6 +308,8 @@ func (m *tuiModel) footerView() string {
 		return m.footerLine(hint, text, footerStyle)
 	case ProviderZen:
 		return m.footerLine(hint, "Zen", footerStyle)
+	case ProviderOpenAI:
+		return m.footerLine(hint, "OpenAI", footerStyle)
 	}
 	if m.goUsage == nil {
 		return footerStyle.Padding(0, 2).Render(hint)

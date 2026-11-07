@@ -197,6 +197,7 @@ func start() error {
 	// is picked or a turn is sent (see missingKeyError + dispatchTurn).
 	// Trimmed: pasted keys with stray whitespace 401 otherwise.
 	cfg.OpenRouterKey = effectiveOpenRouterKey(cfg)
+	cfg.OpenAIKey = effectiveOpenAIKey(cfg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), interruptSignals()...)
 	defer stop()
@@ -335,6 +336,21 @@ var sharedTransport = &http.Transport{
 
 func newHTTPClient(cfg Config) *http.Client {
 	return &http.Client{Transport: &headerTransport{base: sharedTransport, sessionID: cfg.SessionID}}
+}
+
+// upstreamHTTPClient is the sessionless client for upstreams that don't use
+// Go's identity headers (OpenRouter, OpenAI): the shared keep-alive pool
+// without the x-opencode-session/UA transport.
+var upstreamHTTPClient = &http.Client{Transport: sharedTransport}
+
+// providerHTTPClient picks the client for cfg's provider. Go and Zen keep the
+// Go identity transport; OpenAI and OpenRouter get the sessionless pool.
+func providerHTTPClient(cfg Config, hc *http.Client) *http.Client {
+	switch modelProvider(cfg.Model) {
+	case ProviderOpenAI, ProviderOpenRouter:
+		return upstreamHTTPClient
+	}
+	return hc
 }
 
 func newClient(cfg Config, apiKey string) *openai.Client {

@@ -146,6 +146,74 @@ func fetchZenModels(ctx context.Context, hc *http.Client, baseURL, apiKey string
 	return ids, nil
 }
 
+// fetchOpenAIModels returns the live OpenAI chat model IDs in stored
+// (openai/-prefixed) form, sorted. Non-text models (embeddings, audio,
+// images, moderation, realtime) are dropped: valen cannot send them.
+func fetchOpenAIModels(ctx context.Context, hc *http.Client, baseURL, apiKey string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	req.Header.Set("User-Agent", userAgent)
+	client := hc
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := clientDoWithRetryTimeout(ctx, client, req, 30*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseTransportError("openai", resp.StatusCode, raw)
+	}
+	var list struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return nil, fmt.Errorf("api: openai: decode models: %w", err)
+	}
+	ids := make([]string, 0, len(list.Data))
+	for _, m := range list.Data {
+		id := strings.TrimSpace(m.ID)
+		if !openAIChatModel(id) {
+			continue
+		}
+		ids = append(ids, ProviderOpenAI+"/"+id)
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
+// openAIChatModel filters the OpenAI /models list down to the text chat
+// families valen can drive over /responses.
+func openAIChatModel(id string) bool {
+	l := strings.ToLower(strings.TrimSpace(id))
+	if l == "" {
+		return false
+	}
+	for _, bad := range []string{"embedding", "audio", "realtime", "transcribe", "tts", "image", "moderation", "dall-e", "whisper", "sora"} {
+		if strings.Contains(l, bad) {
+			return false
+		}
+	}
+	for _, prefix := range []string{"gpt-", "o1", "o3", "o4", "chatgpt-"} {
+		if strings.HasPrefix(l, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // fetchGoModels returns the live OpenCode Go model IDs, sorted.
 func fetchGoModels(ctx context.Context, client *openai.Client) ([]string, error) {
 	list, err := client.ListModels(ctx)
