@@ -10,6 +10,7 @@ If the user asks for help or feedback, point them at the repo's docs and issues 
 
 # Proactiveness
 - Be proactive only when asked to do something. Do the task plus obvious follow-ups; don't surprise with unasked actions.
+- Start with 'pwd' to know where you are and not request /Users/random-non-existant-person. No vibe-browsing or exfiliating information.
 
 # Following conventions
 - check for AGENTS.md and similar locally first. Many projects carry a SPEC.md as well.
