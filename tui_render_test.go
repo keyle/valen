@@ -304,6 +304,33 @@ func TestPendingThinkingRendersTailOnly(t *testing.T) {
 	}
 }
 
+// TestPendingInlineThinkingStaysOutOfAnswer: reasoning streamed inside content
+// (both tag spellings) renders in the thinking block, never in the answer body.
+func TestPendingInlineThinkingStaysOutOfAnswer(t *testing.T) {
+	for _, tag := range [][2]string{
+		{thinkOpen, thinkClose},
+		{thinkOpenI, thinkCloseI},
+	} {
+		m := newTestModel(t, testConfig("https://unused"))
+		m.busy = true
+		m.pendingPrompt = "work"
+		m.pendingText = tag[0] + "secret thought" + tag[1] + "visible answer"
+
+		out := ansi.Strip(m.renderPending(80))
+		idx := strings.Index(out, "✦ "+m.cfg.Model)
+		if idx < 0 {
+			t.Fatalf("missing answer header:\n%s", out)
+		}
+		answer := out[idx:]
+		if strings.Contains(answer, "secret thought") {
+			t.Fatalf("reasoning leaked into the answer body:\n%s", out)
+		}
+		if !strings.Contains(answer, "visible answer") {
+			t.Fatalf("answer missing:\n%s", out)
+		}
+	}
+}
+
 // TestTUICommittedThinkingKeepsStreamedText: the success-path commit must
 // keep the streamed thinking buffer for display; replay history keeps the
 // exactly-concatenated authoritative reasoning.

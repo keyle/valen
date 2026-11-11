@@ -183,7 +183,7 @@ func splitResponsesInputNative(history []openai.ChatCompletionMessage, native ma
 				}
 			}
 			content := m.Content
-			if strings.Contains(content, "<think>") {
+			if hasThinkTag(content) {
 				_, content = splitThinking(content)
 			}
 			if len(m.ToolCalls) == 0 {

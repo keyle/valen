@@ -362,7 +362,7 @@ func (m *tuiModel) renderPending(w int) string {
 	// Models that stream <think> inside content would otherwise show their
 	// reasoning as plain (white) answer text; route it to the thinking style.
 	live, answer := m.pendingThinking, m.pendingText
-	if strings.Contains(answer, "<think>") {
+	if hasThinkTag(answer) {
 		t, a := splitThinking(answer)
 		answer = a
 		if t != "" {

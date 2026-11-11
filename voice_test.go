@@ -365,6 +365,64 @@ func TestStreamWritesNDJSONWithDoneLast(t *testing.T) {
 	}
 }
 
+// Reasoning must never reach the NDJSON text stream: reasoning deltas are
+// dropped and content-inlined think blocks are split out of text_delta, so a
+// consumer that concatenates text sees only the answer. done.reply and plain
+// stdout carry that same split answer.
+func TestStreamDropsReasoningAndCarriesReply(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	round := "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"private plan\"}}]}\n\n" +
+		"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":" + jsonQuote(thinkOpenI+"private plan"+thinkCloseI+"public answer") + "}}]}\n\n" +
+		"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+	var bodies []string
+	srv := sseServer(t, &bodies, round)
+	cfgPath := writeConfig(t, fmt.Sprintf("model = \"kimi-k3\"\nbase_url = %q\n", srv.URL))
+
+	stdout, err := runValenCLI(t, t.TempDir(), "-p", "--stream", "-config", cfgPath, "reason")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	var text strings.Builder
+	for _, line := range lines {
+		var ev struct {
+			Kind string `json:"kind"`
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("bad line %q: %v", line, err)
+		}
+		if ev.Kind == "thinking_delta" {
+			t.Fatalf("reasoning event leaked into the stream: %s", line)
+		}
+		if ev.Kind == "text_delta" {
+			text.WriteString(ev.Text)
+		}
+	}
+	if text.String() != "public answer" {
+		t.Fatalf("streamed text=%q", text.String())
+	}
+	var done struct {
+		Kind  string `json:"kind"`
+		Reply string `json:"reply"`
+	}
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &done); err != nil {
+		t.Fatal(err)
+	}
+	if done.Kind != "done" || done.Reply != "public answer" {
+		t.Fatalf("done=%+v", done)
+	}
+
+	// Plain -p prints the split answer, never the reasoning block.
+	out, err := runValenCLI(t, t.TempDir(), "-p", "-config", cfgPath, "reason")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(out); got != "public answer" {
+		t.Fatalf("stdout=%q", got)
+	}
+}
+
 // A failed turn still ends the stream with a done line that carries the error,
 // and the process exits non-zero.
 func TestStreamEndsWithErrorDoneLine(t *testing.T) {

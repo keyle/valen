@@ -573,13 +573,34 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 	vt := newHeadlessVerbose(stderr, opts.verbose)
 	var enc *json.Encoder
 	var streamErr error
+	var streamText strings.Builder
+	sentAnswer := ""
 	if opts.stream {
 		enc = json.NewEncoder(stdout)
 	}
 	onEvent := func(ev Event) {
 		vt.event(ev)
 		if enc != nil && streamErr == nil {
-			streamErr = enc.Encode(ev)
+			switch ev.Kind {
+			case "thinking_delta":
+				// Live reasoning is not part of the stream contract: a consumer
+				// that concatenates text fields would paint every thought as
+				// result.
+			case "text_delta":
+				streamText.WriteString(ev.Text)
+				_, answer := splitThinking(streamText.String())
+				if answer = holdThinkPrefix(answer); len(answer) > len(sentAnswer) && strings.HasPrefix(answer, sentAnswer) {
+					if err := enc.Encode(Event{Kind: "text_delta", Text: answer[len(sentAnswer):]}); err != nil {
+						streamErr = err
+					} else {
+						sentAnswer = answer
+					}
+				}
+			default:
+				if err := enc.Encode(ev); err != nil {
+					streamErr = err
+				}
+			}
 		}
 		switch ev.Kind {
 		case "tool_start":
@@ -607,6 +628,11 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 	thinking, answer := splitThinking(reply.Content)
 	if reply.ReasoningContent != "" {
 		thinking = reply.ReasoningContent
+	}
+	// Unary and stream-rejected rounds emit no deltas; replay any answer the
+	// stream has not seen yet, and flush a held-back tag fragment.
+	if opts.stream && answer != "" && streamErr == nil && strings.HasPrefix(answer, sentAnswer) && len(answer) > len(sentAnswer) {
+		streamErr = enc.Encode(Event{Kind: "text_delta", Text: answer[len(sentAnswer):]})
 	}
 	vt.fallbackThinking(thinking)
 	vt.closeLine()
@@ -636,7 +662,7 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 		}
 	}
 	if opts.stream {
-		return writeStreamDone(enc, usage, err, streamErr, sessionPath)
+		return writeStreamDone(enc, usage, answer, err, streamErr, sessionPath)
 	}
 	if sessionPath != "" {
 		fmt.Fprintf(stderr, "[session %s]\n", sessionPath)
@@ -644,7 +670,7 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, reply.Content)
+	fmt.Fprintln(stdout, answer)
 	fmt.Fprintf(stderr, "[tokens in=%d out=%d]\n", usage.PromptTokens, usage.CompletionTokens)
 	return nil
 }
@@ -653,6 +679,7 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 // when the turn failed, so a reader always sees how the run ended.
 type streamDone struct {
 	Kind    string         `json:"kind"`
+	Reply   string         `json:"reply,omitempty"`
 	Usage   Usage          `json:"usage"`
 	Session string         `json:"session,omitempty"`
 	Error   *FriendlyError `json:"error,omitempty"`
@@ -660,8 +687,8 @@ type streamDone struct {
 
 // writeStreamDone writes the done line and returns the first error that
 // stopped the run: the turn's, then a failed event write.
-func writeStreamDone(enc *json.Encoder, usage openai.Usage, turnErr, streamErr error, sessionPath string) error {
-	done := streamDone{Kind: "done", Usage: Usage{Prompt: usage.PromptTokens, Completion: usage.CompletionTokens, Total: usage.TotalTokens}, Session: sessionPath}
+func writeStreamDone(enc *json.Encoder, usage openai.Usage, reply string, turnErr, streamErr error, sessionPath string) error {
+	done := streamDone{Kind: "done", Reply: reply, Usage: Usage{Prompt: usage.PromptTokens, Completion: usage.CompletionTokens, Total: usage.TotalTokens}, Session: sessionPath}
 	if turnErr != nil {
 		fe := friendlyError(turnErr)
 		done.Error = &fe
