@@ -128,8 +128,10 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   scrollback, so parallel batches read as concurrent work; finished threads
   keep the usual line plus preview. The status line counts them
   (`⏺ fetch… · 2 running`, `✓ search · 1 still running`). The scrollback
-  repaints at the ~10fps spinner tick only while threads are open; committed
-  turns stay cached.
+  repaints on content/tool events and the spinner tick only animates the
+  status line; each pending tool row caches its render until its result or
+  the transcript width changes, so a turn with hundreds of edits does not
+  re-parse args or re-lex diffs on every flush. Committed turns stay cached.
 - Thinking renders dim/italic with a left rule, shown by default;
   ctrl+o or `/think` collapses to `✦ thinking (N chars)`.
 - Live busy state renders once, in the spinner row above the chatbox, with
@@ -598,8 +600,11 @@ Every transport round requests SSE (`stream: true`). The background turn
 forwards `text_delta` / `thinking_delta` via `prog.Send(toolEventMsg)` plus
 `tool_start` (with args) / `tool_result` (with output); `Update` accumulates a
 `pendingTools` timeline plus `pendingText` / `pendingThinking` and re-renders
-the pending block throttled with the viewport pinned to the bottom. Text
-fragments concatenate exactly, without inserted newlines; the first delta of
+the pending block throttled with the viewport pinned to the bottom. Each
+pending tool row memoizes its rendered form by row state and transcript width,
+so a long turn costs the cached assembly per flush, not a re-parse and
+re-highlight of the whole timeline. Text fragments concatenate exactly,
+without inserted newlines; the first delta of
 a new reasoning part starts on its own line. Rolling
 32768-byte buffers keep the newest UTF-8-safe tail instead of freezing at the
 cap; only a short tail is displayed live. On commit the full reply renders as

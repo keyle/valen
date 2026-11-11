@@ -35,6 +35,7 @@ func (m *tuiModel) finishPendingTool(id, name, output string, durMs int64) {
 				m.pendingTools[i].done = true
 				m.pendingTools[i].output = output
 				m.pendingTools[i].durMs = durMs
+				m.pendingTools[i].renderOK = false
 				return
 			}
 		}
@@ -44,6 +45,7 @@ func (m *tuiModel) finishPendingTool(id, name, output string, durMs int64) {
 			m.pendingTools[i].done = true
 			m.pendingTools[i].output = output
 			m.pendingTools[i].durMs = durMs
+			m.pendingTools[i].renderOK = false
 			return
 		}
 	}

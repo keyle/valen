@@ -286,15 +286,26 @@ func (m *tuiModel) renderToolLine(tr ToolRecord) string {
 	return toolLineStyle.Width(cw).Render(breakLongWords(label, cw-2))
 }
 
-// renderPendingTool renders one live tool row. In-flight tools (no result
+// renderPendingTool renders one live tool row, reusing the cached render until
+// the row's state or the transcript width changes. In-flight tools (no result
 // yet) read "now: <action>" in yellow; the scrollback no longer redraws on
 // every spinner tick, so an animated glyph there would just freeze mid-frame.
 // Finished tools render the usual line plus preview.
-func (m *tuiModel) renderPendingTool(t pendingTool) string {
+func (m *tuiModel) renderPendingTool(t *pendingTool) string {
+	cw := m.contentWidth()
+	if t.renderOK && t.renderedW == cw {
+		return t.rendered
+	}
+	t.rendered = m.renderPendingToolRow(*t, cw)
+	t.renderedW = cw
+	t.renderOK = true
+	return t.rendered
+}
+
+func (m *tuiModel) renderPendingToolRow(t pendingTool, cw int) string {
 	if t.done {
 		return m.renderToolLine(ToolRecord{Name: t.name, Args: t.args, Output: t.output, DurMs: t.durMs})
 	}
-	cw := m.contentWidth()
 	maxText := cw - 4
 	if maxText < 20 {
 		maxText = 20
@@ -368,8 +379,8 @@ func (m *tuiModel) renderPending(w int) string {
 		}
 		parts = append(parts, "")
 	}
-	for _, t := range m.pendingTools {
-		parts = append(parts, m.renderPendingTool(t))
+	for i := range m.pendingTools {
+		parts = append(parts, m.renderPendingTool(&m.pendingTools[i]))
 	}
 	if len(m.pendingTools) > 0 {
 		parts = append(parts, "")

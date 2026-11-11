@@ -201,13 +201,20 @@ type toolEventMsg struct {
 }
 
 // pendingTool is one in-flight or finished tool call in the live transcript.
+// rendered caches the row for renderedW: a long turn keeps every finished row
+// on screen, and re-parsing args (then re-lexing edit diffs through chroma) on
+// each stream flush would stall the UI thread once the block outgrows the
+// diff memo. The cache is dropped whenever done/output/durMs change.
 type pendingTool struct {
-	name   string
-	args   string
-	output string
-	done   bool
-	id     string
-	durMs  int64
+	name      string
+	args      string
+	output    string
+	done      bool
+	id        string
+	durMs     int64
+	rendered  string
+	renderedW int
+	renderOK  bool
 }
 
 // chatTurnRender caches one committed turn's rendered forms for the scrollback

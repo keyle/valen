@@ -449,6 +449,53 @@ func TestTurnDoneFloorsDuration(t *testing.T) {
 	}
 }
 
+// TestPendingToolRowsCacheAcrossFlushes: the pending block re-renders on every
+// stream flush and keeps every finished row for the whole turn. Once the block
+// outgrows the diff memo, an uncached row would re-parse its args and re-lex
+// its diff through chroma on each flush. Clearing the memo between renders
+// makes every diff cold, so a row that renders again without refilling the
+// memo proves the per-row cache is doing its job. A width change must miss it.
+func TestPendingToolRowsCacheAcrossFlushes(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.viewport.Width = 100
+	m.pendingPrompt = "many edits"
+	for i := 0; i < 8; i++ {
+		args := fmt.Sprintf(`{"path":"f%d.go","oldString":"old %d","newString":"new %d"}`, i, i, i)
+		m.pendingTools = append(m.pendingTools, pendingTool{name: "edit", args: args, done: true, output: fmt.Sprintf("edited f%d.go", i)})
+	}
+
+	diffMemoReset()
+	m.renderPending(100)
+	if n := diffMemoLen(); n == 0 {
+		t.Fatal("first render must fill the diff memo")
+	}
+
+	diffMemoReset()
+	m.renderPending(100)
+	if n := diffMemoLen(); n != 0 {
+		t.Fatalf("cached rows must not re-lex diffs, memo grew to %d", n)
+	}
+
+	m.viewport.Width = 80
+	m.renderPending(80)
+	if n := diffMemoLen(); n == 0 {
+		t.Fatal("a width change must re-render rows for the new width")
+	}
+}
+
+func diffMemoReset() {
+	diffRowMu.Lock()
+	diffRows = map[diffRowKey][]string{}
+	diffRowOrder = nil
+	diffRowMu.Unlock()
+}
+
+func diffMemoLen() int {
+	diffRowMu.Lock()
+	defer diffRowMu.Unlock()
+	return len(diffRows)
+}
+
 // TestPendingToolMatchesByID: two parallel same-name calls keep their own
 // outputs — the first-started finishing first must not credit the later row.
 func TestPendingToolMatchesByID(t *testing.T) {
