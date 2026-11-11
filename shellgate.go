@@ -12,12 +12,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/keyle/valen/internal/dvlog"
 )
@@ -39,6 +41,31 @@ var (
 	shellApproved = map[string]bool{} // "network" or a destructive label
 	shellDenied   = map[string]bool{}
 )
+
+// Run-wide capability grants from --network and --exec: pre-approve the
+// matching gate without persisting anything, so a headless caller can retry a
+// turn with the access it reported missing. Persistent deny rules still win.
+var (
+	networkGrant atomic.Bool
+	execGrant    atomic.Bool
+)
+
+// setRunCapabilities installs the --network/--exec pre-approvals.
+func setRunCapabilities(network, execOK bool) {
+	networkGrant.Store(network)
+	execGrant.Store(execOK)
+}
+
+func networkGranted() bool { return networkGrant.Load() }
+func execGranted() bool    { return execGrant.Load() }
+
+// shellCapability names the denial capability for an approval label.
+func shellCapability(label string) string {
+	if label == "network" {
+		return "network"
+	}
+	return "exec"
+}
 
 func resetShellApprovals() {
 	shellMu.Lock()
@@ -65,7 +92,9 @@ func destructiveLabels(command string) []string {
 // frontend outside access is denied.
 func gateShell(ctx context.Context, command string, network bool) error {
 	need := destructiveLabels(command)
-	if network {
+	if network || networkGranted() {
+		// Check the persistent deny even when --network supplies the grant:
+		// a deny rule beats the run flag.
 		need = append(need, "network")
 	}
 	for _, label := range need {
@@ -107,8 +136,20 @@ func shellLooksWrite(command string) bool {
 
 func approveShell(ctx context.Context, label, command string) error {
 	if allow, deny := accessShellRule(label); deny {
-		return fmt.Errorf("denied: %q is blocked by %s; do not retry or work around it", label, accessPathLabel())
+		rule := accessPathLabel()
+		if rule == "" {
+			rule = "a persistent deny rule"
+		}
+		return errors.New(denialText(shellCapability(label), label,
+			"blocked by "+rule+"; a persistent deny beats every allow",
+			"do not retry or work around it"))
 	} else if allow || allowAllEnabled() {
+		return nil
+	}
+	if label == "network" && networkGranted() {
+		return nil
+	}
+	if label != "network" && execGranted() {
 		return nil
 	}
 	shellMu.Lock()
@@ -118,7 +159,14 @@ func approveShell(ctx context.Context, label, command string) error {
 		return nil
 	}
 	if askPrompter == nil {
-		return fmt.Errorf("denied: %q needs approval and there is no interactive prompter", label)
+		if label == "network" {
+			return errors.New(denialText("network", label,
+				"network use needs approval and there is no interactive prompter in this run",
+				"re-run valen with --network, or call shell with network=true when a prompt is available"))
+		}
+		return errors.New(denialText("exec", label,
+			fmt.Sprintf("%q needs approval and there is no interactive prompter in this run", label),
+			"re-run valen with --exec to pre-approve destructive commands for the run"))
 	}
 	unlock, err := lockGate(ctx)
 	if err != nil {
@@ -132,7 +180,9 @@ func approveShell(ctx context.Context, label, command string) error {
 		return nil
 	}
 	if denied {
-		return fmt.Errorf("denied: the user did not allow %q earlier this session; do not retry or work around it", label)
+		return errors.New(denialText(shellCapability(label), label,
+			"the user did not allow this earlier this session",
+			"do not retry or work around it"))
 	}
 	what := "run `" + label + "`"
 	if label == "network" {
@@ -167,7 +217,9 @@ func approveShell(ctx context.Context, label, command string) error {
 	shellMu.Lock()
 	shellDenied[label] = true
 	shellMu.Unlock()
-	return fmt.Errorf("denied: the user did not allow %q; do not retry or work around it", label)
+	return errors.New(denialText(shellCapability(label), label,
+		"the user did not allow it",
+		"do not retry or work around it"))
 }
 
 // outsidePathRe finds candidate absolute paths and ~-home references in a

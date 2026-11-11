@@ -331,14 +331,14 @@ func TestOutsideAccessAskAllowAndDeny(t *testing.T) {
 	restore := stubPrompter(lblDenySession, nil)
 	_, err := ReadTool().Fn(ctx, `{"path":`+quoteJSON(outside)+`}`)
 	restore()
-	if err == nil || !strings.Contains(err.Error(), "denied") {
+	if err == nil || !strings.Contains(err.Error(), "[sandbox: read") {
 		t.Fatalf("deny err=%v", err)
 	}
 
 	// A deny sticks for the session: no re-ask, even if the user would now allow.
 	restore = stubPrompter(lblAllowSession, nil)
 	defer restore()
-	if _, err := ReadTool().Fn(ctx, `{"path":`+quoteJSON(outside)+`}`); err == nil || !strings.Contains(err.Error(), "denied") {
+	if _, err := ReadTool().Fn(ctx, `{"path":`+quoteJSON(outside)+`}`); err == nil || !strings.Contains(err.Error(), "[sandbox: read") {
 		t.Fatalf("deny must be remembered, err=%v", err)
 	}
 	setFileRoot(getFileRoot()) // new session drops approvals and denials

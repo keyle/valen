@@ -204,7 +204,9 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 		tc := calls[res.index]
 		out[res.index] = openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: tc.ID, Content: res.output}
 		if onEvent != nil {
-			onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: res.output, ID: tc.ID, DurMs: res.durMs})
+			ev := Event{Kind: "tool_result", Text: tc.Function.Name, Output: res.output, ID: tc.ID, DurMs: res.durMs}
+			ev.Denied = parseSandboxDenial(res.output)
+			onEvent(ev)
 		}
 	}
 	dvlog.Logf("batch %d tools total=%s", len(calls), dvlog.Dur(time.Since(batch0)))
@@ -229,7 +231,9 @@ func runToolCallsSerial(ctx context.Context, registry *Registry, calls []openai.
 		durMs := time.Since(t0).Milliseconds()
 		dvlog.Logf("tool %s args=%dB dur=%s out=%dB serial %q", tc.Function.Name, len(tc.Function.Arguments), dvlog.Dur(time.Since(t0)), len(res), dvlog.Preview(tc.Function.Arguments, 160))
 		if onEvent != nil {
-			onEvent(Event{Kind: "tool_result", Text: tc.Function.Name, Output: res, ID: tc.ID, DurMs: durMs})
+			ev := Event{Kind: "tool_result", Text: tc.Function.Name, Output: res, ID: tc.ID, DurMs: durMs}
+			ev.Denied = parseSandboxDenial(res)
+			onEvent(ev)
 		}
 		out = append(out, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: tc.ID, Content: res})
 	}

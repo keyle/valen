@@ -74,6 +74,9 @@ valen -p "explain main.go"  # one-shot
 valen -q "explain main.go"  # TUI, runs the prompt immediately
 valen -plan                 # read-only plan mode
 valen -dir ~/proj           # set the working directory
+valen -dir ~/proj -dir ~/lib  # workdir + extra writable roots (repeatable)
+valen -p "..." --network    # pre-approve network for shell this run
+valen -p "..." --exec       # pre-approve destructive shell commands this run
 valen -shell /bin/bash      # shell interpreter for the shell tool (default: sh)
 valen -p "what broke?" -f error.png   # attach an image (repeat -f/--file)
 valen -p "review main.go" -v          # stream thinking summaries + tool calls

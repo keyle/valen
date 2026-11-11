@@ -62,7 +62,7 @@ func appendStreamLine(s, delta string) string {
 // streamed reply is shown while it arrives; the full text lands on commit.
 // It cuts on a line boundary so the live view stays a list of whole lines.
 func streamTail(s string) string {
-	const maxRunes = 1500
+	const maxRunes = 3000
 	r := []rune(s)
 	if len(r) <= maxRunes {
 		return s

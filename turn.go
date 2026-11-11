@@ -41,6 +41,16 @@ type Event struct {
 	// ORMeta carries OpenRouter serving metadata (provider, billed cost,
 	// locally-measured throughput) on an "or_meta" event.
 	ORMeta *ORMeta `json:"or_meta,omitempty"`
+	// Denied carries the structured sandbox refusal on tool_result when the
+	// output embedded a [sandbox: ...] line, so a headless caller can grant
+	// the matching access without parsing English.
+	Denied *Denial `json:"denied,omitempty"`
+}
+
+// Denial is a sandbox refusal extracted from a tool result.
+type Denial struct {
+	Capability string `json:"capability"` // read, write, network or exec
+	Subject    string `json:"subject,omitempty"`
 }
 
 // ORMeta is OpenRouter's best-effort per-round serving metadata: the upstream

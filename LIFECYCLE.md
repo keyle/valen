@@ -152,7 +152,7 @@ cheapest fallback per model) summarizes.
 | HTTP deadlines | 300s per attempt including body; headers 60s, dial/TLS 10s | Optional `request_timeout_seconds`; no blocking retry-body drain, no new dependency |
 | Task subagent | ≤25 rounds, depth 1 | A flailing delegate can't eat the session budget |
 | Web | search 8 results/1MiB; fetch 512KiB→8000 chars | Snippets stay plannable, pages stay skimmable |
-| TUI stream tail | last ~1500 runes displayed; rolling 32768 bytes per text/thinking buffer; 60ms throttle | Exact fragments, no inserted newlines; newest UTF-8-safe tail retained, commit renders full reply |
+| TUI stream tail | last ~3000 runes displayed; rolling 32768 bytes per text/thinking buffer; 60ms throttle | Exact fragments, no inserted newlines; newest UTF-8-safe tail retained, commit renders full reply |
 
 Ditched along the way: 200-line reads (10 rounds to see a file), hardcoded
 8192 answer cap, global MCP mutex, unbilled schema blind spot, mid-turn

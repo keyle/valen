@@ -26,7 +26,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 )
@@ -69,6 +71,9 @@ type sandboxPolicy struct {
 	Network      bool
 	BindAddrs    []string // loopback bind addresses allowed even with Network off (Darwin only)
 	IPCPaths     []string // existing unix sockets (docker) shell may connect to
+	// SecretRoots are walked for .env hardlinks to hide; default Root. Extra
+	// -dir roots join it so a secret there is masked too.
+	SecretRoots []string
 }
 
 // SandboxConfig mirrors the optional [sandbox] table. A nil list keeps the
@@ -195,6 +200,13 @@ func isSecretFile(name string) bool {
 // maxEnvScan bounds the .env search under the workdir.
 const maxEnvScan = 20000
 
+func (p sandboxPolicy) secretRoots() []string {
+	if len(p.SecretRoots) > 0 {
+		return p.SecretRoots
+	}
+	return []string{p.Root}
+}
+
 // findSecretFiles lists the secret .env files under root (skipping vendored
 // dirs) plus every other name for the same file: a hardlink such as
 // notes.txt has no .env in its path, so the name-based Seatbelt regex cannot
@@ -253,9 +265,68 @@ func findSecretFiles(root string) []string {
 	return secrets
 }
 
+// findSecretFilesInRoots scans several roots, de-duplicated, so extra -dir
+// roots get the same .env hardlink protection as the workdir.
+func findSecretFilesInRoots(roots []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, root := range roots {
+		for _, f := range findSecretFiles(root) {
+			if !seen[f] {
+				seen[f] = true
+				out = append(out, f)
+			}
+		}
+	}
+	return out
+}
+
+// denialText renders the one-line sandbox refusal embedded in tool output:
+// [sandbox: capability "subject" — reason. Fix: remedy]
+// The capability names what was blocked, so a headless caller can grant the
+// matching access (-dir for read/write, --network, --exec) and retry.
+func denialText(capability, subject, reason, fix string) string {
+	line := "[sandbox: " + capability
+	if subject != "" {
+		line += " " + strconv.Quote(subject)
+	}
+	line += " — " + reason
+	if fix != "" {
+		line += " Fix: " + fix + "."
+	}
+	return line + "]"
+}
+
+// sandboxLineRe matches the [sandbox: capability "subject" …] line embedded
+// in tool output.
+var sandboxLineRe = regexp.MustCompile(`\[sandbox: (read|write|network|exec)(?: "((?:[^"\\]|\\.)*)")?`)
+
+// parseSandboxDenial returns the first sandbox refusal in tool output, so the
+// --stream tool_result event can carry structured metadata instead of making
+// the frontend parse the English line.
+func parseSandboxDenial(out string) *Denial {
+	m := sandboxLineRe.FindStringSubmatch(out)
+	if m == nil {
+		return nil
+	}
+	d := &Denial{Capability: m[1]}
+	if m[2] != "" {
+		if s, err := strconv.Unquote(`"` + m[2] + `"`); err == nil {
+			d.Subject = s
+		} else {
+			d.Subject = m[2]
+		}
+	}
+	return d
+}
+
 // sandboxHint is appended to a failed command's output when it looks like a
 // sandbox denial, so the model knows what to do instead of retrying blindly.
-const sandboxHint = "[sandbox: shell may only write inside the workdir, sibling git worktrees, approved folders, /tmp, the private temp dir and tool caches ($HOME is blocked, as is any folder in access.toml deny). To get another folder, call glob or read on it (the user is asked once per folder), then re-run.]"
+func sandboxHint(command string) string {
+	return denialText("write", oneLine(command, 160),
+		"the OS sandbox stops commands from changing files outside the workdir, extra -dir roots, sibling git worktrees, /tmp, the private temp dir, tool caches and folders approved this session; $HOME and access.toml denies stay blocked",
+		"re-run valen with -dir <folder> (repeatable) or approve the folder, then rerun the command")
+}
 
 // looksSandboxDenied matches the errno texts a blocked write produces:
 // EPERM from Seatbelt, EROFS from bubblewrap's read-only mounts.
@@ -264,7 +335,11 @@ func looksSandboxDenied(out string) bool {
 }
 
 // networkHint is appended when a command failed like it had no network.
-const networkHint = `[sandbox: network is off for shell. If this command needs the network (downloads, git fetch/push, curl), re-run it with "network": true; the user is asked once per session.]`
+func networkHint(command string) string {
+	return denialText("network", oneLine(command, 160),
+		"network is off for this run, so sandboxed commands cannot reach the internet without consent",
+		"re-run valen with --network, or call shell with network=true and approve the prompt")
+}
 
 func looksNetworkDenied(out string) bool {
 	for _, m := range []string{"Could not resolve host", "Temporary failure in name resolution", "Network is unreachable", "no such host", "Could not resolve hostname"} {
@@ -281,8 +356,9 @@ func sandboxCommand(ctx context.Context, command string, network bool) (*exec.Cm
 	name, args, err := sandboxArgv(command, sandboxPolicy{
 		Root: getFileRoot(), Writable: writableRoots(), Readable: readableRoots(),
 		ReadOnly: append(gitReadOnlyPaths(), systemReadOnlyPaths()...),
-		Hidden:   hiddenPaths(), SystemHidden: systemHiddenPaths(), Network: network,
+		Hidden:   hiddenPaths(), SystemHidden: systemHiddenPaths(), Network: network || networkGranted(),
 		BindAddrs: bindAddrs(), IPCPaths: ipcPaths(),
+		SecretRoots: append([]string{getFileRoot()}, getExtraRoots()...),
 	})
 	if err != nil {
 		return nil, err
@@ -351,6 +427,7 @@ func writableRoots() []string {
 	root := getFileRoot()
 	home, _ := os.UserHomeDir()
 	c := []string{root, os.TempDir(), sharedTmp, os.Getenv("GOCACHE")}
+	c = append(c, getExtraRoots()...)
 	if cd, err := os.UserCacheDir(); err == nil {
 		c = append(c, cd)
 	}

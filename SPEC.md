@@ -393,24 +393,30 @@ Rules the registry enforces:
 
 File tools and `shell` share one sandbox root: the startup directory,
 `-dir <path>`, or a positional directory in TUI mode
-(`./valen ~/Code/something`). Paths escaping the root pause for approval
-through the active `AskUserQuestion` frontend (one answer covers the whole
-folder; allow and deny are both remembered for the session, including by
-parallel subagents, which wait on one shared prompt gate and reuse the answer
-instead of re-asking; shell `network`/destructive-label approvals behave the
-same; see "Access prompts" below). A read approval grants read only; write
+(`./valen ~/Code/something`). `-dir` is repeatable: the first path is the
+workdir, the rest are extra read+write roots for the run (like a temporary
+`[sandbox] allow`); they apply to file tools, the shell gate and the kernel
+policy, and are listed in the system prompt. Paths escaping every root pause
+for approval through the active `AskUserQuestion` frontend (one answer covers
+the whole folder; allow and deny are both remembered for the session, including
+by parallel subagents, which wait on one shared prompt gate and reuse the
+answer instead of re-asking; shell `network`/destructive-label approvals behave
+the same; see "Access prompts" below). A read approval grants read only; write
 and edit ask separately and grant read and write. Sibling git worktrees of the
 same repo (`git worktree list`) are in scope and never prompt. Without an
-interactive frontend they are denied with a clear error, so the model can
-explain and ask.
+interactive frontend they are denied with one clear
+`[sandbox: read|write "<path>" — reason. Fix: …]` line naming `-dir`, and the
+`tool_result` event carries the same blocker as `denied: {capability, subject}`,
+so the model can explain and the caller can retry with the access granted.
 
 `shell` runs under an OS sandbox (`sandbox.go`), enforced by the kernel so
 `eval`, `$(...)` and scripts cannot escape it. Commands run as
 `<shell> -c <command>` where `<shell>` is `sh` by default; `-shell <path>`
 selects another interpreter (e.g. `-shell /bin/bash`):
 
-- **Writes** only in the workdir, sibling git worktrees, folders approved for
-  write (this session or in `access.toml`), the private temp dir and tool caches
+- **Writes** only in the workdir, extra `-dir` roots, sibling git worktrees,
+  folders approved for write (this session or in `access.toml`), the private
+  temp dir and tool caches
   (`~/go`, `~/.cache`, `~/.npm`, `~/.cargo`, `~/fvm`, `~/.fvm`, `~/.pub-cache`,
   `~/.rustup`, `~/.gradle`, the user cache dir). Shared `/tmp` and `$HOME` are not
   writable by default: explicit use asks once per folder via `shellgate.go`,
@@ -424,7 +430,7 @@ selects another interpreter (e.g. `-shell /bin/bash`):
   `~/.pypirc`, `~/.config`, session data), other users' home directories
   (`/Users/*`, `/home/*`), and `.env` / `.env.*` secrets anywhere (reads and
   writes denied; templates `.env.example|sample|template` stay readable).
-  `read`, `write`, `edit` and `grep` all refuse `.env` secrets. Both platforms scan the workdir at
+  `read`, `write`, `edit` and `grep` all refuse `.env` secrets. Both platforms scan the workdir and extra `-dir` roots at
   command start for `.env` files and any hardlinks to them (Linux masks them,
   Darwin adds literal denies beside the name regex). System reads
   outside `$HOME` (toolchain, `/usr`, libraries) stay allowed so
@@ -436,12 +442,16 @@ selects another interpreter (e.g. `-shell /bin/bash`):
   DSNs, `DATABASE_URL`, ...) are stripped from the `sh -c` child, so
   `printenv`/`env` cannot leak valen's own keys or the user's exported secrets.
 - **Network off** (loopback egress and, on macOS, loopback bind work; see
-  below) unless the call sets `network: true`;
+  below) unless the call sets `network: true` or the run passes `--network`,
+  which pre-approves network for shell commands without a prompt; otherwise
   the user is asked once per session.
 - **Ask once per session** before `git push`, `git reset --hard`, `git clean`,
   `rm -r` and `sudo`, and once per folder before explicit outside-workdir
-  paths (`/tmp/...`, `/etc/passwd`, `~/...`) (`shellgate.go`). Text matching
-  is best-effort; the sandbox is the boundary.
+  paths (`/tmp/...`, `/etc/passwd`, `~/...`) (`shellgate.go`). `--exec`
+  pre-approves those destructive commands for the run without a prompt. Both
+  run flags are session-only, apply to subagents too, and still lose to a
+  persistent `[shell] deny` / `deny` rule. Text matching is best-effort; the
+  sandbox is the boundary.
 
 Built-in writable roots also include the toolchain dirs `~/fvm`, `~/.fvm`,
 `~/.pub-cache`, `~/.rustup` and `~/.gradle` (never prompt). Two narrow
@@ -673,6 +683,9 @@ export OPENCODE_API_KEY=...
 go run .                              # fullscreen TUI (ctrl+h for keys)
 go run . ~/Code/something             # TUI rooted at another folder
 go run . -dir ~/Code/something        # same, explicit (also works headless)
+go run . -dir ~/Code/a -dir ~/Code/b  # workdir + extra read+write roots (repeatable)
+go run . -p "..." --network           # pre-approve network for shell commands this run
+go run . -p "..." --exec              # pre-approve destructive shell commands this run
 go run . -p "..."                     # one-shot answer on stdout
 go run . -q "..."                     # start the TUI and run the prompt immediately
 go run . -config other.toml < prompt.txt   # headless via pipe
@@ -686,14 +699,16 @@ go run . -p "..." -vv                  # also raw analysis, answer text and tool
 go run . -p "..." --stream             # NDJSON events on stdout, one per line, a done line last
 go run . -p "..." --history h.json     # continue from prior user/assistant messages (JSON array)
 go run . -p "..." -r <session-id|path> # continue a saved session in place (headless)
-go run . -p "..." --no-question --no-task --no-todo   # drop the interactive and delegating tools
+go run . -p "..." --no-question --no-task --no-todo   # autonomous: continue unless totally blocked
 go run . -p "..." --one-shot-task      # background job bundle: -p plus the three --no-* switches
 ```
 
 `--stream` writes each turn event as one JSON object per line (`kind`, plus the
 event's own fields); the last line is `{"kind":"done","usage":...}`, with an
 `error` object when the turn failed and a `session` path when the turn was
-saved. On OpenRouter, `or_meta` carries the generation `id`
+saved. A `tool_result` whose output embedded a `[sandbox: …]` line also carries
+`denied: {"capability":"read|write|network|exec","subject":"…"}` so a driver
+can surface the blocker without parsing text. On OpenRouter, `or_meta` carries the generation `id`
 for `/generation` lookups (billing and cancellation checks). `--history` reads only `user` and `assistant`
 messages (`role`, `content`), before the new prompt; other roles are rejected.
 Plain `-p` prints `[session <abs path>]` on stderr after the turn is saved, so
@@ -702,8 +717,13 @@ save failure warns instead and omits the path. `-r`/`--resume` takes that path
 or a bare session ID and appends the new turn to the same JSONL (title, turn
 count and `x-opencode-session` stay), using the current config's model and
 thinking; it is headless only and cannot be combined with `--history`.
-`--no-question` also denies out-of-scope file and shell approvals, since nobody
-can answer them. Tool names from MCP servers are `<server>__<tool>`.
+`--no-question` also appends the "continue unless totally blocked" policy to
+the system prompt (nobody can ask or answer questions, so the model assumes,
+continues, and reports any hard blocker in plain English) and denies
+out-of-scope file and shell approvals, since nobody can answer them. A blocked
+turn returns the `[sandbox: …]` line naming the access needed; the caller can
+re-run with `-dir <folder>` (repeatable), `--network` or `--exec` to grant it.
+Tool names from MCP servers are `<server>__<tool>`.
 
 Headless `-v`/`-vv` stream to stderr while the final answer stays on stdout.
 `-p` takes exactly one quoted argument; unquoted words are rejected rather

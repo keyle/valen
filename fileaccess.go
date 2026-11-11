@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -40,6 +41,49 @@ func setFileRoot(dir string) {
 	deniedAccess = map[string]bool{}
 	approvedMu.Unlock()
 	resetShellApprovals()
+}
+
+var (
+	extraRootsMu sync.RWMutex
+	extraRoots   []string
+)
+
+// setExtraRoots installs additional writable roots from repeated -dir flags.
+// They survive setFileRoot (CLI grants are process-wide) and are resolved
+// once, like access.toml paths.
+func setExtraRoots(dirs []string) {
+	out := make([]string, 0, len(dirs))
+	seen := map[string]bool{}
+	for _, d := range dirs {
+		if strings.TrimSpace(d) == "" {
+			continue
+		}
+		r := real(filepath.Clean(d))
+		if !seen[r] {
+			seen[r] = true
+			out = append(out, r)
+		}
+	}
+	extraRootsMu.Lock()
+	extraRoots = out
+	extraRootsMu.Unlock()
+}
+
+// getExtraRoots returns a copy of the extra -dir writable roots.
+func getExtraRoots() []string {
+	extraRootsMu.RLock()
+	defer extraRootsMu.RUnlock()
+	return append([]string(nil), extraRoots...)
+}
+
+// inExtraRoot reports whether abs lies inside an extra -dir root.
+func inExtraRoot(abs string) bool {
+	for _, dir := range getExtraRoots() {
+		if inApproved(dir, abs) {
+			return true
+		}
+	}
+	return false
 }
 
 // getFileRoot returns the sandbox root, falling back to the process cwd.
@@ -218,10 +262,11 @@ func approvedDirs(m map[string]bool) []string {
 func isWriteOp(op string) bool { return op == "write" || op == "edit" }
 
 // allowedWithoutPrompt reports read access without asking: any folder approved
-// for read or write (this session or in access.toml) and inside the root or a
-// sibling worktree, unless persistently denied. A persistent deny is checked
-// first and beats every allow, workdir included. Both the lexical path and its
-// symlink-resolved canonical must pass; callers check both.
+// for read or write (this session or in access.toml) and inside the root, an
+// extra -dir root, or a sibling worktree, unless persistently denied. A
+// persistent deny is checked first and beats every allow, workdir included.
+// Both the lexical path and its symlink-resolved canonical must pass; callers
+// check both.
 func allowedWithoutPrompt(root, abs string) bool {
 	// Persistent deny beats every allow, including the workdir shortcut:
 	// otherwise the kernel hides a denied folder from shell but read/write
@@ -229,7 +274,7 @@ func allowedWithoutPrompt(root, abs string) bool {
 	if accessDenied(abs) {
 		return false
 	}
-	if inRootOrWorktree(root, abs) {
+	if inRootOrWorktree(root, abs) || inExtraRoot(abs) {
 		return true
 	}
 	for _, dir := range approvedDirs(approvedRead) {
@@ -247,13 +292,13 @@ func allowedWithoutPrompt(root, abs string) bool {
 
 // allowedWriteWithoutPrompt reports write access without asking: a folder
 // approved specifically for write or edit this session (a read-only approval
-// does not count), or inside the root or a sibling worktree — unless
-// persistently denied (checked first, workdir included).
+// does not count), or inside the root, an extra -dir root, or a sibling
+// worktree — unless persistently denied (checked first, workdir included).
 func allowedWriteWithoutPrompt(root, abs string) bool {
 	if accessDenied(abs) {
 		return false
 	}
-	if inRootOrWorktree(root, abs) {
+	if inRootOrWorktree(root, abs) || inExtraRoot(abs) {
 		return true
 	}
 	for _, dir := range approvedDirs(approvedWritable) {
@@ -323,10 +368,19 @@ func summarizeToolCall(name, args string) string {
 	return name + ": " + oneLine(args, 300)
 }
 
+// accessOpName maps a file-access op to the denial capability.
+func accessOpName(op string) string {
+	if isWriteOp(op) {
+		return "write"
+	}
+	return "read"
+}
+
 // checkFileAccess allows paths inside the root, inside a sibling worktree of
-// the same repo, or inside a previously approved folder; anything else asks
-// the user (per folder) via the active AskUserQuestion prompter. Without an
-// interactive frontend there is nobody to ask, so the access is denied.
+// the same repo, inside an extra -dir root, or inside a previously approved
+// folder; anything else asks the user (per folder) via the active
+// AskUserQuestion prompter. Without an interactive frontend there is nobody to
+// ask, so the access is denied with a sandbox line naming the folder to grant.
 func checkFileAccess(ctx context.Context, op, abs string) error {
 	root := getFileRoot()
 	canon := canonicalAccessPath(abs)
@@ -345,7 +399,13 @@ func checkFileAccess(ctx context.Context, op, abs string) error {
 	}
 	folder := accessFolder(outside)
 	if accessDenied(folder) || accessDenied(abs) || accessDenied(canon) {
-		return fmt.Errorf("denied: access to %s is blocked by %s; do not retry or work around it", abs, accessPathLabel())
+		rule := accessPathLabel()
+		if rule == "" {
+			rule = "a persistent deny rule"
+		}
+		return errors.New(denialText(accessOpName(op), abs,
+			"blocked by "+rule+"; a persistent deny beats every allow",
+			"do not retry or work around it"))
 	}
 	// /allow-all: book the folder like a session grant without asking, so the
 	// shell sandbox picks it up too (gateShell runs checkFileAccess first).
@@ -359,7 +419,10 @@ func checkFileAccess(ctx context.Context, op, abs string) error {
 		return nil
 	}
 	if askPrompter == nil {
-		return fmt.Errorf("denied: %s is outside workdir %s (no interactive prompter to approve it)", abs, root)
+		roots := append([]string{root}, getExtraRoots()...)
+		return errors.New(denialText(accessOpName(op), abs,
+			"outside every allowed root ("+strings.Join(roots, ", ")+"); file tools may only touch the workdir, extra -dir roots or folders approved by the user, and there is no interactive prompter in this run to approve it",
+			"re-run valen with -dir "+folder+" (repeatable) or approve the folder when a prompt is available"))
 	}
 	unlock, err := lockGate(ctx)
 	if err != nil {
@@ -378,7 +441,9 @@ func checkFileAccess(ctx context.Context, op, abs string) error {
 	denied := deniedAccess[denyKey] || (isWriteOp(op) && deniedAccess["r:"+folder])
 	approvedMu.Unlock()
 	if denied {
-		return fmt.Errorf("denied: access to %s was not approved (earlier answer this session); do not retry or work around it", abs)
+		return errors.New(denialText(accessOpName(op), abs,
+			"the user did not approve this folder earlier this session",
+			"do not retry or work around it"))
 	}
 	access, kind := "read", "read"
 	if isWriteOp(op) {
@@ -413,7 +478,9 @@ func checkFileAccess(ctx context.Context, op, abs string) error {
 	approvedMu.Lock()
 	deniedAccess[denyKey] = true
 	approvedMu.Unlock()
-	return fmt.Errorf("denied: access to %s was not approved", abs)
+	return errors.New(denialText(accessOpName(op), abs,
+		"the user did not approve this folder",
+		"do not retry or work around it"))
 }
 
 // relToRoot renders abs for model output, relative when inside the root.

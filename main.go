@@ -45,7 +45,17 @@ func effectiveSystem(cfg Config) string {
 			cwd = wd
 		}
 	}
-	return prompts.SystemPrompt(cfg.Model, cfg.Plan, cwd) + userAgentsSection() + localAgentsSection(cwd)
+	return prompts.SystemPrompt(cfg.Model, cfg.Plan, cwd) + userAgentsSection() + localAgentsSection(cwd) + extraRootsSection()
+}
+
+// extraRootsSection tells the model which additional -dir roots this run may
+// read and write, so it does not ask for folder access it already has.
+func extraRootsSection() string {
+	extra := getExtraRoots()
+	if len(extra) == 0 {
+		return ""
+	}
+	return "\n\nExtra writable roots for this run: " + strings.Join(extra, ", ") + ". File tools and shell may read and write there without asking."
 }
 
 // seedHistory builds the initial history for a turn.
@@ -84,8 +94,11 @@ func main() {
 
 func start() error {
 	cfgPath := flag.String("config", "", "path to config (default: ~/.config/valen/valen.toml, seeded on first run)")
-	dirFlag := flag.String("dir", "", "working directory: sandbox root for file tools and shell")
+	var dirFlags repeatedFlag
+	flag.Var(&dirFlags, "dir", "working directory: sandbox root for file tools and shell (repeatable; extra paths are additional writable roots)")
 	shellFlag := flag.String("shell", "", "shell interpreter for shell commands (default: sh)")
+	networkFlag := flag.Bool("network", false, "pre-approve network for shell commands this run (no prompt)")
+	execFlag := flag.Bool("exec", false, "pre-approve destructive shell commands this run (git push, git reset --hard, git clean, rm -r, sudo)")
 	printMode := flag.Bool("p", false, "one-shot: answer the quoted prompt and exit")
 	qFlag := flag.Bool("q", false, "start the TUI and run the prompt immediately")
 	planFlag := flag.Bool("plan", false, "plan mode: read-only investigation, present the plan as the reply")
@@ -95,14 +108,14 @@ func start() error {
 	vvFlag := flag.Bool("vv", false, "headless very verbose: also stream raw analysis, answer text and tool results to stderr")
 	// -f / --file attach files, folders and images to the headless prompt
 	// (repeatable); @path mentions in the prompt attach too.
-	var attachFiles fileFlag
+	var attachFiles repeatedFlag
 	flag.Var(&attachFiles, "f", "attach a file, folder or image (repeatable, headless)")
 	flag.Var(&attachFiles, "file", "attach a file, folder or image (alias for -f)")
 	streamFlag := flag.Bool("stream", false, "headless: write events as NDJSON on stdout, ending with a done line")
 	historyFlag := flag.String("history", "", "headless: JSON array of prior user/assistant messages to continue from")
 	resumeFlag := flag.String("r", "", "headless: continue a saved session (ID or JSONL path)")
 	flag.StringVar(resumeFlag, "resume", "", "alias for -r")
-	noQuestionFlag := flag.Bool("no-question", false, "headless: do not offer AskUserQuestion")
+	noQuestionFlag := flag.Bool("no-question", false, "headless: do not offer AskUserQuestion; continue unless totally blocked")
 	noTaskFlag := flag.Bool("no-task", false, "headless: do not offer the task subagent")
 	noTodoFlag := flag.Bool("no-todo", false, "headless: do not offer todowrite/todoread")
 	oneShotFlag := flag.Bool("one-shot-task", false, "background job: -p with --no-question --no-task --no-todo")
@@ -116,6 +129,7 @@ func start() error {
 	if *oneShotFlag {
 		*printMode, *noQuestionFlag, *noTaskFlag, *noTodoFlag = true, true, true, true
 	}
+	setRunCapabilities(*networkFlag, *execFlag)
 
 	// Resolve paths before any chdir so relative paths keep working.
 	// Default: the user config dir, seeded from the embedded default on first
@@ -189,29 +203,58 @@ func start() error {
 	if resumeAbs != "" && historyAbs != "" {
 		return errors.New("-r/--resume and --history cannot be combined")
 	}
-	// In -q mode the positional arg is the prompt, never a workdir.
-	workdir, rest := splitWorkdirArg(*dirFlag, flag.Args(), tuiMode && !qMode)
-	if workdir != "" {
-		abs, err := filepath.Abs(workdir)
+	// In -q mode the positional arg is the prompt, never a workdir. -dir may
+	// repeat: the first path is the workdir (chdir + sandbox root), the rest
+	// are extra writable roots for this run, like a temporary [sandbox] allow.
+	dirs := []string(dirFlags)
+	for _, d := range dirs {
+		if strings.TrimSpace(d) == "" {
+			return errors.New("dir: empty path")
+		}
+	}
+	workdir := ""
+	var extraDirs []string
+	if len(dirs) > 0 {
+		workdir, extraDirs = dirs[0], dirs[1:]
+	}
+	workdir, rest := splitWorkdirArg(workdir, flag.Args(), tuiMode && !qMode)
+	resolveDir := func(d string) (string, error) {
+		abs, err := filepath.Abs(d)
 		if err != nil {
-			return fmt.Errorf("dir: %w", err)
+			return "", fmt.Errorf("dir: %w", err)
 		}
 		fi, err := os.Stat(abs)
 		if err != nil {
-			return fmt.Errorf("dir %s: %w", abs, err)
+			return "", fmt.Errorf("dir %s: %w", abs, err)
 		}
 		if !fi.IsDir() {
-			return fmt.Errorf("dir %s is not a directory", abs)
+			return "", fmt.Errorf("dir %s is not a directory", abs)
+		}
+		return abs, nil
+	}
+	if workdir != "" {
+		abs, err := resolveDir(workdir)
+		if err != nil {
+			return err
 		}
 		if err := os.Chdir(abs); err != nil {
 			return fmt.Errorf("dir: %w", err)
 		}
+	}
+	var extraRoots []string
+	for _, d := range extraDirs {
+		abs, err := resolveDir(d)
+		if err != nil {
+			return err
+		}
+		extraRoots = append(extraRoots, abs)
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		setFileRoot(cwd)
 	} else {
 		return fmt.Errorf("workdir: %w", err)
 	}
+	setExtraRoots(extraRoots)
 
 	// Resume loads before the config so the saved ID can win over the
 	// default new one, and before any client captures cfg.SessionID.
@@ -354,12 +397,12 @@ func buildRegistry(ctx context.Context, cfg Config, apiKey string, set toolSet, 
 	return registry, closers, nil
 }
 
-// fileFlag collects repeated -f/--file attachment paths in order.
-type fileFlag []string
+// repeatedFlag collects repeated string flags in order (-f/--file, -dir).
+type repeatedFlag []string
 
-func (f *fileFlag) String() string { return strings.Join(*f, ", ") }
+func (f *repeatedFlag) String() string { return strings.Join(*f, ", ") }
 
-func (f *fileFlag) Set(v string) error {
+func (f *repeatedFlag) Set(v string) error {
 	*f = append(*f, v)
 	return nil
 }

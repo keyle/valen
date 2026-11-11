@@ -223,10 +223,10 @@ func ShellTool() Tool {
 				return fmt.Sprintf("%s\n[timed out after %s — partial output above; split the command or narrow its scope]", out, shellTimeout), nil
 			case errors.As(err, &exit):
 				if looksSandboxDenied(out) {
-					out += "\n" + sandboxHint
+					out += "\n" + sandboxHint(a.Command)
 				}
-				if !a.Network && looksNetworkDenied(out) {
-					out += "\n" + networkHint
+				if !a.Network && !networkGranted() && looksNetworkDenied(out) {
+					out += "\n" + networkHint(a.Command)
 				}
 				return fmt.Sprintf("%s\n[exit %d]", out, exit.ExitCode()), nil
 			case err != nil:

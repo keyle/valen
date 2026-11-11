@@ -126,12 +126,21 @@ func SystemPrompt(model string, planMode bool, cwd string) string {
 const outsideRule = `# Boundaries — Folders Outside the Workdir
 - Sibling git worktrees of this repo (see ` + "`git worktree list`" + `) are in scope: read, edit, and run commands there freely. Create worktrees under /tmp (` + "`git worktree add /tmp/<repo>-<topic> -b <branch>`" + `): /tmp is writable without asking, while paths next to the repo are not.
 - If ` + "`git worktree add`" + ` fails with "Operation not permitted" because the repo tracks a secret the sandbox blocks (e.g. ` + "`.env*`" + `), create it with ` + "`--no-checkout`" + `, exclude that path (` + "`git -C <wt> sparse-checkout set --no-cone '/*' '!/<file>'`" + `), then ` + "`git -C <wt> checkout`" + `.
-- Shell is sandboxed by the OS: it may write only inside the workdir, sibling worktrees, /tmp, folders the user approved, the private temp dir and tool caches. $HOME is blocked until approved — explicit use asks once per folder, like git push does. A write elsewhere fails with "Operation not permitted" or "Read-only file system".
-- Shell has no network by default. For downloads, git fetch/push or curl, pass network=true on the shell call; the user is asked once per session. Commands such as git push, git reset --hard, git clean, rm -r and sudo also ask once per session. If denied, stop and tell the user.
+- Shell is sandboxed by the OS: it may write only inside the workdir, extra ` + "`-dir`" + ` roots, sibling worktrees, /tmp, folders the user approved, the private temp dir and tool caches. $HOME is blocked until approved — explicit use asks once per folder, like git push does. A write elsewhere fails with "Operation not permitted" or "Read-only file system".
+- Shell has no network by default. For downloads, git fetch/push or curl, pass network=true on the shell call; the user is asked once per session. A headless caller can grant it for the whole run with ` + "`--network`" + `. Commands such as git push, git reset --hard, git clean, rm -r and sudo also ask once per session; headless callers can pre-approve them with ` + "`--exec`" + `. If denied, stop and name the access needed.
 - ` + "`go test ./...`" + ` needs network=true: httptest tests bind a loopback port and the sandbox denies the bind even though loopback egress is allowed. Individual ` + "`-run`" + ` tests that start no server work offline. Pass network=true up front instead of retrying.
 - .env files cannot be read or written; ask the user for the values you need. Templates (.env.example) stay readable.
 - Safe commands (go vet, gofmt, ls inside the workdir) never ask. Do not request access you do not need: stay in the workdir, /tmp and sibling worktrees, and inspect other folders with glob/read rather than shell. To work in another folder, first call glob or read on it (the user is asked once per folder), then shell may read/write there. If denied, do not work around it.
 - Never read or modify secrets or dotfiles in the home directory (shell rc files, tokens) without asking. $HOME reads are blocked by the sandbox; an approved folder is re-allowed.`
+
+// NoQuestionRule is appended to the system prompt when AskUserQuestion is
+// unavailable (--no-question, --one-shot-task): nobody can answer, so the
+// model keeps working on its best judgment and only stops for a hard blocker,
+// naming the access that would unblock it.
+const NoQuestionRule = `# No-question mode — continue unless totally blocked
+- AskUserQuestion is unavailable in this run: nobody can answer. Do not stop to ask for confirmation, preferences or missing details; choose the most reasonable assumption, continue the task, and state the assumption in your answer.
+- If an access check fails, do not retry the same call. Read the ` + "`[sandbox: ...]`" + ` line, name the exact folder, network access or command that is blocked, and finish everything that does not need it.
+- Only end the turn without completing the task when no reasonable assumption or alternative path exists. Report the blocker in plain English so the caller can re-run with more access.`
 
 // BuildSwitch is the notice shown when leaving plan mode.
 func BuildSwitch() string {

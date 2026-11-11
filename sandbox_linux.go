@@ -62,7 +62,7 @@ func sandboxArgv(command string, p sandboxPolicy) (string, []string, error) {
 		args = append(args, "--bind", s, s)
 	}
 	// bwrap has no patterns: mask the .env files that exist right now.
-	for _, f := range findSecretFiles(p.Root) {
+	for _, f := range findSecretFilesInRoots(p.secretRoots()) {
 		args = append(args, maskArgs(f)...)
 	}
 	if !p.Network {

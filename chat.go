@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/keyle/valen/internal/dvlog"
+	"github.com/keyle/valen/internal/prompts"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -478,6 +479,23 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 	return msg, usage, validateModelReply(msg)
 }
 
+// withNoQuestionRule appends the no-question policy to the system message.
+// A resumed session may already carry it; the marker check keeps repeated
+// resumes from stacking copies.
+func withNoQuestionRule(history []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	rule := prompts.NoQuestionRule
+	for i := range history {
+		if history[i].Role != openai.ChatMessageRoleSystem {
+			continue
+		}
+		if !strings.Contains(history[i].Content, rule) {
+			history[i].Content = strings.TrimRight(history[i].Content, "\n") + "\n\n" + rule
+		}
+		return history
+	}
+	return append([]openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleSystem, Content: rule}}, history...)
+}
+
 // headlessOptions are the one-shot (-p) switches beyond the prompt itself.
 type headlessOptions struct {
 	files   []string                       // -f/--file attachments
@@ -541,6 +559,9 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 		history = seedHistory(cfg)
 	}
 	history = append(history, opts.history...)
+	if opts.noQuestion {
+		history = withNoQuestionRule(history)
+	}
 	history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: prompt})
 	dvlog.Logf("start model=%s transport=%s thinking=%s maxrounds=%d budget~%dtok schemastate~%dtok tools=%d headless prompt=%dB %q",
 		cfg.Model, modelTransport(cfg.Model), cfg.Thinking, cfg.MaxRounds, contextBudget(cfg), requestToolsTokens(registry), len(registry.Names()), len(prompt), dvlog.Preview(prompt, 200))

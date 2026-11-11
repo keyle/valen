@@ -55,6 +55,20 @@ func TestSandboxAllowsWriteInRoot(t *testing.T) {
 	}
 }
 
+func TestSandboxAllowsWriteInExtraDirRoot(t *testing.T) {
+	useTempRoot(t)
+	extra := outsideDir(t)
+	setExtraRoots([]string{extra})
+	t.Cleanup(func() { setExtraRoots(nil) })
+	target := filepath.Join(extra, "x.txt")
+	if out := sh(t, "echo hi > "+target+" && cat "+target); out != "hi" {
+		t.Fatalf("out=%q", out)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSandboxBlocksWriteOutsideRoot(t *testing.T) {
 	useTempRoot(t)
 	target := filepath.Join(outsideDir(t), "x.txt")
@@ -513,7 +527,7 @@ func TestGateShellDeniesWithoutPrompterOrOnDeny(t *testing.T) {
 		t.Fatal("no prompter must deny")
 	}
 	defer stubPrompter(lblDenySession, nil)()
-	if err := gateShell(context.Background(), "git push", false); err == nil || !strings.Contains(err.Error(), "denied") {
+	if err := gateShell(context.Background(), "git push", false); err == nil || !strings.Contains(err.Error(), "[sandbox: exec") {
 		t.Fatalf("deny err=%v", err)
 	}
 	if err := gateShell(context.Background(), "ls", false); err != nil {

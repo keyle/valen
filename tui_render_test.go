@@ -283,7 +283,7 @@ func TestThinkingFragmentsJoinIntoProse(t *testing.T) {
 
 // TestPendingThinkingRendersTailOnly: reasoning streams can run to the 32 KB
 // live cap. The pending block must paint only the newest tail, like the reply,
-// or every flush after ~1500 runes re-renders the whole reasoning buffer.
+// or every flush after ~3000 runes re-renders the whole reasoning buffer.
 func TestPendingThinkingRendersTailOnly(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
 	m.busy = true
