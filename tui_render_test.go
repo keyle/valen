@@ -281,6 +281,29 @@ func TestThinkingFragmentsJoinIntoProse(t *testing.T) {
 	}
 }
 
+// TestPendingThinkingRendersTailOnly: reasoning streams can run to the 32 KB
+// live cap. The pending block must paint only the newest tail, like the reply,
+// or every flush after ~1500 runes re-renders the whole reasoning buffer.
+func TestPendingThinkingRendersTailOnly(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.busy = true
+	m.pendingPrompt = "deep work"
+	var b strings.Builder
+	for i := 0; i < 800; i++ {
+		fmt.Fprintf(&b, "earlier thought line %d\n", i)
+	}
+	b.WriteString("newest thought marker")
+	m.pendingThinking = b.String()
+
+	out := ansi.Strip(m.renderPending(80))
+	if strings.Contains(out, "earlier thought line 0") {
+		t.Fatalf("live thinking must render its tail only:\n%s", out)
+	}
+	if !strings.Contains(out, "newest thought marker") {
+		t.Fatalf("live thinking tail missing:\n%s", out)
+	}
+}
+
 // TestTUICommittedThinkingKeepsStreamedText: the success-path commit must
 // keep the streamed thinking buffer for display; replay history keeps the
 // exactly-concatenated authoritative reasoning.

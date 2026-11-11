@@ -607,8 +607,10 @@ re-highlight of the whole timeline. Text fragments concatenate exactly,
 without inserted newlines; the first delta of
 a new reasoning part starts on its own line. Rolling
 32768-byte buffers keep the newest UTF-8-safe tail instead of freezing at the
-cap; only a short tail is displayed live. On commit the full reply renders as
-markdown. Display buffers are not provider-native reasoning replay state.
+cap; the pending block displays only a short tail (newest ~1500 runes, cut on a
+line boundary) for thinking and the reply alike, so a reasoning flood cannot
+slow a flush. On commit the full reply renders as markdown. Display buffers are
+not provider-native reasoning replay state.
 Providers answering unary JSON fold with no deltas; a 400 blaming streaming
 retries the round unary.
 

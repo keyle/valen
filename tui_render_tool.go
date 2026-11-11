@@ -375,7 +375,7 @@ func (m *tuiModel) renderPending(w int) string {
 	if m.showThink {
 		parts = append(parts, thinkHeaderStyle.Render("✦ thinking"+m.liveThinkSuffix()))
 		if live != "" {
-			parts = append(parts, thinkBodyStyle.Width(bodyW).Render(breakLongWords(live, textW)))
+			parts = append(parts, thinkBodyStyle.Width(bodyW).Render(breakLongWords(streamTail(live), textW)))
 		}
 		parts = append(parts, "")
 	}
