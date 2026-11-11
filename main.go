@@ -104,14 +104,14 @@ func start() error {
 	planFlag := flag.Bool("plan", false, "plan mode: read-only investigation, present the plan as the reply")
 	dvFlag := flag.Bool("dv", false, "debug verbose: timestamped round/tool/size trace to stderr")
 	dvLogFlag := flag.String("dvlog", "", "debug verbose log file (implies -dv; use in TUI mode)")
-	vFlag := flag.Bool("v", false, "headless verbose: stream thinking summaries and tool calls to stderr")
-	vvFlag := flag.Bool("vv", false, "headless very verbose: also stream raw analysis, answer text and tool results to stderr")
+	vFlag := flag.Bool("v", false, "headless verbose: also round markers and thinking summaries on stderr")
+	vvFlag := flag.Bool("vv", false, "headless very verbose: also raw analysis, full tool args and results on stderr")
 	// -f / --file attach files, folders and images to the headless prompt
 	// (repeatable); @path mentions in the prompt attach too.
 	var attachFiles repeatedFlag
 	flag.Var(&attachFiles, "f", "attach a file, folder or image (repeatable, headless)")
 	flag.Var(&attachFiles, "file", "attach a file, folder or image (alias for -f)")
-	streamFlag := flag.Bool("stream", false, "headless: write events as NDJSON on stdout, ending with a done line")
+	streamFlag := flag.Bool("stream", false, "headless: key events as NDJSON on stdout, ending with a done line (no live text)")
 	historyFlag := flag.String("history", "", "headless: JSON array of prior user/assistant messages to continue from")
 	resumeFlag := flag.String("r", "", "headless: continue a saved session (ID or JSONL path)")
 	flag.StringVar(resumeFlag, "resume", "", "alias for -r")

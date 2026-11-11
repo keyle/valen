@@ -261,7 +261,7 @@ func TestMessagesToolLoop(t *testing.T) {
 	if !strings.Contains(stdout.String(), "all done") {
 		t.Fatalf("stdout=%q", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "[tool shell]") {
+	if !strings.Contains(stderr.String(), "[tool] shell:") {
 		t.Fatalf("stderr=%q", stderr.String())
 	}
 	if calls != 2 {

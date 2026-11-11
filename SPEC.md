@@ -293,8 +293,8 @@ backstop stays terminal there.
   separate. `task` keeps research in isolated history and returns only its
   visible final answer, not private thinking or intermediate tool output.
 
-- Assistant text goes to stdout; `[tool name]` traces and the token tally go to
-  stderr, so `valen "..." > out.md` stays clean.
+- The final answer goes to stdout; `[tool] <summary>` lines, the live answer
+  and the token tally go to stderr, so `valen "..." > out.md` stays clean.
 - `resp.Choices` empty is an error, not a panic.
 - API errors are returned wrapped (`api: ...`) with the provider's message.
   Transient 429/502/503/504 and network errors retry with backoff (3 attempts)
@@ -686,7 +686,7 @@ go run . -dir ~/Code/something        # same, explicit (also works headless)
 go run . -dir ~/Code/a -dir ~/Code/b  # workdir + extra read+write roots (repeatable)
 go run . -p "..." --network           # pre-approve network for shell commands this run
 go run . -p "..." --exec              # pre-approve destructive shell commands this run
-go run . -p "..."                     # one-shot answer on stdout
+go run . -p "..."                     # one-shot: final answer on stdout, progress on stderr
 go run . -q "..."                     # start the TUI and run the prompt immediately
 go run . -config other.toml < prompt.txt   # headless via pipe
 go run . -p "..." -plan               # one-shot plan: read-only, reply is the plan
@@ -694,9 +694,9 @@ go run . -p "..." -f shot.png         # attach an image (repeat -f/--file)
 go run . -p "review @main.go"         # @path mentions attach too (headless)
 go run . -p "..." -dv 2> trace.log     # timestamped round/tool/size trace
 go run . -dvlog trace.log              # same, to a file (use in TUI mode)
-go run . -p "..." -v                   # stream thinking summaries + tool calls to stderr
-go run . -p "..." -vv                  # also raw analysis, answer text and tool results
-go run . -p "..." --stream             # NDJSON events on stdout, one per line, a done line last
+go run . -p "..." -v                   # add round markers + thinking summaries to stderr
+go run . -p "..." -vv                  # also raw analysis, full args and tool results
+go run . -p "..." --stream             # key events as NDJSON on stdout, a done line last
 go run . -p "..." --history h.json     # continue from prior user/assistant messages (JSON array)
 go run . -p "..." -r <session-id|path> # continue a saved session in place (headless)
 go run . -p "..." --no-question --no-task --no-todo   # autonomous: continue unless totally blocked
@@ -706,7 +706,9 @@ go run . -p "..." --one-shot-task      # background job bundle: -p plus the thre
 `--stream` writes each turn event as one JSON object per line (`kind`, plus the
 event's own fields); the last line is `{"kind":"done","usage":...}`, with an
 `error` object when the turn failed and a `session` path when the turn was
-saved. A `tool_result` whose output embedded a `[sandbox: …]` line also carries
+saved. Live answer text is not in the stream: it goes to stderr and
+`done.reply` carries the final answer. A `tool_result` whose output embedded
+a `[sandbox: …]` line also carries
 `denied: {"capability":"read|write|network|exec","subject":"…"}` so a driver
 can surface the blocker without parsing text. On OpenRouter, `or_meta` carries the generation `id`
 for `/generation` lookups (billing and cancellation checks). `--history` reads only `user` and `assistant`
@@ -725,14 +727,14 @@ turn returns the `[sandbox: …]` line naming the access needed; the caller can
 re-run with `-dir <folder>` (repeatable), `--network` or `--exec` to grant it.
 Tool names from MCP servers are `<server>__<tool>`.
 
-Headless `-v`/`-vv` stream to stderr while the final answer stays on stdout.
+Headless `-p` streams tool calls (one-line summaries) and the live answer to
+stderr; the final answer stays on stdout (and in `done.reply` with `--stream`).
 `-p` takes exactly one quoted argument; unquoted words are rejected rather
 than silently joined (`valen -p review main.go` is an error, not a prompt).
-`-v` shows round markers, tool calls and thinking summaries, hiding raw
-chain-of-thought when the provider sends both (`reasoning_text` vs
-`reasoning_summary_text` on `/responses`). `-vv` adds raw analysis, streamed
-answer text and full tool results. Both are one-shot only; the TUI already
-renders these live.
+`-v` adds round markers and thinking summaries, hiding raw chain-of-thought
+when the provider sends both (`reasoning_text` vs `reasoning_summary_text` on
+`/responses`). `-vv` adds raw analysis, full tool arguments and tool results.
+Both are one-shot only; the TUI already renders these live.
 
 Debug trace (`-dv` to stderr, `-dvlog <file>` implies `-dv`): one
 `[dv HH:MM:SS.mmm +elapsed]` line per event — turn start/end with usage,

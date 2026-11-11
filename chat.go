@@ -499,8 +499,8 @@ func withNoQuestionRule(history []openai.ChatCompletionMessage) []openai.ChatCom
 // headlessOptions are the one-shot (-p) switches beyond the prompt itself.
 type headlessOptions struct {
 	files   []string                       // -f/--file attachments
-	verbose int                            // -v/-vv: 0 quiet, 1 summaries and tools, 2 raw analysis
-	stream  bool                           // --stream: Events as NDJSON on stdout, a done line last
+	verbose int                            // -v/-vv: 0 tools + live answer, 1 adds rounds/thinking, 2 adds raw/results
+	stream  bool                           // --stream: key events as NDJSON on stdout, a done line last
 	history []openai.ChatCompletionMessage // --history: prior messages, before the prompt
 	// resume continues a saved session: its turns seed history and the turn
 	// appends to the same JSONL instead of a fresh one.
@@ -573,8 +573,6 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 	vt := newHeadlessVerbose(stderr, opts.verbose)
 	var enc *json.Encoder
 	var streamErr error
-	var streamText strings.Builder
-	sentAnswer := ""
 	if opts.stream {
 		enc = json.NewEncoder(stdout)
 	}
@@ -582,20 +580,10 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 		vt.event(ev)
 		if enc != nil && streamErr == nil {
 			switch ev.Kind {
-			case "thinking_delta":
-				// Live reasoning is not part of the stream contract: a consumer
-				// that concatenates text fields would paint every thought as
-				// result.
-			case "text_delta":
-				streamText.WriteString(ev.Text)
-				_, answer := splitThinking(streamText.String())
-				if answer = holdThinkPrefix(answer); len(answer) > len(sentAnswer) && strings.HasPrefix(answer, sentAnswer) {
-					if err := enc.Encode(Event{Kind: "text_delta", Text: answer[len(sentAnswer):]}); err != nil {
-						streamErr = err
-					} else {
-						sentAnswer = answer
-					}
-				}
+			case "thinking_delta", "text_delta":
+				// Live reasoning and answer text are not part of the stream
+				// contract: done.reply carries the final answer, and the live
+				// answer goes to stderr.
 			default:
 				if err := enc.Encode(ev); err != nil {
 					streamErr = err
@@ -605,9 +593,6 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 		switch ev.Kind {
 		case "tool_start":
 			tools = append(tools, ToolRecord{ID: ev.ID, Name: ev.Text, Args: ev.Args})
-			if vt == nil {
-				fmt.Fprintf(stderr, "[tool %s]\n", ev.Text)
-			}
 		case "tool_result":
 			for i := len(tools) - 1; i >= 0; i-- {
 				if tools[i].ID == ev.ID && tools[i].Name == ev.Text {
@@ -628,11 +613,6 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 	thinking, answer := splitThinking(reply.Content)
 	if reply.ReasoningContent != "" {
 		thinking = reply.ReasoningContent
-	}
-	// Unary and stream-rejected rounds emit no deltas; replay any answer the
-	// stream has not seen yet, and flush a held-back tag fragment.
-	if opts.stream && answer != "" && streamErr == nil && strings.HasPrefix(answer, sentAnswer) && len(answer) > len(sentAnswer) {
-		streamErr = enc.Encode(Event{Kind: "text_delta", Text: answer[len(sentAnswer):]})
 	}
 	vt.fallbackThinking(thinking)
 	vt.closeLine()

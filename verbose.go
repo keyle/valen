@@ -7,11 +7,13 @@ import (
 )
 
 // headlessVerbose streams a one-shot (-p) run's activity to stderr while the
-// answer still lands on stdout at the end. Level 1 (-v) shows round markers,
-// tool calls and thinking summaries; level 2 (-vv) adds raw chain-of-thought
-// analysis, streamed answer text and full tool results.
+// final answer still lands on stdout (or in done.reply with --stream). The
+// default (level 0) shows tool calls and the live answer; level 1 (-v) adds
+// round markers and thinking summaries; level 2 (-vv) adds raw
+// chain-of-thought, full tool arguments and tool results.
 type headlessVerbose struct {
 	w    io.Writer
+	more bool
 	full bool
 
 	open  bool
@@ -21,13 +23,13 @@ type headlessVerbose struct {
 
 	sawThinking bool
 	sawRaw      bool
+
+	answer strings.Builder
+	sent   string
 }
 
 func newHeadlessVerbose(w io.Writer, level int) *headlessVerbose {
-	if level <= 0 {
-		return nil
-	}
-	return &headlessVerbose{w: w, full: level >= 2}
+	return &headlessVerbose{w: w, more: level >= 1, full: level >= 2}
 }
 
 func (v *headlessVerbose) event(ev Event) {
@@ -36,9 +38,15 @@ func (v *headlessVerbose) event(ev Event) {
 	}
 	switch ev.Kind {
 	case "round_start":
+		if !v.more {
+			return
+		}
 		v.closeLine()
 		fmt.Fprintf(v.w, "[%s]\n", ev.Text)
 	case "thinking_delta":
+		if !v.more {
+			return
+		}
 		if ev.Raw {
 			v.sawRaw = true
 		} else {
@@ -49,9 +57,7 @@ func (v *headlessVerbose) event(ev Event) {
 		}
 		v.stream("thinking", ev.Text, ev.Index, ev.Raw)
 	case "text_delta":
-		if v.full {
-			v.stream("answer", ev.Text, ev.Index, false)
-		}
+		v.answerDelta(ev.Text)
 	case "tool_start":
 		v.closeLine()
 		if v.full {
@@ -71,6 +77,19 @@ func (v *headlessVerbose) event(ev Event) {
 				fmt.Fprintln(v.w)
 			}
 		}
+	}
+}
+
+// answerDelta streams the visible answer, splitting out content-inlined think
+// blocks and holding back a trailing partial tag so reasoning never reaches
+// stderr as answer text.
+func (v *headlessVerbose) answerDelta(text string) {
+	v.answer.WriteString(text)
+	_, answer := splitThinking(v.answer.String())
+	answer = holdThinkPrefix(answer)
+	if len(answer) > len(v.sent) && strings.HasPrefix(answer, v.sent) {
+		v.stream("answer", answer[len(v.sent):], 0, false)
+		v.sent = answer
 	}
 }
 
@@ -101,7 +120,7 @@ func (v *headlessVerbose) closeLine() {
 // fallbackThinking prints the committed reasoning when the provider ignored
 // streaming and no deltas arrived. Raw-only streams stay hidden at -v.
 func (v *headlessVerbose) fallbackThinking(thinking string) {
-	if v == nil || thinking == "" || v.sawThinking || v.sawRaw {
+	if v == nil || !v.more || thinking == "" || v.sawThinking || v.sawRaw {
 		return
 	}
 	v.closeLine()

@@ -330,8 +330,8 @@ func toolCallRound(name, args string) string {
 	return "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"type\":\"function\",\"function\":{\"name\":" + jsonQuote(name) + ",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":" + jsonQuote(args) + "}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"
 }
 
-// --stream writes each Event as one NDJSON line, nothing else on stdout, and
-// the done line last.
+// --stream writes key events as NDJSON lines, nothing else on stdout, and the
+// done line last.
 func TestStreamWritesNDJSONWithDoneLast(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "note.txt"), []byte("hi"), 0o600); err != nil {
@@ -354,7 +354,7 @@ func TestStreamWritesNDJSONWithDoneLast(t *testing.T) {
 		}
 		kinds = append(kinds, fmt.Sprint(ev["kind"]))
 	}
-	if want := []string{"round_start", "tool_start", "tool_result", "round_start", "text_delta", "done"}; !slices.Equal(kinds, want) {
+	if want := []string{"round_start", "tool_start", "tool_result", "round_start", "done"}; !slices.Equal(kinds, want) {
 		t.Fatalf("kinds=%v want %v\n%s", kinds, want, stdout)
 	}
 	if !strings.Contains(lines[2], "note.txt") {
@@ -365,10 +365,10 @@ func TestStreamWritesNDJSONWithDoneLast(t *testing.T) {
 	}
 }
 
-// Reasoning must never reach the NDJSON text stream: reasoning deltas are
-// dropped and content-inlined think blocks are split out of text_delta, so a
-// consumer that concatenates text sees only the answer. done.reply and plain
-// stdout carry that same split answer.
+// Reasoning must never reach the live answer: reasoning deltas stay out of the
+// stderr stream and content-inlined think blocks are split out, so only the
+// answer is shown. done.reply and plain stdout carry that same split answer;
+// the NDJSON stream itself carries no live text.
 func TestStreamDropsReasoningAndCarriesReply(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	round := "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"private plan\"}}]}\n\n" +
@@ -378,29 +378,21 @@ func TestStreamDropsReasoningAndCarriesReply(t *testing.T) {
 	srv := sseServer(t, &bodies, round)
 	cfgPath := writeConfig(t, fmt.Sprintf("model = \"kimi-k3\"\nbase_url = %q\n", srv.URL))
 
-	stdout, err := runValenCLI(t, t.TempDir(), "-p", "--stream", "-config", cfgPath, "reason")
+	stdout, stderr, err := runValenCLIFull(t, t.TempDir(), "-p", "--stream", "-config", cfgPath, "reason")
 	if err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(stdout), "\n")
-	var text strings.Builder
 	for _, line := range lines {
 		var ev struct {
 			Kind string `json:"kind"`
-			Text string `json:"text"`
 		}
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			t.Fatalf("bad line %q: %v", line, err)
 		}
-		if ev.Kind == "thinking_delta" {
-			t.Fatalf("reasoning event leaked into the stream: %s", line)
+		if ev.Kind == "thinking_delta" || ev.Kind == "text_delta" {
+			t.Fatalf("live text leaked into the stream: %s", line)
 		}
-		if ev.Kind == "text_delta" {
-			text.WriteString(ev.Text)
-		}
-	}
-	if text.String() != "public answer" {
-		t.Fatalf("streamed text=%q", text.String())
 	}
 	var done struct {
 		Kind  string `json:"kind"`
@@ -411,6 +403,9 @@ func TestStreamDropsReasoningAndCarriesReply(t *testing.T) {
 	}
 	if done.Kind != "done" || done.Reply != "public answer" {
 		t.Fatalf("done=%+v", done)
+	}
+	if !strings.Contains(stderr, "[answer] public answer") || strings.Contains(stderr, "private plan") {
+		t.Fatalf("live answer on stderr=%q", stderr)
 	}
 
 	// Plain -p prints the split answer, never the reasoning block.

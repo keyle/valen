@@ -56,8 +56,8 @@ Decisions D1–D10 and questions Q1–Q3 are in `design.md`.
 - [x] 4.1 `--stream` is headless-only (TUI mode rejects it).
 - [x] 4.2 NDJSON encoder on stdout; one writer, no extra mutex needed (events
       are emitted from the caller's loop).
-- [x] 4.3 Event kinds mapped; `thinking_delta`, `retry`, `or_meta` are not in
-      the spec stream.
+- [x] 4.3 Event kinds mapped; `thinking_delta` and `text_delta` stay off the
+      NDJSON stream (the live answer goes to stderr; `done.reply` is final).
 - [x] 4.4 stdout answer uses the think-split `answer`.
 - [x] 4.5 `done` last with reply, usage, messages and error.
 - [ ] 4.6 SIGTERM `done` with `error: "cancelled"`: not implemented; the

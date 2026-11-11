@@ -13,8 +13,8 @@ behaviour does not change.
 
 ## What changes
 
-1. **H1 `--stream`**: NDJSON events on stdout, `done` last, nothing else on
-   stdout. Implies `-p`.
+1. **H1 `--stream`**: key events as NDJSON on stdout, `done` last, nothing
+   else on stdout (live answer text goes to stderr). Implies `-p`.
 2. **H2 `--history <file>`**: prior messages (JSON array) placed after the
    system message and before the new prompt.
 3. **H3 `--no-question`, `--no-task`, `--no-todo`**: remove those tool names

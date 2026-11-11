@@ -17,16 +17,32 @@ func verboseSample(v *headlessVerbose) {
 	v.closeLine()
 }
 
-func TestVerboseHidesRawAnalysis(t *testing.T) {
+func TestDefaultShowsToolsAndAnswer(t *testing.T) {
 	var out bytes.Buffer
-	verboseSample(newHeadlessVerbose(&out, 1))
+	verboseSample(newHeadlessVerbose(&out, 0))
 	got := out.String()
-	for _, want := range []string{"[Round 1/8]", "[thinking] summary plan", "[tool] read:"} {
+	for _, want := range []string{"[answer] answer", "[tool] read:"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
 	}
-	for _, no := range []string{"raw analysis", "[answer]", "body", "[result]"} {
+	for _, no := range []string{"[Round 1/8]", "[thinking]", "raw analysis", "body", "[result]"} {
+		if strings.Contains(got, no) {
+			t.Fatalf("unexpected %q in:\n%s", no, got)
+		}
+	}
+}
+
+func TestVerboseHidesRawAnalysis(t *testing.T) {
+	var out bytes.Buffer
+	verboseSample(newHeadlessVerbose(&out, 1))
+	got := out.String()
+	for _, want := range []string{"[Round 1/8]", "[thinking] summary plan", "[tool] read:", "[answer] answer"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	for _, no := range []string{"raw analysis", "body", "[result]"} {
 		if strings.Contains(got, no) {
 			t.Fatalf("unexpected %q in:\n%s", no, got)
 		}
@@ -56,7 +72,8 @@ func TestChatVerboseStreamsThinking(t *testing.T) {
 		level      int
 		want, omit []string
 	}{
-		{1, []string{"[thinking] weigh options", "[tokens in="}, []string{"[answer] done"}},
+		{0, []string{"[answer] done", "[tokens in="}, []string{"[thinking]"}},
+		{1, []string{"[thinking] weigh options", "[answer] done", "[tokens in="}, nil},
 		{2, []string{"[thinking] weigh options", "[answer] done", "[tokens in="}, nil},
 	} {
 		var bodies []string
@@ -84,6 +101,12 @@ func TestChatVerboseStreamsThinking(t *testing.T) {
 }
 
 func TestVerboseFallbackThinking(t *testing.T) {
+	var base bytes.Buffer
+	newHeadlessVerbose(&base, 0).fallbackThinking("committed thought")
+	if base.String() != "" {
+		t.Fatalf("default must stay quiet: %q", base.String())
+	}
+
 	var quiet bytes.Buffer
 	newHeadlessVerbose(&quiet, 1).fallbackThinking("committed thought")
 	if !strings.Contains(quiet.String(), "[thinking] committed thought") {

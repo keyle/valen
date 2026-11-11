@@ -261,7 +261,7 @@ func TestChatRunsToolLoop(t *testing.T) {
 	if !strings.Contains(stdout.String(), "all done") {
 		t.Fatalf("stdout=%q", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "[tool shell]") || !strings.Contains(stderr.String(), "tokens in=20 out=10") {
+	if !strings.Contains(stderr.String(), "[tool] shell:") || !strings.Contains(stderr.String(), "tokens in=20 out=10") {
 		t.Fatalf("stderr=%q", stderr.String())
 	}
 	if *calls != 2 {

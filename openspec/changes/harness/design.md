@@ -24,8 +24,9 @@ chase it.)
   `round_start` is at `agent.go:259`. `retry` (`retry.go:108`) and `or_meta`
   (`chat.go:291/313/344/349/439`) are emitted but are not in the spec.
   `thinking_delta` is not in the spec either.
-- **text_delta.** Only SSE rounds emit it (`chat.go:269-276`). A unary reply
-  emits none, so `done.reply` is the only text in that case.
+- **text_delta.** Only SSE rounds emit it (`chat.go:269-276`). It feeds the
+  live stderr answer; a unary reply emits none, so `done.reply` is the only
+  text in that case.
 - **Stdout answer.** `chat.go:566` prints `reply.Content`. The session records
   the think-split `answer` (`chat.go:536`, `chat.go:543`, `think.go:9`). The
   stdout answer and `done.reply` should be the split answer. Needs a test with
@@ -61,9 +62,10 @@ tests). It needs an OpenRouter key from the user; `.env` cannot be read.
 ## Decisions (defaults, reversible)
 
 - **D1** `--stream` implies `-p`.
-- **D2** NDJSON carries only the spec kinds: `round_start`, `text_delta`,
-  `tool_start`, `tool_result`, `error`, `done`. Drop `thinking_delta`, `retry`
-  and `or_meta`.
+- **D2** NDJSON carries only the spec kinds: `round_start`, `tool_start`,
+  `tool_result`, `error`, `done`. Drop `thinking_delta`, `text_delta`,
+  `retry` and `or_meta`. Live answer text streams to stderr; `done.reply` is
+  final.
 - **D3** `tool_result` omits `output` in v1. There is no flag to ask for it.
 - **D4** `done.messages` = this turn's new messages, including the user prompt,
   in the same JSON shape `--history` reads. The caller appends them and passes
