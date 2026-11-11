@@ -226,7 +226,7 @@ func (m *tuiModel) loadSlots() {
 func (m *tuiModel) assignSlot(key string) {
 	m.loadSlots()
 	m.slots[key] = modelSlot{model: m.cfg.Model, thinking: m.cfg.Thinking, routing: m.cfg.Routing}
-	m.notice = fmt.Sprintf("Slot %s ← %s · %s%s.", key, displayModelID(m.cfg.Model), effortLabel(m.cfg.Thinking), slotRoutingSuffix(m.cfg.Routing))
+	m.notice = fmt.Sprintf("Slot %s ← %s · %s%s.", key, displayModelID(m.cfg.Model), effortLabel(m.cfg.Thinking), slotRoutingSuffix(m.cfg.Model, m.cfg.Routing))
 	m.noticeErr = false
 	if path := slotsPathFor(m.statePath); path == "" {
 		m.notice += " (session only)"
@@ -279,7 +279,7 @@ func (m *tuiModel) applySlot(key string) tea.Cmd {
 	m.cfg.Routing = normalizeRouting(s.routing)
 	m.applyModelSwitch(s.model)
 	if !m.noticeErr {
-		m.notice = fmt.Sprintf("Slot %s: %s · %s%s", key, displayModelID(m.cfg.Model), effortLabel(m.cfg.Thinking), slotRoutingSuffix(m.cfg.Routing))
+		m.notice = fmt.Sprintf("Slot %s: %s · %s%s", key, displayModelID(m.cfg.Model), effortLabel(m.cfg.Thinking), slotRoutingSuffix(m.cfg.Model, m.cfg.Routing))
 		if m.cfg.Thinking != s.thinking {
 			m.notice += fmt.Sprintf(" (%s unavailable)", s.thinking)
 		}
@@ -287,9 +287,10 @@ func (m *tuiModel) applySlot(key string) tea.Cmd {
 	return tea.Batch(m.fetchQuotaCmd(), m.fetchPricingCmd())
 }
 
-// slotRoutingSuffix names a slot's routing in a notice, empty when none.
-func slotRoutingSuffix(routing string) string {
-	if r := normalizeRouting(routing); r != "" {
+// slotRoutingSuffix names a slot's routing in a notice, empty when none or
+// when the slot's model is not served by OpenRouter.
+func slotRoutingSuffix(model, routing string) string {
+	if r := effectiveRouting(model, routing); r != "" {
 		return " · " + r
 	}
 	return ""
@@ -317,6 +318,7 @@ func (m *tuiModel) openEffortPicker() {
 func (m *tuiModel) applyModelSwitch(id string) {
 	prevThinking := m.cfg.Thinking
 	m.cfg.Model = id
+	m.cfg.Routing = effectiveRouting(id, m.cfg.Routing)
 	if len(m.history) > 0 && m.history[0].Role == openai.ChatMessageRoleSystem {
 		m.history[0].Content = effectiveSystem(m.cfg)
 	} else {
@@ -450,7 +452,8 @@ func (m *tuiModel) cycleThinking() {
 
 // setRouting validates and persists the OpenRouter provider-routing mode,
 // announcing the result. It reports whether the routing applies (OpenRouter
-// model, valid mode). On Go/Zen it is a silent no-op: no notice, no write.
+// model, valid mode). On Go/Zen/OpenAI it is a silent no-op: no notice, no
+// write.
 func (m *tuiModel) setRouting(routing string) bool {
 	if modelProvider(m.cfg.Model) != ProviderOpenRouter {
 		return false
@@ -479,8 +482,8 @@ func (m *tuiModel) setRouting(routing string) bool {
 }
 
 // cycleRouting advances the OpenRouter routing mode through
-// none → floor → nitro → exacto → none. ctrl+y is the mnemonic. On Go/Zen it
-// is a silent no-op (no notice, no state write).
+// none → floor → nitro → exacto → none. ctrl+y is the mnemonic. On
+// Go/Zen/OpenAI it is a silent no-op (no notice, no state write).
 func (m *tuiModel) cycleRouting() {
 	if modelProvider(m.cfg.Model) != ProviderOpenRouter {
 		return

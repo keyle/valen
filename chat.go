@@ -140,13 +140,13 @@ func openRouterProvider(cfg Config) *orProvider {
 // routing object (ignore/only) plus each assistant reasoning_content mirrored
 // as `reasoning` (its documented field). DeepSeek thinking mode 400s unless
 // every assistant tool-call message carries reasoning_content, and go-openai
-// omits empty strings, so those get an explicit "". Everything else is sent
-// untouched.
+// omits empty strings, so those get an explicit "". extra_body keys are
+// merged first, so valen's own fields win. Everything else is sent untouched.
 func chatWireBody(cfg Config, req openai.ChatCompletionRequest) any {
 	mirror := modelProvider(cfg.Model) == ProviderOpenRouter
 	pad := strings.HasPrefix(modelBaseID(cfg.Model), "deepseek") && strings.ToLower(strings.TrimSpace(cfg.Thinking)) != "none"
 	provider := openRouterProvider(cfg)
-	need := provider != nil
+	need := provider != nil || len(cfg.ExtraBody) > 0
 	for _, m := range req.Messages {
 		if m.Role == openai.ChatMessageRoleAssistant && ((mirror && m.ReasoningContent != "") || (pad && len(m.ToolCalls) > 0 && m.ReasoningContent == "")) {
 			need = true
@@ -163,6 +163,11 @@ func chatWireBody(cfg Config, req openai.ChatCompletionRequest) any {
 	var body map[string]json.RawMessage
 	if json.Unmarshal(raw, &body) != nil {
 		return req
+	}
+	for k, v := range cfg.ExtraBody {
+		if enc, err := json.Marshal(v); err == nil {
+			body[k] = enc
+		}
 	}
 	if provider != nil {
 		if pb, err := json.Marshal(provider); err == nil {
@@ -294,6 +299,7 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 		fillReasoning(&msg, raw)
 		if modelProvider(cfg.Model) == ProviderOpenRouter {
 			var meta ORMeta
+			meta.ID = out.ID
 			parseOpenRouterMeta(raw, &meta.Provider, &meta.Cost, &meta.HasCost)
 			if onEvent != nil && (meta.Provider != "" || meta.HasCost) {
 				onEvent(Event{Kind: "or_meta", ORMeta: &meta})
@@ -345,10 +351,13 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 		}
 		if modelProvider(cfg.Model) == ProviderOpenRouter {
 			parseOpenRouterMeta([]byte(ev.data), &orMeta.Provider, &orMeta.Cost, &orMeta.HasCost)
+			if orMeta.ID == "" {
+				orMeta.ID = chunk.ID
+			}
 			if onEvent != nil {
 				if !sentProvider && orMeta.Provider != "" {
 					sentProvider = true
-					m := ORMeta{Provider: orMeta.Provider}
+					m := ORMeta{ID: orMeta.ID, Provider: orMeta.Provider}
 					onEvent(Event{Kind: "or_meta", ORMeta: &m})
 				}
 				if !sentCost && orMeta.HasCost {
@@ -469,26 +478,42 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 	return msg, usage, validateModelReply(msg)
 }
 
+// headlessOptions are the one-shot (-p) switches beyond the prompt itself.
+type headlessOptions struct {
+	files   []string                       // -f/--file attachments
+	verbose int                            // -v/-vv: 0 quiet, 1 summaries and tools, 2 raw analysis
+	stream  bool                           // --stream: Events as NDJSON on stdout, a done line last
+	history []openai.ChatCompletionMessage // --history: prior messages, before the prompt
+	// resume continues a saved session: its turns seed history and the turn
+	// appends to the same JSONL instead of a fresh one.
+	resume *Session
+	// noQuestion means nobody can answer: out-of-scope file access and shell
+	// approvals are denied instead of read from stdin or /dev/tty.
+	noQuestion bool
+}
+
 // chat is the headless one-shot path: one prompt, one answer, stdout.
 func chat(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, prompt string, stdout, stderr io.Writer) error {
-	return chatWithAttachments(ctx, cfg, client, apiKey, hc, registry, prompt, nil, 0, stdout, stderr)
+	return chatWithAttachments(ctx, cfg, client, apiKey, hc, registry, prompt, headlessOptions{}, stdout, stderr)
 }
 
 // chatWithAttachments is chat plus -f/--file paths (and @path mentions, also
 // expanded headless): text rides inlined in the prompt, images on the wire only.
-// verbose is the -v/-vv level: 0 quiet, 1 summaries and tools, 2 raw analysis.
-func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, prompt string, files []string, verbose int, stdout, stderr io.Writer) error {
+func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, prompt string, opts headlessOptions, stdout, stderr io.Writer) error {
 	resetTodos()
-	askPrompter = func(ctx context.Context, qs []AskQuestion) ([]string, error) {
-		in, closeIn, err := headlessAskInput()
-		if err != nil {
-			return nil, err
+	askPrompter = nil
+	if !opts.noQuestion {
+		askPrompter = func(ctx context.Context, qs []AskQuestion) ([]string, error) {
+			in, closeIn, err := headlessAskInput()
+			if err != nil {
+				return nil, err
+			}
+			defer closeIn()
+			return headlessAsk(ctx, qs, in, os.Stderr)
 		}
-		defer closeIn()
-		return headlessAsk(ctx, qs, in, os.Stderr)
 	}
 	displayPrompt := prompt
-	paths := append(append([]string(nil), files...), atPaths(prompt)...)
+	paths := append(append([]string(nil), opts.files...), atPaths(prompt)...)
 	refs, notices := resolveAttachments(ctx, paths, cfg)
 	for _, n := range notices {
 		fmt.Fprintln(stderr, "valen: "+n)
@@ -496,17 +521,26 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 	ctx = withTurnAttachments(ctx, refs)
 	prompt = promptWithAttachments(prompt, refs)
 	// Headless runs are conversations too: record them like TUI turns so /sessions
-	// can resume them. A save failure must never cost the answer.
-	session, err := newSession(cfg)
-	if err != nil {
-		session = nil
-		fmt.Fprintln(stderr, "valen: session: "+err.Error())
-	} else {
-		session.nameSession(displayPrompt)
+	// can resume them. A save failure must never cost the answer. With -r the
+	// saved session is reopened (never renamed) and the turn appends to it.
+	session := opts.resume
+	if session == nil {
+		var err error
+		if session, err = newSession(cfg); err != nil {
+			session = nil
+			fmt.Fprintln(stderr, "valen: session: "+err.Error())
+		} else {
+			session.nameSession(displayPrompt)
+		}
 	}
 	started := time.Now()
-	history := make([]openai.ChatCompletionMessage, 0, 8)
-	history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: effectiveSystem(cfg)})
+	var history []openai.ChatCompletionMessage
+	if opts.resume != nil {
+		history = historyFromTurns(cfg, opts.resume.Turns)
+	} else {
+		history = seedHistory(cfg)
+	}
+	history = append(history, opts.history...)
 	history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: prompt})
 	dvlog.Logf("start model=%s transport=%s thinking=%s maxrounds=%d budget~%dtok schemastate~%dtok tools=%d headless prompt=%dB %q",
 		cfg.Model, modelTransport(cfg.Model), cfg.Thinking, cfg.MaxRounds, contextBudget(cfg), requestToolsTokens(registry), len(registry.Names()), len(prompt), dvlog.Preview(prompt, 200))
@@ -515,9 +549,17 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 	var orMeta *ORMeta
 	var turnCost float64
 	var hasTurnCost bool
-	vt := newHeadlessVerbose(stderr, verbose)
+	vt := newHeadlessVerbose(stderr, opts.verbose)
+	var enc *json.Encoder
+	var streamErr error
+	if opts.stream {
+		enc = json.NewEncoder(stdout)
+	}
 	onEvent := func(ev Event) {
 		vt.event(ev)
+		if enc != nil && streamErr == nil {
+			streamErr = enc.Encode(ev)
+		}
 		switch ev.Kind {
 		case "tool_start":
 			tools = append(tools, ToolRecord{ID: ev.ID, Name: ev.Text, Args: ev.Args})
@@ -563,10 +605,20 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 		fe := friendlyError(err)
 		turn.Error = &fe
 	}
+	sessionPath := ""
 	if session != nil {
 		if aerr := session.append(turn); aerr == nil {
 			session.ensureMeta(cfg.Model, cfg.Thinking)
+			sessionPath = session.Path
+		} else {
+			fmt.Fprintln(stderr, "valen: session: "+aerr.Error())
 		}
+	}
+	if opts.stream {
+		return writeStreamDone(enc, usage, err, streamErr, sessionPath)
+	}
+	if sessionPath != "" {
+		fmt.Fprintf(stderr, "[session %s]\n", sessionPath)
 	}
 	if err != nil {
 		return err
@@ -574,4 +626,67 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 	fmt.Fprintln(stdout, reply.Content)
 	fmt.Fprintf(stderr, "[tokens in=%d out=%d]\n", usage.PromptTokens, usage.CompletionTokens)
 	return nil
+}
+
+// streamDone is the last NDJSON line of a --stream run. It is written even
+// when the turn failed, so a reader always sees how the run ended.
+type streamDone struct {
+	Kind    string         `json:"kind"`
+	Usage   Usage          `json:"usage"`
+	Session string         `json:"session,omitempty"`
+	Error   *FriendlyError `json:"error,omitempty"`
+}
+
+// writeStreamDone writes the done line and returns the first error that
+// stopped the run: the turn's, then a failed event write.
+func writeStreamDone(enc *json.Encoder, usage openai.Usage, turnErr, streamErr error, sessionPath string) error {
+	done := streamDone{Kind: "done", Usage: Usage{Prompt: usage.PromptTokens, Completion: usage.CompletionTokens, Total: usage.TotalTokens}, Session: sessionPath}
+	if turnErr != nil {
+		fe := friendlyError(turnErr)
+		done.Error = &fe
+	}
+	if err := enc.Encode(done); err != nil && turnErr == nil {
+		return err
+	}
+	if turnErr != nil {
+		return turnErr
+	}
+	return streamErr
+}
+
+// maxHistoryBytes caps a --history file, like the other input caps.
+const maxHistoryBytes = 8 << 20
+
+// loadHistoryFile reads --history: a JSON array of {"role","content"} objects.
+// Only user and assistant roles are accepted, so the file cannot inject a
+// system prompt or fake tool results.
+func loadHistoryFile(path string) ([]openai.ChatCompletionMessage, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("history: %w", err)
+	}
+	if fi.Size() > maxHistoryBytes {
+		return nil, fmt.Errorf("history %s: larger than %d bytes", path, maxHistoryBytes)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("history: %w", err)
+	}
+	var in []struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return nil, fmt.Errorf("history %s: %w", path, err)
+	}
+	// Only role and content are kept: tool calls in a file would have no
+	// matching tool results.
+	msgs := make([]openai.ChatCompletionMessage, 0, len(in))
+	for i, m := range in {
+		if m.Role != openai.ChatMessageRoleUser && m.Role != openai.ChatMessageRoleAssistant {
+			return nil, fmt.Errorf("history %s: message %d has role %q; only user and assistant are allowed", path, i, m.Role)
+		}
+		msgs = append(msgs, openai.ChatCompletionMessage{Role: m.Role, Content: m.Content})
+	}
+	return msgs, nil
 }

@@ -16,8 +16,8 @@ import (
 const fixtureEnv = "VALEN_MCP_FIXTURE"
 
 func TestMain(m *testing.M) {
-	if os.Getenv(fixtureEnv) == "1" {
-		if err := serveFixture(); err != nil {
+	if fixture := os.Getenv(fixtureEnv); fixture != "" {
+		if err := serveFixture(fixture); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -26,16 +26,23 @@ func TestMain(m *testing.M) {
 	roundRetryBase, roundRetryMax = time.Millisecond, 2*time.Millisecond
 	retryBackoff = []time.Duration{time.Millisecond, 2 * time.Millisecond}
 	// Headless turns now save sessions: keep them out of the real data dir.
-	if dir, err := os.MkdirTemp("", "valen-test-data"); err == nil {
-		os.Setenv("XDG_DATA_HOME", dir)
+	// CLI children re-enter TestMain, so keep the parent's data dir there.
+	if os.Getenv(voiceCLIEnv) == "" {
+		if dir, err := os.MkdirTemp("", "valen-test-data"); err == nil {
+			os.Setenv("XDG_DATA_HOME", dir)
+		}
 	}
 	// Keep picker tests offline: unreachable Zen means the curated fallback.
 	zenBaseURL = "http://127.0.0.1:1"
 	os.Exit(m.Run())
 }
 
-// serveFixture runs this test binary as a one-tool stdio MCP server.
-func serveFixture() error {
+// serveFixture runs this test binary as a stdio MCP server: "voice" serves the
+// voice profile's delegate and job_control tools, anything else one echo tool.
+func serveFixture(kind string) error {
+	if kind == "voice" {
+		return serveVoiceFixture()
+	}
 	s := server.NewMCPServer("echo-fixture", "0.0.1")
 	s.AddTool(
 		mcp.NewTool("echo", mcp.WithDescription("Echo text back"), mcp.WithString("text", mcp.Required())),

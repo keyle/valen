@@ -15,10 +15,19 @@ import (
 
 func sseServer(t *testing.T, bodies *[]string, rounds ...string) *httptest.Server {
 	t.Helper()
+	return sseServerWith(t, func(raw string) { *bodies = append(*bodies, raw) }, rounds...)
+}
+
+// sseServerWith is sseServer with a custom body sink. Child-process tests
+// record into a channel: the kernel boundary gives the race detector no
+// happens-before edge between the handler and the test, so a shared slice
+// would race.
+func sseServerWith(t *testing.T, record func(string), rounds ...string) *httptest.Server {
+	t.Helper()
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
-		*bodies = append(*bodies, string(raw))
+		record(string(raw))
 		i := calls
 		if i >= len(rounds) {
 			i = len(rounds) - 1

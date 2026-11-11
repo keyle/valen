@@ -108,8 +108,8 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   `openrouter/vendor/` prefix) sit flush at the far right, aligned with the
   footer's right text. The OpenRouter routing affinity (`none` omitted;
   otherwise `floor`/`nitro`/`exacto`) trails the thinking level
-  (`kimi-k3 · high · nitro`) and is shown only on OpenRouter models — Go and
-  Zen ignore routing. The tools count is not shown, and the header carries no
+  (`kimi-k3 · high · nitro`) and is shown only on OpenRouter models — Go, Zen
+  and OpenAI ignore routing, which a model switch clears. The tools count is not shown, and the header carries no
   key hints (shortcuts are listed in `/help`).
 - Transcript is padded conversation blocks separated by blank lines; no role
   prefixes. `You` (orange; `You (PLAN)` in cyan with a cyan left bar when sent in plan mode) and ` ✦ <model>` (green, leading space so it lines
@@ -502,6 +502,7 @@ shows the tokens, not the bytes.
   weapon slots. `alt+1`…`alt+9`, `alt+0` (the tenth) switch to the triple
   stored in that slot; `alt+shift+<digit>` stores the current model + thinking +
   routing there and says so in the status notice (`Slot 2 ← go/glm-5.3 · high.`).
+  Routing is stored only for OpenRouter models (it is empty for Go/Zen/OpenAI).
   Stored at `~/.config/valen/slots.yaml`, one `<digit>: <model> [thinking]
   [floor|nitro|exacto]` line per slot (no thinking = provider default; no
   routing token = `none`; the two vocabularies are disjoint, so order is
@@ -519,9 +520,9 @@ shows the tokens, not the bytes.
   resets to the provider default with a note.
 - Both model and thinking persist to `~/.config/valen/state.json`
   (`$XDG_CONFIG_HOME/valen/`), never to `valen.toml`, and override the
-  config's `model`/`thinking` on the next boot (an invalid saved pair is
-  ignored). Without a state path (tests, `-config <file>`) the switch is
-  session-only.
+  config's `model`/`thinking` on the next TUI boot (an invalid saved pair is
+  ignored). Headless `-p` ignores that overlay and follows `valen.toml`.
+  Without a state path (tests, `-config <file>`) the switch is session-only.
 
 ## Friendly errors
 
@@ -566,7 +567,7 @@ the full height, starts at its heading and scrolls to follow the selected option
 | Click `copy response` (right edge, under last reply) / `/copy` | copy last reply via OSC 52 | — |
 | Ctrl+G | help | help |
 | Ctrl+R / Ctrl+L / Ctrl+U / Ctrl+X | history / sessions / tools / errors | same |
-| Ctrl+Y | cycle OpenRouter routing: none → floor → nitro → exacto, wraps (silent no-op on Go/Zen) | same |
+| Ctrl+Y | cycle OpenRouter routing: none → floor → nitro → exacto, wraps (silent no-op on non-OpenRouter models) | same |
 | Tab | swap work ↔ plan mode (chatbox border cyan in plan mode, green in work mode; header shows `· plan`; placeholder becomes `Plan mode…  TAB to switch (/help)`; notices: `Plan Mode enabled: read only and planning` / `Work mode enabled`) | — |
 | Ctrl+N | new blank session (fresh id + file; blocked while busy) | same |
 | Ctrl+T | thinking level cycle low→high, wraps to low | same |

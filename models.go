@@ -205,18 +205,28 @@ func modelProvider(id string) string {
 	return ProviderGo
 }
 
+// effectiveRouting returns routing only for OpenRouter models: affinity is an
+// OpenRouter-only knob, so Go, Zen and OpenAI models always report none.
+func effectiveRouting(model, routing string) string {
+	if modelProvider(model) != ProviderOpenRouter {
+		return ""
+	}
+	return normalizeRouting(routing)
+}
+
 // wireModelID strips the provider prefix for the wire. OpenRouter expects the
 // full vendor/model ID and, when routing is set, a `:floor`/`:nitro`/`:exacto`
-// provider-sorting suffix; Go and Zen pass their bare ID through (routing is
-// OpenRouter-only and ignored there). The routing argument is optional so all
-// non-request callers (family/transport lookups) keep using the bare ID.
+// provider-sorting suffix; Go, Zen and OpenAI pass their bare ID through
+// (routing is OpenRouter-only and ignored there). The routing argument is
+// optional so all non-request callers (family/transport lookups) keep using
+// the bare ID.
 func wireModelID(id string, routing ...string) string {
 	base := strings.TrimSpace(id)
 	switch modelProvider(id) {
 	case ProviderOpenRouter:
 		base = base[len(ProviderOpenRouter)+1:]
 		if len(routing) > 0 {
-			if r := normalizeRouting(routing[0]); r != "" && validRouting(r) {
+			if r := effectiveRouting(id, routing[0]); r != "" && validRouting(r) {
 				base += ":" + r
 			}
 		}

@@ -98,18 +98,30 @@ func start() error {
 	var attachFiles fileFlag
 	flag.Var(&attachFiles, "f", "attach a file, folder or image (repeatable, headless)")
 	flag.Var(&attachFiles, "file", "attach a file, folder or image (alias for -f)")
+	streamFlag := flag.Bool("stream", false, "headless: write events as NDJSON on stdout, ending with a done line")
+	historyFlag := flag.String("history", "", "headless: JSON array of prior user/assistant messages to continue from")
+	resumeFlag := flag.String("r", "", "headless: continue a saved session (ID or JSONL path)")
+	flag.StringVar(resumeFlag, "resume", "", "alias for -r")
+	noQuestionFlag := flag.Bool("no-question", false, "headless: do not offer AskUserQuestion")
+	noTaskFlag := flag.Bool("no-task", false, "headless: do not offer the task subagent")
+	noTodoFlag := flag.Bool("no-todo", false, "headless: do not offer todowrite/todoread")
+	oneShotFlag := flag.Bool("one-shot-task", false, "background job: -p with --no-question --no-task --no-todo")
 	// flag.Parse stops at the first positional, but prompts are commonly
 	// written before trailing flags: valen -p "..." -v. Reorder so flags win
 	// regardless of position.
 	flag.CommandLine.Parse(reorderFlags(os.Args[1:], map[string]bool{
-		"config": true, "dir": true, "shell": true, "dvlog": true, "f": true, "file": true,
+		"config": true, "dir": true, "shell": true, "dvlog": true, "f": true, "file": true, "history": true, "r": true, "resume": true,
 	}))
 	setShellInterpreter(*shellFlag)
+	if *oneShotFlag {
+		*printMode, *noQuestionFlag, *noTaskFlag, *noTodoFlag = true, true, true, true
+	}
 
 	// Resolve paths before any chdir so relative paths keep working.
 	// Default: the user config dir, seeded from the embedded default on first
 	// run. An explicit -config pins that file: no seeding, and no saved
-	// model/thinking overlay (so the file alone decides).
+	// model/thinking overlay (so the file alone decides). -p also follows the
+	// file: the state.json overlay is TUI-only.
 	cfgAbs := *cfgPath
 	statePath := ""
 	if cfgAbs == "" {
@@ -129,6 +141,22 @@ func start() error {
 	if dvLogAbs != "" {
 		if abs, err := filepath.Abs(dvLogAbs); err == nil {
 			dvLogAbs = abs
+		}
+	}
+	// Relative to the launch directory, like -config: -dir may chdir below.
+	historyAbs := *historyFlag
+	if historyAbs != "" {
+		if abs, err := filepath.Abs(historyAbs); err == nil {
+			historyAbs = abs
+		}
+	}
+	// A path-like -r argument is resolved from the launch directory too; a
+	// bare value stays a session ID and resolves in the project folder after
+	// the chdir.
+	resumeAbs := *resumeFlag
+	if resumeAbs != "" && (filepath.IsAbs(resumeAbs) || strings.ContainsRune(resumeAbs, filepath.Separator) || strings.HasSuffix(resumeAbs, ".jsonl")) {
+		if abs, err := filepath.Abs(resumeAbs); err == nil {
+			resumeAbs = abs
 		}
 	}
 	if err := dvlog.Init(*dvFlag, dvLogAbs); err != nil {
@@ -155,6 +183,12 @@ func start() error {
 	if tuiMode && verbose > 0 {
 		return errors.New("-v/-vv apply to one-shot mode (-p)")
 	}
+	if tuiMode && (*streamFlag || historyAbs != "" || resumeAbs != "") {
+		return errors.New("--stream, --history and -r/--resume apply to one-shot mode (-p)")
+	}
+	if resumeAbs != "" && historyAbs != "" {
+		return errors.New("-r/--resume and --history cannot be combined")
+	}
 	// In -q mode the positional arg is the prompt, never a workdir.
 	workdir, rest := splitWorkdirArg(*dirFlag, flag.Args(), tuiMode && !qMode)
 	if workdir != "" {
@@ -179,12 +213,28 @@ func start() error {
 		return fmt.Errorf("workdir: %w", err)
 	}
 
+	// Resume loads before the config so the saved ID can win over the
+	// default new one, and before any client captures cfg.SessionID.
+	var resumed *Session
+	if resumeAbs != "" {
+		path, err := resolveSessionArg(resumeAbs)
+		if err != nil {
+			return err
+		}
+		if resumed, err = openSession(path); err != nil {
+			return fmt.Errorf("resume %s: %w", path, err)
+		}
+	}
+
 	cfg, err := loadConfig(cfgAbs)
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
+	if resumed != nil {
+		cfg.SessionID = resumed.ID
+	}
 	setSandboxConfig(cfg.Sandbox)
-	if statePath != "" {
+	if statePath != "" && tuiMode {
 		cfg = applyUserState(cfg, statePath)
 	}
 	if *planFlag {
@@ -202,43 +252,15 @@ func start() error {
 	ctx, stop := signal.NotifyContext(context.Background(), interruptSignals()...)
 	defer stop()
 
-	registry := NewRegistry()
-	unknown := registry.LoadBuiltins(cfg.Tools)
-	for _, name := range unknown {
-		fmt.Fprintln(os.Stderr, "config: unknown builtin tool:", name)
-	}
-	if !registry.Has("AskUserQuestion") {
-		if err := registry.Add(AskUserQuestionTool()); err != nil {
-			return fmt.Errorf("register AskUserQuestion: %w", err)
-		}
-	}
-	// Session plan tools are always present (like AskUserQuestion) so chunky
-	// work can break into small todowrite steps even when valen.toml omits
-	// them. In-memory only; the call records fold into the session JSONL.
-	for _, t := range []Tool{TodoWriteTool(), TodoReadTool()} {
-		if !registry.Has(t.Name) {
-			if err := registry.Add(t); err != nil {
-				return fmt.Errorf("register %s: %w", t.Name, err)
-			}
-		}
-	}
-
 	warn := func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) }
-	closers := LoadMCP(ctx, cfg.MCPServers, registry, warn)
+	set := toolSet{noQuestion: *noQuestionFlag, noTask: *noTaskFlag, noTodo: *noTodoFlag}
+	registry, closers, err := buildRegistry(ctx, cfg, apiKey, set, warn)
+	if err != nil {
+		return err
+	}
 	defer closeAll(closers)
 
 	client := newClient(cfg, apiKey)
-	// task delegates to a same-model subagent so exploration stays out of
-	// main history; always present like the plan tools. The runner closes
-	// over client/config here where they live.
-	if !registry.Has("task") {
-		if err := registry.Add(TaskTool(func(ctx context.Context, prompt, kind string) (string, error) {
-			turnCfg := currentTurnConfig(ctx, cfg)
-			return runTask(ctx, turnCfg, newClient(turnCfg, apiKey), apiKey, newHTTPClient(turnCfg), prompt, kind)
-		})); err != nil {
-			return fmt.Errorf("register task: %w", err)
-		}
-	}
 	if tuiMode {
 		dvlog.Logf("start model=%s transport=%s thinking=%s maxrounds=%d budget~%dtok schemastate~%dtok tools=%d tui=true",
 			cfg.Model, modelTransport(cfg.Model), cfg.Thinking, cfg.MaxRounds, contextBudget(cfg), requestToolsTokens(registry), len(registry.Names()))
@@ -258,7 +280,78 @@ func start() error {
 	if prompt == "" {
 		return errors.New("empty prompt")
 	}
-	return chatWithAttachments(ctx, cfg, client, apiKey, newHTTPClient(cfg), registry, prompt, attachFiles, verbose, os.Stdout, os.Stderr)
+	opts := headlessOptions{files: attachFiles, verbose: verbose, stream: *streamFlag, noQuestion: *noQuestionFlag, resume: resumed}
+	if historyAbs != "" {
+		if opts.history, err = loadHistoryFile(historyAbs); err != nil {
+			return err
+		}
+	}
+	return chatWithAttachments(ctx, cfg, client, apiKey, newHTTPClient(cfg), registry, prompt, opts, os.Stdout, os.Stderr)
+}
+
+// toolSet switches off the tools a voice or job turn must not have: they must
+// never block on stdin, spawn subagents, or keep todo state.
+type toolSet struct {
+	noQuestion, noTask, noTodo bool
+}
+
+// excludes reports whether a configured builtin is switched off by set. The
+// config tools list cannot bring these back.
+func (s toolSet) excludes(name string) bool {
+	switch name {
+	case "AskUserQuestion":
+		return s.noQuestion
+	case "todowrite", "todoread":
+		return s.noTodo
+	}
+	return false
+}
+
+// buildRegistry assembles the tools for one run: the configured builtins, the
+// interactive, plan and task tools unless set turns them off, then the MCP
+// servers. The closers stop the MCP servers.
+func buildRegistry(ctx context.Context, cfg Config, apiKey string, set toolSet, warn func(string, ...any)) (*Registry, []func(), error) {
+	registry := NewRegistry()
+	var builtins []string
+	for _, name := range cfg.Tools {
+		if !set.excludes(name) {
+			builtins = append(builtins, name)
+		}
+	}
+	for _, name := range registry.LoadBuiltins(builtins) {
+		warn("config: unknown builtin tool: %s", name)
+	}
+	if !set.noQuestion && !registry.Has("AskUserQuestion") {
+		if err := registry.Add(AskUserQuestionTool()); err != nil {
+			return nil, nil, fmt.Errorf("register AskUserQuestion: %w", err)
+		}
+	}
+	// Session plan tools are always present (like AskUserQuestion) so chunky
+	// work can break into small todowrite steps even when valen.toml omits
+	// them. In-memory only; the call records fold into the session JSONL.
+	if !set.noTodo {
+		for _, t := range []Tool{TodoWriteTool(), TodoReadTool()} {
+			if !registry.Has(t.Name) {
+				if err := registry.Add(t); err != nil {
+					return nil, nil, fmt.Errorf("register %s: %w", t.Name, err)
+				}
+			}
+		}
+	}
+	closers := LoadMCP(ctx, cfg.MCPServers, registry, warn)
+	// task delegates to a same-model subagent so exploration stays out of
+	// main history; always present like the plan tools. The runner closes
+	// over the config here where it lives.
+	if !set.noTask && !registry.Has("task") {
+		if err := registry.Add(TaskTool(func(ctx context.Context, prompt, kind string) (string, error) {
+			turnCfg := currentTurnConfig(ctx, cfg)
+			return runTask(ctx, turnCfg, newClient(turnCfg, apiKey), apiKey, newHTTPClient(turnCfg), prompt, kind)
+		})); err != nil {
+			closeAll(closers)
+			return nil, nil, fmt.Errorf("register task: %w", err)
+		}
+	}
+	return registry, closers, nil
 }
 
 // fileFlag collects repeated -f/--file attachment paths in order.

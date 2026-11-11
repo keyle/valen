@@ -128,7 +128,8 @@ func (m *tuiModel) headerView() string {
 	if m.cfg.Thinking != "" {
 		model += " · " + m.cfg.Thinking
 	}
-	// Routing affinity rides only on OpenRouter models; Go and Zen ignore it.
+	// Routing affinity rides only on OpenRouter models; Go, Zen and OpenAI
+	// ignore it.
 	if r := normalizeRouting(m.cfg.Routing); r != "" && modelProvider(m.cfg.Model) == ProviderOpenRouter {
 		model += " · " + r
 	}

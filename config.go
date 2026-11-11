@@ -55,10 +55,14 @@ func normalizeProviderList(in []string) []string {
 type Config struct {
 	Model    string `toml:"model"`
 	Thinking string `toml:"thinking"`
-	// Routing selects OpenRouter's provider-sorting variant (floor/nitro/
-	// exacto; empty = none). Ignored on Go/Zen: the suffix rides the wire
-	// model only, so the stored model never carries it.
-	Routing string `toml:"routing"`
+	// Routing selects OpenRouter's provider affinity/sorting variant (floor/
+	// nitro/exacto; empty = none). OpenRouter only: loadConfig clears it for
+	// Go/Zen/OpenAI models, and the suffix rides the wire model only, so the
+	// stored model never carries it. Affinity is the documented spelling of
+	// the same setting; loadConfig folds it into Routing and rejects
+	// conflicting values.
+	Routing  string `toml:"routing"`
+	Affinity string `toml:"affinity"`
 	// ProviderIgnore / ProviderOnly are OpenRouter's `provider.ignore` /
 	// `provider.only` routing lists (ignored on Go/Zen). ProviderIgnore
 	// nil keeps the default ["baseten"]; an explicit empty list clears it.
@@ -97,6 +101,10 @@ type Config struct {
 	// Attachments caps what one attached file may carry; every key has a
 	// built-in default (see attach.go).
 	Attachments AttachmentConfig `toml:"attachments"`
+	// ExtraBody is merged into each chat-transport request body, for provider
+	// options valen has no field for (e.g. repetition_penalty). Keys valen
+	// sets itself are rejected at load time.
+	ExtraBody map[string]any `toml:"extra_body"`
 }
 
 // CompactionConfig mirrors the [compaction] table: summary-mode only,
@@ -199,6 +207,20 @@ type MCPServer struct {
 	Env  map[string]string `toml:"env"`
 }
 
+// routingAlias folds the `affinity` config key onto the canonical `routing`
+// field. Both name the same OpenRouter provider-sorting mode; setting both to
+// different modes is an error so the effective mode is never ambiguous.
+func routingAlias(routing, affinity string) (string, error) {
+	r, a := normalizeRouting(routing), normalizeRouting(affinity)
+	if r != "" && a != "" && r != a {
+		return "", fmt.Errorf("routing %q and affinity %q are aliases; set only one", r, a)
+	}
+	if r == "" {
+		return a, nil
+	}
+	return r, nil
+}
+
 func loadConfig(path string) (Config, error) {
 	var cfg Config
 	md, err := toml.DecodeFile(path, &cfg)
@@ -222,10 +244,15 @@ func loadConfig(path string) (Config, error) {
 	if !validThinkingLevel(cfg.Model, cfg.Thinking) {
 		return cfg, fmt.Errorf("thinking %q is not available for model %q (try: %s)", cfg.Thinking, cfg.Model, strings.Join(AvailableThinkingLevels(cfg.Model), ", "))
 	}
-	cfg.Routing = normalizeRouting(cfg.Routing)
-	if !validRouting(cfg.Routing) {
-		return cfg, fmt.Errorf("routing %q is not valid (try: none, floor, nitro, exacto)", cfg.Routing)
+	routing, err := routingAlias(cfg.Routing, cfg.Affinity)
+	if err != nil {
+		return cfg, err
 	}
+	cfg.Routing, cfg.Affinity = routing, ""
+	if !validRouting(cfg.Routing) {
+		return cfg, fmt.Errorf("affinity %q is not valid (try: none, floor, nitro, exacto)", cfg.Routing)
+	}
+	cfg.Routing = effectiveRouting(cfg.Model, cfg.Routing)
 	cfg.ProviderIgnore = normalizeProviderList(cfg.ProviderIgnore)
 	cfg.ProviderOnly = normalizeProviderList(cfg.ProviderOnly)
 	if len(cfg.ProviderIgnore) > 0 && len(cfg.ProviderOnly) > 0 {
@@ -260,6 +287,9 @@ func loadConfig(path string) (Config, error) {
 	if err := cfg.Sandbox.validate(); err != nil {
 		return cfg, err
 	}
+	if err := validateExtraBody(cfg); err != nil {
+		return cfg, err
+	}
 	if cfg.SessionID == "" {
 		cfg.SessionID = newSessionID()
 	}
@@ -270,4 +300,29 @@ func loadConfig(path string) (Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+// extraBodyReserved are request fields valen builds itself. extra_body must
+// not replace them: the loop, the tool list and the OpenRouter routing object
+// depend on them.
+var extraBodyReserved = map[string]bool{
+	"model": true, "messages": true, "stream": true, "stream_options": true,
+	"tools": true, "tool_choice": true, "provider": true,
+}
+
+// validateExtraBody rejects extra_body on transports that do not merge it, so
+// a setting is never silently ignored, and rejects reserved keys.
+func validateExtraBody(cfg Config) error {
+	if len(cfg.ExtraBody) == 0 {
+		return nil
+	}
+	if t := modelTransport(cfg.Model); t != "chat" {
+		return fmt.Errorf("extra_body is only sent on chat-transport models; %q uses %s", cfg.Model, t)
+	}
+	for k := range cfg.ExtraBody {
+		if extraBodyReserved[k] {
+			return fmt.Errorf("extra_body may not set %q: valen sets it", k)
+		}
+	}
+	return nil
 }

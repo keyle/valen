@@ -844,6 +844,7 @@ func TestRoutingWireSuffix(t *testing.T) {
 		{or, "", "moonshotai/kimi-k3"},
 		{"glm-5.3", "floor", "glm-5.3"},
 		{"zen/claude-haiku-5-5", "nitro", "claude-haiku-5-5"},
+		{"openai/gpt-6", "nitro", "gpt-6"},
 		{"  openrouter/anthropic/claude-sonnet-5.5 ", "Floor", "anthropic/claude-sonnet-5.5:floor"},
 	}
 	for _, c := range cases {

@@ -50,7 +50,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `messages.go` | Anthropic `/messages` transport: wire format, thinking, tool loop |
 | `responses.go` | OpenAI `/responses` transport (stateless): wire format, reasoning, tool loop |
 | `stream.go` | Shared streaming layer: raw POST, SSE scanner, unary-JSON fallback |
-| `session.go` | Turn model + JSONL session log at `$XDG_DATA_HOME/valen/sessions/<workdir>-<hash>/` (one folder per working directory); both TUI turns and headless `-p` runs append, so every call is resumable from `/sessions` |
+| `session.go` | Turn model + JSONL session log at `$XDG_DATA_HOME/valen/sessions/<workdir>-<hash>/` (one folder per working directory); both TUI turns and headless `-p` runs append, so every call is resumable from `/sessions` or headless `-r` |
 | `compaction.go` | Summary-mode compaction (prune + cheap-model summary, send-side only) |
 | `usage.go` | Quota for the TUI footer: Go plan quota (`GET /usage`) and OpenRouter balance (`GET /credits`) |
 | `errors.go` | Friendly one-line errors mapped from status codes/causes (ctrl+x has details) |
@@ -74,7 +74,8 @@ and exposes tools plus any number of stdio MCP servers to the model.
 Config lives in `~/.config/valen/` (`$XDG_CONFIG_HOME/valen/`), created on
 first run: `valen.toml` (yours; never overwritten), `config-ori.toml` (pristine
 copy of the shipped default, refreshed on upgrade so you can diff), and
-`state.json` (ephemeral state written by valen: last model/thinking/routing). A
+`state.json` (ephemeral TUI state written by valen: last model/thinking/affinity;
+`-p` ignores it and follows `valen.toml`). A
 pre-rename `config.toml` is read as-is when `valen.toml` is absent; it is never
 moved or rewritten. Sessions
 and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
@@ -84,11 +85,11 @@ and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
 
 | Key | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `model` | string | — | **required.** Model ID, e.g. `glm-5.3-flash`, `kimi-k3`, `zen/claude-haiku-5-5`, `openrouter/moonshotai/kimi-k3`, or `openai/gpt-6`. The `zen/` prefix selects OpenCode Zen (`https://opencode.ai/zen/v1`, same OpenCode key as Go; transport chosen per model: gpt/grok/muse → responses; claude and qwen3.5–3.8 plus/flash (all qwen except qwen3.8-max) → messages; qwen3.8-max and the rest → chat; Gemini models are not supported); the `openrouter/` prefix selects the OpenRouter provider (needs its key, below); the `openai/` prefix selects the optional OpenAI API (`https://api.openai.com/v1`, `OPENAI_API_KEY`, always the Responses transport); bare IDs ride OpenCode Go. Switch live with `/models` (ctrl+p); persisted to `valen.toml` |
-| `thinking` | string | empty (provider default) | Reasoning level, per-model (see `/effort` picker): muse-spark `minimal`/`low`/`medium`/`high`/`xhigh`, gpt/grok `low`…`max` (+`none` on gpt), glm/deepseek `low`/`high`/`max` or `high`/`max`, kimi-k3 `max` only, toggle models `none`/`high`, fixed no-control models omit. Switch live with `/effort` (`/thinking` alias) or ctrl+t (cycles low→high, wraps); persisted to `valen.toml`. Unknown models fall back to the full vocabulary until a 400 teaches the valid list, cached at `$XDG_DATA_HOME/valen/thinking_levels.json` |
-| `routing` | string | empty (`none`) | OpenRouter provider-routing variant, sent as a model-slug suffix: `floor` (cheapest; `provider.sort: "price"`), `nitro` (fastest throughput; `provider.sort: "throughput"`), `exacto` (quality-first tool-use sorting), or empty/`none` (OpenRouter's default load balancing). Switch live with `/route [none\|floor\|nitro\|exacto]` or ctrl+y (cycles none → floor → nitro → exacto, wraps); a **silent no-op on Go/Zen**. Persisted to `state.json` alongside `thinking` and stored in favourite slots; ignored on non-OpenRouter models |
-| `provider_ignore` | string[] | `["baseten"]` | OpenRouter `provider.ignore`: provider slugs skipped per request (`openrouter/…` models only; a silent no-op on Go/Zen). Unset keeps the default `["baseten"]`, an explicit `[]` disables the blacklist. Mutually exclusive with `provider_only` (which wins when both are set). The `provider` object merges with the `routing` suffix, which sets `provider.sort` |
-| `provider_only` | string[] | unset | OpenRouter `provider.only`: an allowlist instead of the blacklist. Sent as the request `provider` object alongside `routing` |
+| `model` | string | — | **required.** Model ID, e.g. `glm-5.3-flash`, `kimi-k3`, `zen/claude-haiku-5-5`, `openrouter/moonshotai/kimi-k3`, or `openai/gpt-6`. The `zen/` prefix selects OpenCode Zen (`https://opencode.ai/zen/v1`, same OpenCode key as Go; transport chosen per model: gpt/grok/muse → responses; claude and qwen3.5–3.8 plus/flash (all qwen except qwen3.8-max) → messages; qwen3.8-max and the rest → chat; Gemini models are not supported); the `openrouter/` prefix selects the OpenRouter provider (needs its key, below); the `openai/` prefix selects the optional OpenAI API (`https://api.openai.com/v1`, `OPENAI_API_KEY`, always the Responses transport); bare IDs ride OpenCode Go. Switch live with `/models` (ctrl+p); the TUI persists the choice to `state.json`, while headless `-p` always follows this file |
+| `thinking` | string | empty (provider default) | Reasoning level, per-model (see `/effort` picker): muse-spark `minimal`/`low`/`medium`/`high`/`xhigh`, gpt/grok `low`…`max` (+`none` on gpt), glm/deepseek `low`/`high`/`max` or `high`/`max`, kimi-k3 `max` only, toggle models `none`/`high`, fixed no-control models omit. Switch live with `/effort` (`/thinking` alias) or ctrl+t (cycles low→high, wraps); the TUI persists the choice to `state.json`. Unknown models fall back to the full vocabulary until a 400 teaches the valid list, cached at `$XDG_DATA_HOME/valen/thinking_levels.json` |
+| `affinity` | string | empty (`none`) | OpenRouter provider affinity/routing variant, sent as a model-slug suffix: `floor` (cheapest; `provider.sort: "price"`), `nitro` (fastest throughput; `provider.sort: "throughput"`), `exacto` (quality-first tool-use sorting), or empty/`none` (OpenRouter's default load balancing). `routing` is an accepted alias; set only one (conflicting values are a load error). Switch live with `/route [none\|floor\|nitro\|exacto]` or ctrl+y (cycles none → floor → nitro → exacto, wraps); a **silent no-op on Go/Zen/OpenAI**. Cleared at load and on model switches for non-OpenRouter models. The TUI persists the choice to `state.json` alongside `thinking`; also stored in favourite slots. Ignored on non-OpenRouter models |
+| `provider_ignore` | string[] | `["baseten"]` | OpenRouter `provider.ignore`: provider slugs skipped per request (`openrouter/…` models only; a silent no-op on Go/Zen). Unset keeps the default `["baseten"]`, an explicit `[]` disables the blacklist. Mutually exclusive with `provider_only` (which wins when both are set). The `provider` object merges with the `affinity` suffix, which sets `provider.sort` |
+| `provider_only` | string[] | unset | OpenRouter `provider.only`: an allowlist instead of the blacklist. Sent as the request `provider` object alongside `affinity` |
 | `opencode_key` | string | empty | OpenCode API key itself, shared by Go and Zen. Empty falls back to the `OPENCODE_API_KEY` env var. Missing keys never fail boot — the TUI still opens and `/models` lists all providers; picking or sending with a Go/Zen model and no key says "OpenCode API key not found" |
 | `openrouter_key` | string | empty | OpenRouter API key itself. Empty falls back to the `OPENROUTER_API_KEY` env var. Second provider: `/models` always lists OpenRouter models (`openrouter/<vendor>/<model>`, fallback when offline) served via OpenRouter's OpenAI-compatible chat endpoint. Picking or sending with an `openrouter/…` model and no key says "OpenRouter key not found" |
 | `openai_key` | string | empty | OpenAI API key itself. Empty falls back to the `OPENAI_API_KEY` env var. Optional third provider: when a key is configured, `/models` lists `openai/<model>` from the live `/v1/models` catalog (curated fallback offline), served over the OpenAI Responses API. Without a key the provider stays hidden; picking or sending an `openai/…` model anyway says "OpenAI key not found" |
@@ -101,6 +102,7 @@ and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
 | `request_timeout_seconds` | int | `300` | Optional deadline for each HTTP attempt, including response-body reads (SSE or unary), not the whole turn; retries each get a fresh deadline |
 | `temperature` | float | unset | Pointer semantics: unset omits the field, `0.0` sends zero |
 | `max_tokens` | int | `65536` | Explicit output cap on all three transports (`max_tokens` on Chat/Messages, `max_output_tokens` on Responses); positive configured values are honored without a floor |
+| `[extra_body]` | table | unset | Keys merged into each chat-transport request body (e.g. `repetition_penalty = 1.1`). Chat transport only: a non-chat model with it set is a load error. `model`, `messages`, `stream`, `stream_options`, `tools`, `tool_choice` and `provider` are rejected because valen sets them |
 | `compaction` | table | `auto=true, keep_tokens=15000, buffer=10%, thinking=medium` | Summary-mode, send-side only (prior disk records remain intact): `auto` prunes and summarizes before send and retries once after provider context overflow; `keep_tokens` is a soft whole-turn tail target, always protecting the entire current turn; `buffer` headroom below `max_context_tokens`; `model` summarizer override (empty = session model); `thinking` independent of top-level effort (default `medium` when accepted, cheapest fallback per model) |
 | `[tui]` | table | `max_lines=1000`, `sound=true`, `select_scroll_ms=50` | Transcript rendering (TUI only). `max_lines` bounds the rendered committed scrollback so the viewport never re-parses an ever-growing transcript (the slowdown after long sessions). Over budget, older turns collapse their reasoning (user prompts, tool lines and replies are kept whole, never cut), then drop oldest-first behind a `… N earlier turn(s) trimmed` row; disk history stays lossless and ctrl+h/recall views still expand everything. `0` disables trimming. `sound` (default `true`) rings the terminal bell (BEL) when a question appears or a turn finishes (not on cancel); `false` mutes it. `select_scroll_ms` (default `50`) paces the selection drag auto-scroll: one viewport line per interval while dragging past the top/bottom edge |
 | `[sandbox]` | table | `allow`, `deny`, `allow_bind`, `ipc_allow` (all unset = built-in defaults) | Shell sandbox policy (see "Shell sandbox"); declared before `[input]` |
@@ -236,14 +238,15 @@ use the learned list.
 
 ### OpenRouter routing variants
 
-`routing` selects OpenRouter's provider-sorting variant and is appended to the
-wire model as a suffix by `wireModelID`: `floor` → `:floor` (cheapest;
+`affinity` (alias `routing`) selects OpenRouter's provider-sorting variant and
+is appended to the wire model as a suffix by `wireModelID`: `floor` → `:floor` (cheapest;
 `provider.sort: "price"`, flex-tier eligible), `nitro` → `:nitro` (fastest
 throughput; `provider.sort: "throughput"`, priority-tier eligible), `exacto` →
 `:exacto` (quality-first provider sorting for tool use), empty/`none` → the
 bare slug (OpenRouter's default inverse-square price-weighted load balancing,
-unchanged). It applies only to `openrouter/…` models; on Go and Zen the setting
-is ignored and ctrl+y is a **silent no-op** (no notice, no state write). Switch
+unchanged). It applies only to `openrouter/…` models; on Go, Zen and OpenAI
+the setting is ignored and cleared at load and on model switches, and ctrl+y is
+a **silent no-op** (no notice, no state write). Switch
 live with `/route` or ctrl+y (cycles none → floor → nitro → exacto, wraps). The
 suffix lives on the wire only, so the stored/config model never carries it and
 a model switch or `none` cannot leave a stale suffix.
@@ -616,7 +619,8 @@ deterministic. Tools are registered as
   persist round-trip, `thinking` validation in `loadConfig`, plus OpenRouter:
   provider prefix/wire/display/base forms, family levels through the vendor
   segment, provider validation in `loadConfig`, catalog fetch/filter,
-  the routing suffix/validation (`floor`/`nitro`/`exacto`, no-op on Go/Zen),
+  the routing suffix/validation (`floor`/`nitro`/`exacto`, no-op and cleared
+  on Go/Zen/OpenAI),
   and the OpenRouter chat wire shape (stripped model, OR key, no session
   header, `reasoning_effort`). Zen: `zenTransport` per model, provider
   prefix/wire/base forms, catalog fetch filtering Gemini, and the shared
@@ -679,7 +683,27 @@ go run . -p "..." -dv 2> trace.log     # timestamped round/tool/size trace
 go run . -dvlog trace.log              # same, to a file (use in TUI mode)
 go run . -p "..." -v                   # stream thinking summaries + tool calls to stderr
 go run . -p "..." -vv                  # also raw analysis, answer text and tool results
+go run . -p "..." --stream             # NDJSON events on stdout, one per line, a done line last
+go run . -p "..." --history h.json     # continue from prior user/assistant messages (JSON array)
+go run . -p "..." -r <session-id|path> # continue a saved session in place (headless)
+go run . -p "..." --no-question --no-task --no-todo   # drop the interactive and delegating tools
+go run . -p "..." --one-shot-task      # background job bundle: -p plus the three --no-* switches
 ```
+
+`--stream` writes each turn event as one JSON object per line (`kind`, plus the
+event's own fields); the last line is `{"kind":"done","usage":...}`, with an
+`error` object when the turn failed and a `session` path when the turn was
+saved. On OpenRouter, `or_meta` carries the generation `id`
+for `/generation` lookups (billing and cancellation checks). `--history` reads only `user` and `assistant`
+messages (`role`, `content`), before the new prompt; other roles are rejected.
+Plain `-p` prints `[session <abs path>]` on stderr after the turn is saved, so
+an external driver can resume without guessing the project session folder; a
+save failure warns instead and omits the path. `-r`/`--resume` takes that path
+or a bare session ID and appends the new turn to the same JSONL (title, turn
+count and `x-opencode-session` stay), using the current config's model and
+thinking; it is headless only and cannot be combined with `--history`.
+`--no-question` also denies out-of-scope file and shell approvals, since nobody
+can answer them. Tool names from MCP servers are `<server>__<tool>`.
 
 Headless `-v`/`-vv` stream to stderr while the final answer stays on stdout.
 `-p` takes exactly one quoted argument; unquoted words are rejected rather
@@ -701,9 +725,10 @@ TUI model controls: `/models [filter]` (ctrl+p) lists the OpenCode Go, OpenCode
 Zen and OpenRouter catalogs and
 switches; `/effort [level]` (`/thinking` alias) sets the thinking level and
 `/route [none|floor|nitro|exacto]` (ctrl+y) the OpenRouter routing variant for
-the current model (routing is a no-op elsewhere). Both persist to `state.json` in the config dir, so the last selection
-sticks across runs and overrides `valen.toml`'s `model`/`thinking`/`routing`; headless
-mode reads the same overlay (not with `-config <file>`). `/plan` toggles plan
+the current model (routing is a no-op elsewhere). Both persist to `state.json` in the config dir, so in the TUI the last selection
+sticks across runs and overrides `valen.toml`'s `model`/`thinking`/`affinity`.
+Headless `-p` ignores that overlay and follows `valen.toml`; `-config <file>`
+never overlays. `/plan` toggles plan
 mode at runtime (read-only investigation, reply is the plan; header shows
 `· plan`); it does not persist. The TUI footer also
 shows Go plan usage (`5h` / `7d` / `30d`), yellow past 80% and pink at the cap —

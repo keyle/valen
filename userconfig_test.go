@@ -166,6 +166,14 @@ func TestRoutingStateRoundTrip(t *testing.T) {
 	if cfg.Model != "openrouter/z-ai/glm-5.3" || cfg.Routing != "" {
 		t.Fatalf("invalid routing must be ignored: %+v", cfg)
 	}
+	// Routing is OpenRouter-only: a Go state drops a stale saved routing.
+	if err := os.WriteFile(p, []byte(`{"model":"glm-5.3","thinking":"high","routing":"nitro"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg = applyUserState(Config{Model: "openrouter/moonshotai/kimi-k3", Routing: "floor"}, p)
+	if cfg.Model != "glm-5.3" || cfg.Routing != "" {
+		t.Fatalf("Go state must clear routing: %+v", cfg)
+	}
 }
 
 func TestSlotsRoutingRoundTrip(t *testing.T) {

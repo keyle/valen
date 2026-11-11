@@ -115,6 +115,50 @@ provider_only = ["anthropic"]
 	}
 }
 
+// TestAffinityAlias: `affinity` is the documented spelling of `routing`;
+// both fold onto one mode and conflicting values are rejected.
+func TestAffinityAlias(t *testing.T) {
+	cfg, err := loadConfig(writeConfig(t, `model = "openrouter/moonshotai/kimi-k3"
+affinity = "Nitro"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Routing != "nitro" || cfg.Affinity != "" {
+		t.Fatalf("affinity=%q routing=%q", cfg.Affinity, cfg.Routing)
+	}
+	if got := wireModelID(cfg.Model, cfg.Routing); got != "moonshotai/kimi-k3:nitro" {
+		t.Fatalf("wire model=%q", got)
+	}
+	// "none" from one key does not conflict with a real mode from the other.
+	cfg, err = loadConfig(writeConfig(t, `model = "openrouter/moonshotai/kimi-k3"
+routing = "none"
+affinity = "floor"
+`))
+	if err != nil || cfg.Routing != "floor" {
+		t.Fatalf("routing=%q err=%v", cfg.Routing, err)
+	}
+	if _, err := loadConfig(writeConfig(t, `model = "openrouter/moonshotai/kimi-k3"
+routing = "floor"
+affinity = "nitro"
+`)); err == nil {
+		t.Fatal("conflicting routing and affinity must be rejected")
+	}
+	// Affinity is OpenRouter-only: other providers drop it at load.
+	for _, model := range []string{"glm-5.3", "zen/claude-haiku-5-5", "openai/gpt-6"} {
+		cfg, err := loadConfig(writeConfig(t, "model = \""+model+"\"\naffinity = \"nitro\"\n"))
+		if err != nil {
+			t.Fatalf("%s: %v", model, err)
+		}
+		if cfg.Routing != "" {
+			t.Fatalf("%s: routing=%q want empty", model, cfg.Routing)
+		}
+		if got := wireModelID(cfg.Model, cfg.Routing); strings.Contains(got, ":") {
+			t.Fatalf("%s: wire=%q", model, got)
+		}
+	}
+}
+
 func TestLoadConfigRejectsMissingModel(t *testing.T) {
 	if _, err := loadConfig(writeConfig(t, "base_url = \"x\"\n")); err == nil {
 		t.Fatal("expected error")

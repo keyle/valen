@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -120,6 +121,54 @@ func newSession(cfg Config) (*Session, error) {
 
 func metaPath(jsonlPath string) string {
 	return jsonlPath + ".meta.json"
+}
+
+// resolveSessionArg maps -r/--resume to a JSONL path: an absolute path or an
+// existing file wins, anything else names a session in this project's session
+// folder. A miss names both paths tried.
+func resolveSessionArg(arg string) (string, error) {
+	if filepath.IsAbs(arg) {
+		return arg, nil
+	}
+	if abs, err := filepath.Abs(arg); err == nil {
+		if _, err := os.Stat(abs); err == nil {
+			return abs, nil
+		}
+	}
+	dir, err := sessionsDir()
+	if err != nil {
+		return "", err
+	}
+	name := arg
+	if !strings.HasSuffix(name, ".jsonl") {
+		name += ".jsonl"
+	}
+	path := filepath.Join(dir, name)
+	if _, err := os.Stat(path); err != nil {
+		abs, _ := filepath.Abs(arg)
+		return "", fmt.Errorf("resume %q: no session at %s or %s", arg, abs, path)
+	}
+	return path, nil
+}
+
+// openSession loads a saved JSONL for -r/--resume without creating, titling or
+// pruning anything. The ID comes from the file name, so the resumed run keeps
+// the same x-opencode-session.
+func openSession(path string) (*Session, error) {
+	turns, err := loadSession(path)
+	if err != nil {
+		return nil, err
+	}
+	s := &Session{ID: strings.TrimSuffix(filepath.Base(path), ".jsonl"), Path: path, Turns: turns}
+	for _, t := range turns {
+		s.TotalUsage.Prompt += t.Usage.Prompt
+		s.TotalUsage.Completion += t.Usage.Completion
+		s.TotalUsage.Total += t.Usage.Total
+	}
+	if meta, err := loadSessionMeta(metaPath(path)); err == nil {
+		s.Title, s.Model, s.Effort = meta.Title, meta.Model, meta.Effort
+	}
+	return s, nil
 }
 
 func loadSessionMeta(path string) (SessionMeta, error) {
@@ -260,6 +309,42 @@ func loadSession(path string) ([]Turn, error) {
 		}
 		turns = append(turns, t)
 	}
+}
+
+// historyFromTurns rebuilds the wire history for a resumed session: the newest
+// checkpoint, then the turns after it replayed as prompt, tool calls/results
+// and reply. The system message is refreshed from the current config, so a
+// resumed run never carries a stale prompt.
+func historyFromTurns(cfg Config, turns []Turn) []openai.ChatCompletionMessage {
+	history := seedHistory(cfg)
+	start := 0
+	for i := len(turns) - 1; i >= 0; i-- {
+		if len(turns[i].History) > 0 {
+			history = append([]openai.ChatCompletionMessage(nil), turns[i].History...)
+			start = i + 1
+			break
+		}
+	}
+	for i := start; i < len(turns); i++ {
+		t := turns[i]
+		history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: t.Prompt})
+		for j, tr := range t.Tools {
+			id := tr.ID
+			if id == "" {
+				id = fmt.Sprintf("legacy-%d-%d", i, j)
+			}
+			history = append(history,
+				openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: id, Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: tr.Name, Arguments: tr.Args}}}},
+				openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: id, Content: tr.Output})
+		}
+		if t.Reply != "" {
+			history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: t.Reply})
+		}
+	}
+	if len(history) > 0 && history[0].Role == openai.ChatMessageRoleSystem {
+		history[0].Content = effectiveSystem(cfg)
+	}
+	return history
 }
 
 // listSessions returns session JSONL paths, newest first.

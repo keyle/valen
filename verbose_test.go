@@ -63,7 +63,7 @@ func TestChatVerboseStreamsThinking(t *testing.T) {
 		srv := sseServer(t, &bodies, stream)
 		cfg := newTestConfig(srv.URL)
 		var stdout, stderr bytes.Buffer
-		err := chatWithAttachments(context.Background(), cfg, newClient(cfg, "key"), "key", srv.Client(), NewRegistry(), "hi", nil, tc.level, &stdout, &stderr)
+		err := chatWithAttachments(context.Background(), cfg, newClient(cfg, "key"), "key", srv.Client(), NewRegistry(), "hi", headlessOptions{verbose: tc.level}, &stdout, &stderr)
 		if err != nil {
 			t.Fatalf("level %d: %v", tc.level, err)
 		}

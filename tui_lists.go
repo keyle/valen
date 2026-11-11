@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/sashabaranov/go-openai"
 )
 
 func sessionLabel(s *Session) string {
@@ -307,34 +306,7 @@ func (m *tuiModel) resumeSessionPath(path string) {
 		m.session.TotalUsage.Completion += t.Usage.Completion
 		m.session.TotalUsage.Total += t.Usage.Total
 	}
-	m.history = seedHistory(m.cfg)
-	start := 0
-	for i := len(turns) - 1; i >= 0; i-- {
-		if len(turns[i].History) > 0 {
-			m.history = append([]openai.ChatCompletionMessage(nil), turns[i].History...)
-			start = i + 1
-			break
-		}
-	}
-	for i := start; i < len(turns); i++ {
-		t := turns[i]
-		m.history = append(m.history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: t.Prompt})
-		for j, tr := range t.Tools {
-			id := tr.ID
-			if id == "" {
-				id = fmt.Sprintf("legacy-%d-%d", i, j)
-			}
-			m.history = append(m.history,
-				openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: id, Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: tr.Name, Arguments: tr.Args}}}},
-				openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: id, Content: tr.Output})
-		}
-		if t.Reply != "" {
-			m.history = append(m.history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: t.Reply})
-		}
-	}
-	if len(m.history) > 0 && m.history[0].Role == openai.ChatMessageRoleSystem {
-		m.history[0].Content = effectiveSystem(m.cfg)
-	}
+	m.history = historyFromTurns(m.cfg, turns)
 	restoreTodosFromTurns(turns)
 	if meta, err := loadSessionMeta(metaPath(path)); err == nil {
 		m.session.Title, m.session.Model, m.session.Effort = meta.Title, meta.Model, meta.Effort
@@ -543,8 +515,8 @@ func (m *tuiModel) renderSlotsList() string {
 		key := string(slotKeys[i])
 		line := "alt+" + key
 		if s, ok := m.slots[key]; ok {
-			line += fmt.Sprintf("  %s · %s%s", displayModelID(s.model), effortLabel(s.thinking), slotRoutingSuffix(s.routing))
-			if s.model == m.cfg.Model && s.thinking == m.cfg.Thinking && normalizeRouting(s.routing) == normalizeRouting(m.cfg.Routing) {
+			line += fmt.Sprintf("  %s · %s%s", displayModelID(s.model), effortLabel(s.thinking), slotRoutingSuffix(s.model, s.routing))
+			if s.model == m.cfg.Model && s.thinking == m.cfg.Thinking && effectiveRouting(s.model, s.routing) == effectiveRouting(m.cfg.Model, m.cfg.Routing) {
 				line += "  ● current"
 			}
 		} else {

@@ -12,7 +12,8 @@ model = "openrouter/anthropic/claude-sonnet-5.5"
                                # Unknown models learn from the provider 400 and
                                # cache to $XDG_DATA_HOME/valen/thinking_levels.json.
                                # Switch live with /models (ctrl+p) and /effort — saved to state.json beside this file
-                               # (overrides model/thinking here; delete it to reset).
+                               # (TUI only: the saved picker selection overrides model/thinking here;
+                               # -p always follows this file; delete state.json to reset).
 thinking = "high"
 tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "grep"]
 # API keys: empty by default, falling back to the env vars
@@ -21,11 +22,12 @@ tools = ["web_search", "web_fetch", "shell", "read", "write", "edit", "glob", "g
 opencode_key = ""
 openrouter_key = ""
 openai_key = ""
-# OpenRouter routing variants (openrouter/… models only; ignored on Go/Zen):
-# routing = "floor"           # "" none (default load balancing) | floor
+# OpenRouter provider affinity (openrouter/… models only; ignored and cleared on Go/Zen/OpenAI):
+# affinity = "nitro"          # "" none (default load balancing) | floor
 #                             # (cheapest) | nitro (fastest tps) | exacto
 #                             # (quality-first tool use). Sent as a model-slug
-#                             # suffix. Cycle live with ctrl+y or /route.
+#                             # suffix. `routing` is an accepted alias; set only
+#                             # one. Cycle live with ctrl+y or /route (TUI).
 # OpenRouter provider routing (openrouter/… models only; ignored on Go/Zen),
 # sent as the request `provider` object. provider_ignore and provider_only are
 # mutually exclusive (provider_only wins when both are set).
@@ -76,6 +78,8 @@ openai_key = ""
 # temperature = 0.2               # omit entirely for provider defaults
 # max_tokens = 65536             # output cap on all three transports; reasoning counts; positive
                                 # explicit values are honored without a floor.
+# [extra_body]                  # chat-transport models only: merged into each request body.
+# repetition_penalty = 1.1      # valen's own fields (model, messages, tools, ...) are rejected.
 
 [compaction]                    # summary-mode, send-side only (disk JSONL stays lossless).
 model = "openrouter/anthropic/claude-sonnet-5.5"

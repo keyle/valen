@@ -695,6 +695,19 @@ func TestRoutingNoopGoZen(t *testing.T) {
 	if _, err := os.Stat(m.statePath); !os.IsNotExist(err) {
 		t.Fatalf("ctrl+y on Go/Zen must not write state (err=%v)", err)
 	}
+	// Switching from OpenRouter to a non-OpenRouter model drops the suffix.
+	m.cfg.Model = "openrouter/moonshotai/kimi-k3"
+	m.cfg.Routing = "nitro"
+	m.applyModelSwitch("glm-5.3")
+	if m.cfg.Routing != "" {
+		t.Fatalf("switch to Go kept routing %q", m.cfg.Routing)
+	}
+	if got := slotRoutingSuffix("glm-5.3", "nitro"); got != "" {
+		t.Fatalf("Go slot suffix=%q want empty", got)
+	}
+	if got := slotRoutingSuffix("openrouter/moonshotai/kimi-k3", "nitro"); got == "" {
+		t.Fatal("OpenRouter slot must show its routing")
+	}
 }
 
 func TestRouteCommand(t *testing.T) {

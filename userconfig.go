@@ -200,8 +200,9 @@ func saveModelState(path, model, thinking, routing string) error {
 }
 
 // applyUserState overlays the last-used model/thinking/routing from the state
-// file onto cfg. An invalid saved selection (model removed, level no longer
-// valid) is ignored so a stale state file can never block boot.
+// file onto cfg. TUI only: headless -p follows valen.toml. An invalid saved
+// selection (model removed, level no longer valid) is ignored so a stale state
+// file can never block boot.
 func applyUserState(cfg Config, statePath string) Config {
 	st := loadUserState(statePath)
 	model := strings.TrimSpace(st.Model)
@@ -217,6 +218,7 @@ func applyUserState(cfg Config, statePath string) Config {
 	if routing := normalizeRouting(st.Routing); validRouting(routing) {
 		cfg.Routing = routing
 	}
+	cfg.Routing = effectiveRouting(model, cfg.Routing)
 	return cfg
 }
 

@@ -15,37 +15,41 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
-// Event reports progress during a turn so frontends stay responsive.
+// Event reports progress during a turn so frontends stay responsive. Its JSON
+// tags are the wire format of headless --stream (one object per line).
 type Event struct {
-	Kind string // "round_start", "tool_start", "tool_result", "text_delta", "thinking_delta"
-	Text string
+	Kind string `json:"kind"` // "round_start", "tool_start", "tool_result", "text_delta", "thinking_delta"
+	Text string `json:"text,omitempty"`
 	// Args carries tool JSON arguments on tool_start; Output carries the
 	// tool result on tool_result.
-	Args   string
-	Output string
+	Args   string `json:"args,omitempty"`
+	Output string `json:"output,omitempty"`
 	// ID carries the tool call ID on tool_start/tool_result so the UI
 	// matches rows by call, not by name (parallel same-name calls).
-	ID string
+	ID string `json:"id,omitempty"`
 	// DurMs carries wall execution time on tool_result.
-	DurMs int64
+	DurMs int64 `json:"dur_ms,omitempty"`
 	// Index carries the reasoning part index on thinking_delta (Responses
 	// summary_index, messages content-block index). Fragments that share an
 	// index concatenate exactly; the first delta of a new part starts on its
 	// own line, mirroring the committed join of separate summary parts.
-	Index int
+	Index int `json:"index,omitempty"`
 	// Raw marks raw chain-of-thought analysis on thinking_delta when the
 	// provider also streams a short summary (Responses reasoning_text vs
 	// reasoning_summary_text). Headless -v hides raw analysis; -vv shows it.
-	Raw bool
+	Raw bool `json:"raw,omitempty"`
 	// ORMeta carries OpenRouter serving metadata (provider, billed cost,
 	// locally-measured throughput) on an "or_meta" event.
-	ORMeta *ORMeta
+	ORMeta *ORMeta `json:"or_meta,omitempty"`
 }
 
 // ORMeta is OpenRouter's best-effort per-round serving metadata: the upstream
 // provider that served the request, the billed cost and the latency and
 // decode throughput measured from our own stream. Any field may be absent.
 type ORMeta struct {
+	// ID is the OpenRouter generation id, the key for /generation lookups
+	// (billing and cancellation checks).
+	ID       string  `json:"id,omitempty"`
 	Provider string  `json:"provider,omitempty"`
 	Cost     float64 `json:"cost,omitempty"`
 	HasCost  bool    `json:"has_cost,omitempty"`
@@ -68,6 +72,9 @@ func mergeORMeta(dst, src *ORMeta) *ORMeta {
 	if dst == nil {
 		c := *src
 		return &c
+	}
+	if src.ID != "" {
+		dst.ID = src.ID
 	}
 	if src.Provider != "" {
 		dst.Provider = src.Provider

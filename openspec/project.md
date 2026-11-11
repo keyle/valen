@@ -15,7 +15,8 @@ Single-binary Go agent harness. No server/client split, everything in-process in
   Current direct deps: `toml`, `go-openai`, `mcp-go`, `x/net/html`,
   `x/image` (WebP decode + scaling) + charm TUI stack.
 - Memory is a feature (historical target ~2% of OpenCode, not a fresh benchmark). Keep streaming caps:
-  `8MiB LimitReader` per round, `16k` tool-output truncate (storage/log),
+  `8MiB LimitReader` per round, `8MiB` `--history` file cap, `16k` tool-output
+  truncate (storage/log),
   no secondary live-send truncation; rolling `32768`-byte UTF-8-safe TUI
   text/thinking tails, exact delta concatenation, ~60ms render throttle,
   committed-scrollback line budget `[tui] max_lines` default `1000` (trims
