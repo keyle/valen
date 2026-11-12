@@ -257,8 +257,12 @@ func TestAutoCompactsOften(t *testing.T) {
 	srv, _ := fakeServer(t, completion(nil, "EARLY SUMMARY"))
 	cfg := compactTestConfig(srv.URL)
 	h := longHistory()
-	if !maybeAutoCompact(context.Background(), cfg, newClient(cfg, "key"), "key", nil, &h) {
+	var evs []Event
+	if !maybeAutoCompact(context.Background(), cfg, newClient(cfg, "key"), "key", nil, &h, func(ev Event) { evs = append(evs, ev) }) {
 		t.Fatal("history over threshold must compact")
+	}
+	if len(evs) == 0 || evs[0].Kind != "compacting" {
+		t.Fatalf("auto-compaction must announce itself, got %v", evs)
 	}
 	found := false
 	for _, m := range h {

@@ -28,7 +28,8 @@ and press Enter in the TUI. What happens, in order:
 2. **Pre-send compaction check.** Before the first request,
    `maybeAutoCompact` runs when auto-compaction is enabled: cheap local prune
    (see §5), plus a summarizer call if older turns are compactable and history
-   is past threshold. (`dispatchTurn`.)
+   is past threshold. It emits a `compacting` progress event so the status line
+   shows the wait. (`dispatchTurn`.)
 3. **Round 1 request.** The active transport converts history to its wire
    format and POSTs with `stream: true`. Every request carries
    `x-opencode-session` (routing + cache affinity) and the honest

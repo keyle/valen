@@ -493,13 +493,16 @@ func compactHistory(ctx context.Context, cfg Config, client *openai.Client, apiK
 // maybeAutoCompact keeps every send lean: prune runs unconditionally (cheap,
 // local — unprotected old reads collapse to descriptors), then a summary fires
 // past the threshold. It returns true when history shrank by either path.
-func maybeAutoCompact(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, history *[]openai.ChatCompletionMessage) bool {
+func maybeAutoCompact(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, history *[]openai.ChatCompletionMessage, onEvent func(Event)) bool {
 	if !compactionAuto(cfg) {
 		return false
 	}
 	pruned := pruneOldToolOutputs(*history) > 0
 	if estimateTokens(*history) <= compactionThreshold(cfg) {
 		return pruned
+	}
+	if onEvent != nil {
+		onEvent(Event{Kind: "compacting", Text: "Compacting…"})
 	}
 	_, ok, err := compactHistory(ctx, cfg, client, apiKey, hc, history)
 	return pruned || (err == nil && ok)

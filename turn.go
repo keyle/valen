@@ -18,7 +18,7 @@ import (
 // Event reports progress during a turn so frontends stay responsive. Its JSON
 // tags are the wire format of headless --stream (one object per line).
 type Event struct {
-	Kind string `json:"kind"` // "round_start", "tool_start", "tool_result", "text_delta", "thinking_delta"
+	Kind string `json:"kind"` // "round_start", "compacting", "tool_start", "tool_result", "text_delta", "thinking_delta"
 	Text string `json:"text,omitempty"`
 	// Args carries tool JSON arguments on tool_start; Output carries the
 	// tool result on tool_result.
@@ -297,7 +297,7 @@ func dispatchTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey
 	t0 := time.Now()
 	dvlog.Logf("turn start transport=%s %s", modelTransport(cfg.Model), dvlog.HistoryLine(*history, estimateTokens(*history)))
 	before := estimateTokens(*history)
-	maybeAutoCompact(ctx, cfg, client, apiKey, hc, history)
+	maybeAutoCompact(ctx, cfg, client, apiKey, hc, history, onEvent)
 	if after := estimateTokens(*history); after != before {
 		dvlog.Logf("pre-send compact %dtok->%dtok", before, after)
 	}
