@@ -255,9 +255,11 @@ func (m *tuiModel) statusView() string {
 }
 
 // inputBorderColor: orange while working, green when ready (cyan in plan
-// mode), dim outside the chat view.
+// mode, dark blue while working in plan mode), dim outside the chat view.
 func (m *tuiModel) inputBorderColor() lipgloss.Color {
 	switch {
+	case m.busy && m.cfg.Plan:
+		return mkBlueDark
 	case m.busy:
 		return mkOrange
 	case m.mode != viewChat:

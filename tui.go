@@ -30,6 +30,7 @@ var (
 	mkOrange    = lipgloss.Color("#FD971F")
 	mkPurple    = lipgloss.Color("#AE81FF")
 	mkCyan      = lipgloss.Color("#66D9EF")
+	mkBlueDark  = lipgloss.Color("#3F6DA8")
 	mkBorder    = lipgloss.Color("#49483E")
 )
 

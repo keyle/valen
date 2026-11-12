@@ -570,7 +570,7 @@ the full height, starts at its heading and scrolls to follow the selected option
 | Ctrl+G | help | help |
 | Ctrl+R / Ctrl+L / Ctrl+U / Ctrl+X | history / sessions / tools / errors | same |
 | Ctrl+Y | cycle OpenRouter routing: none → floor → nitro → exacto, wraps (silent no-op on non-OpenRouter models) | same |
-| Tab | swap work ↔ plan mode (chatbox border cyan in plan mode, green in work mode; header shows `· plan`; placeholder becomes `Plan mode…  TAB to switch (/help)`; notices: `Plan Mode enabled: read only and planning` / `Work mode enabled`) | — |
+| Tab | swap work ↔ plan mode (chatbox border cyan in plan mode, green in work mode, dark blue while a turn runs in plan mode; header shows `· plan`; placeholder becomes `Plan mode…  TAB to switch (/help)`; notices: `Plan Mode enabled: read only and planning` / `Work mode enabled`) | — |
 | Ctrl+N | new blank session (fresh id + file; blocked while busy) | same |
 | Ctrl+T | thinking level cycle low→high, wraps to low | same |
 | Ctrl+V | paste a clipboard image as an attachment chip (text falls back to the normal paste) | same |
