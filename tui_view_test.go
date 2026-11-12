@@ -179,6 +179,47 @@ func TestTUIReadyShowsLastTurnDuration(t *testing.T) {
 	}
 }
 
+// TestTUIBellRepeatStopsOnInteraction: an unattended bell repeats on its
+// spacing until the limit, and any key or terminal refocus ends it.
+func TestTUIBellRepeatStopsOnInteraction(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.cfg.TUI.BellLimitSeconds = 2
+	m.cfg.TUI.BellSpacingSeconds = 1
+	_, _ = m.Update(questionMsg{qs: []AskQuestion{{Question: "Q?"}}, reply: make(chan askReply, 1)})
+	if m.attentionUntil.IsZero() {
+		t.Fatal("question must schedule repeat bells")
+	}
+	until := m.attentionUntil
+	if cmd := m.repeatAttention(attentionPingMsg{until: until}); cmd == nil {
+		t.Fatal("a live tick must ring again")
+	}
+	if cmd := m.repeatAttention(attentionPingMsg{until: until.Add(-time.Second)}); cmd != nil {
+		t.Fatal("a stale tick must stop")
+	}
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if !m.attentionUntil.IsZero() {
+		t.Fatal("a key must stop the repeats")
+	}
+	if cmd := m.repeatAttention(attentionPingMsg{until: until}); cmd != nil {
+		t.Fatal("an answered prompt must not ring again")
+	}
+	_ = m.startAttention()
+	_, _ = m.Update(tea.FocusMsg{})
+	if !m.attentionUntil.IsZero() {
+		t.Fatal("terminal focus must stop the repeats")
+	}
+	off := false
+	m.cfg.TUI.Sound = &off
+	if cmd := m.startAttention(); cmd != nil || !m.attentionUntil.IsZero() {
+		t.Fatal("sound=false must not schedule repeats")
+	}
+	// Expiry stops on its own even without interaction.
+	m.attentionUntil = time.Now().Add(-time.Second)
+	if cmd := m.repeatAttention(attentionPingMsg{until: m.attentionUntil}); cmd != nil {
+		t.Fatal("an expired window must stop")
+	}
+}
+
 // TestTUIAskStaysVisibleOnShortTerminal: the overlay hides the chatbox so
 // the question gets the whole height, starts at its heading, and follows
 // the cursor past the fold.

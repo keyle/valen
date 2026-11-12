@@ -428,6 +428,10 @@ type tuiModel struct {
 	// busy; zero when disarmed. A second esc within escConfirmWindow cancels.
 	escArmedAt time.Time
 
+	// attentionUntil bounds the repeat bell for an unattended question or
+	// finished turn; zero means no repeat is pending (see startAttention).
+	attentionUntil time.Time
+
 	showThink bool
 	showMeta  bool
 	// follow pins the chat transcript to the newest line. Wheel/pgup
@@ -667,6 +671,36 @@ func (m *tuiModel) dingCmd() tea.Cmd {
 	}
 }
 
+// attentionPingMsg is one repeat of the unattended bell; until identifies the
+// episode so ticks left over from an answered prompt are dropped.
+type attentionPingMsg struct{ until time.Time }
+
+// startAttention rings the bell now and schedules repeats while the prompt
+// goes unattended: every bell_spacing_seconds for bell_limit_seconds. Any
+// key, mouse or focus event cancels the repeats (see update).
+func (m *tuiModel) startAttention() tea.Cmd {
+	ding := m.dingCmd()
+	if ding == nil {
+		return nil
+	}
+	m.attentionUntil = time.Now().Add(tuiBellLimit(m.cfg))
+	until := m.attentionUntil
+	return tea.Batch(ding, tea.Tick(tuiBellSpacing(m.cfg), func(time.Time) tea.Msg {
+		return attentionPingMsg{until: until}
+	}))
+}
+
+// repeatAttention handles one repeat tick: stale or expired ticks stop, live
+// ones ring again and schedule the next.
+func (m *tuiModel) repeatAttention(msg attentionPingMsg) tea.Cmd {
+	if m.attentionUntil.IsZero() || msg.until != m.attentionUntil || time.Now().After(m.attentionUntil) {
+		return nil
+	}
+	return tea.Batch(m.dingCmd(), tea.Tick(tuiBellSpacing(m.cfg), func(time.Time) tea.Msg {
+		return attentionPingMsg{until: msg.until}
+	}))
+}
+
 // turnElapsed is the working time of the current turn; time spent waiting
 // on a question overlay does not count.
 func (m *tuiModel) turnElapsed() time.Duration {
@@ -774,7 +808,7 @@ func runTUI(ctx context.Context, cfg Config, statePath string, client *openai.Cl
 	// so it must be pushed AFTER bubbletea enters the alt screen (Init runs
 	// post-entry) and popped before it leaves (QuitMsg filter). Terminals
 	// without support ignore the private CSI. runTUI only runs on a TTY.
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion(),
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithReportFocus(),
 		tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
 			if _, ok := msg.(tea.QuitMsg); ok {
 				fmt.Fprint(os.Stdout, kittyKeysPop)

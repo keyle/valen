@@ -102,6 +102,10 @@ thinking = "high"
                                 # 0 (or less) disables trimming.
 # sound = true                  # ring the terminal bell when a question appears or a
                                 # turn finishes (not on cancel); false mutes it.
+# bell_limit_seconds = 600      # repeat the unattended bell for up to this long.
+# bell_spacing_seconds = 20     # seconds between repeats. Repeats stop early on any
+                                # key, click or refocused terminal. <= 0 uses the
+                                # 600 / 20 defaults.
 # select_scroll_ms = 50         # drag auto-scroll cadence: one viewport line per
                                 # interval while dragging a selection to the top or
                                 # bottom edge. <= 0 uses the 50ms default.

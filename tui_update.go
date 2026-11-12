@@ -369,6 +369,14 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
+	// Any real interaction (key, click, wheel, refocus) means the user is
+	// back: stop the repeat bell. Background messages (stream deltas,
+	// timers) must not.
+	switch msg.(type) {
+	case tea.KeyMsg, tea.MouseMsg, tea.FocusMsg:
+		m.attentionUntil = time.Time{}
+	}
+
 	// Disambiguated ctrl+m (the letter form terminals send once a
 	// disambiguating mode is on) opens the model picker from anywhere an
 	// overlay question is not waiting for its keys.
@@ -689,7 +697,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Height = m.viewportHeight() // overlay hides the chatbox
 		m.refreshViewport()
 		m.viewport.GotoTop()
-		return m, m.dingCmd()
+		return m, m.startAttention()
 
 	case turnDoneMsg:
 		turn := Turn{
@@ -767,7 +775,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// The user stopped it themselves: no bell.
 			return m, tea.Batch(fcmd, m.fetchQuotaCmd())
 		}
-		return m, tea.Batch(fcmd, m.fetchQuotaCmd(), m.dingCmd())
+		return m, tea.Batch(fcmd, m.fetchQuotaCmd(), m.startAttention())
 
 	case compactDoneMsg:
 		m.busy = false
@@ -822,6 +830,9 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, vcmd)
 		}
 		return m, tea.Batch(cmds...)
+
+	case attentionPingMsg:
+		return m, m.repeatAttention(msg)
 
 	case selScrollMsg:
 		if !m.selAtScrollEdge() || !m.selScrollStep() {

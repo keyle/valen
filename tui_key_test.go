@@ -280,7 +280,7 @@ func TestLoadConfigInputTable(t *testing.T) {
 }
 
 func TestLoadConfigTUITable(t *testing.T) {
-	cfg, err := loadConfig(writeConfig(t, "model = \"m\"\n[tui]\nmax_lines = 250\nselect_scroll_ms = 80\n"))
+	cfg, err := loadConfig(writeConfig(t, "model = \"m\"\n[tui]\nmax_lines = 250\nselect_scroll_ms = 80\nbell_limit_seconds = 900\nbell_spacing_seconds = 5\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,6 +289,12 @@ func TestLoadConfigTUITable(t *testing.T) {
 	}
 	if got := tuiSelScrollInterval(cfg); got != 80*time.Millisecond {
 		t.Fatalf("select_scroll_ms = %v, want 80ms", got)
+	}
+	if got := tuiBellLimit(cfg); got != 900*time.Second {
+		t.Fatalf("bell_limit_seconds = %v, want 900s", got)
+	}
+	if got := tuiBellSpacing(cfg); got != 5*time.Second {
+		t.Fatalf("bell_spacing_seconds = %v, want 5s", got)
 	}
 	// Unset keeps the 1000-line default; explicit 0 disables trimming.
 	cfg2, err := loadConfig(writeConfig(t, "model = \"m\"\n"))
@@ -300,6 +306,12 @@ func TestLoadConfigTUITable(t *testing.T) {
 	}
 	if got := tuiSelScrollInterval(cfg2); got != 50*time.Millisecond {
 		t.Fatalf("default select_scroll_ms = %v, want 50ms", got)
+	}
+	if got := tuiBellLimit(cfg2); got != 600*time.Second {
+		t.Fatalf("default bell_limit_seconds = %v, want 600s", got)
+	}
+	if got := tuiBellSpacing(cfg2); got != 20*time.Second {
+		t.Fatalf("default bell_spacing_seconds = %v, want 20s", got)
 	}
 	// A non-positive cadence falls back to the default.
 	cfg4, err := loadConfig(writeConfig(t, "model = \"m\"\n[tui]\nselect_scroll_ms = 0\n"))

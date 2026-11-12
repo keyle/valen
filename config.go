@@ -127,15 +127,21 @@ type CompactionConfig struct {
 
 // TUIConfig mirrors the [tui] table: transcript rendering and the
 // attention bell (TUI only). Sound nil means on: ring the terminal bell
-// when a question appears or a turn finishes.
-// MaxLines nil means the 1000-line default; 0 or less disables trimming.
-// When the rendered committed transcript exceeds the cap, older turns
-// collapse their reasoning (prompts, tool lines and replies stay whole)
-// and, if needed, the oldest turns drop from scrollback. History on disk
-// stays lossless and the recall views still expand everything.
+// when a question appears or a turn finishes, repeating every
+// bell_spacing_seconds for up to bell_limit_seconds until the user
+// interacts. MaxLines nil means the 1000-line default; 0 or less disables
+// trimming. When the rendered committed transcript exceeds the cap, older
+// turns collapse their reasoning (prompts, tool lines and replies stay
+// whole) and, if needed, the oldest turns drop from scrollback. History on
+// disk stays lossless and the recall views still expand everything.
 type TUIConfig struct {
 	MaxLines *int  `toml:"max_lines"`
 	Sound    *bool `toml:"sound"`
+	// BellLimitSeconds bounds the unattended repeat window, default 600.
+	// BellSpacingSeconds is the gap between repeats, default 20. <= 0 keeps
+	// the default.
+	BellLimitSeconds   int `toml:"bell_limit_seconds"`
+	BellSpacingSeconds int `toml:"bell_spacing_seconds"`
 	// SelectScrollMs paces the drag auto-scroll: one viewport line per
 	// interval. <= 0 means the 50ms default.
 	SelectScrollMs int `toml:"select_scroll_ms"`
@@ -151,6 +157,13 @@ func savedSessions(cfg Config) int {
 
 // defaultSelectScrollMs paces the transcript selection drag auto-scroll.
 const defaultSelectScrollMs = 50
+
+// defaultBellLimitSeconds bounds how long an unattended bell repeats;
+// defaultBellSpacingSeconds is the gap between repeats.
+const (
+	defaultBellLimitSeconds   = 600
+	defaultBellSpacingSeconds = 20
+)
 
 // tuiSelScrollInterval is the drag auto-scroll tick: the configured
 // select_scroll_ms, else 50ms.
@@ -179,6 +192,24 @@ func tuiMaxLines(cfg Config) int {
 // tuiSound reports whether the attention bell is on, default on.
 func tuiSound(cfg Config) bool {
 	return cfg.TUI.Sound == nil || *cfg.TUI.Sound
+}
+
+// tuiBellLimit is how long an unattended bell keeps repeating, default 10 min.
+func tuiBellLimit(cfg Config) time.Duration {
+	s := cfg.TUI.BellLimitSeconds
+	if s <= 0 {
+		s = defaultBellLimitSeconds
+	}
+	return time.Duration(s) * time.Second
+}
+
+// tuiBellSpacing is the gap between repeat bells, default 20s.
+func tuiBellSpacing(cfg Config) time.Duration {
+	s := cfg.TUI.BellSpacingSeconds
+	if s <= 0 {
+		s = defaultBellSpacingSeconds
+	}
+	return time.Duration(s) * time.Second
 }
 
 // InputConfig mirrors the [input] table: chatbox chrome (TUI only).

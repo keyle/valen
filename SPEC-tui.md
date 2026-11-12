@@ -544,7 +544,7 @@ user → …                                    = turn 2, appended to the same h
 ```
 
 End of response: reply appended to `history`, tokens shown, state back to
-ready (the status row keeps the turn's working time: `● ready · 1m3s`), input focused. `/clear` resets intentionally. A bell rings when a turn finishes (not on cancel) or a question appears (`[tui] sound`).
+ready (the status row keeps the turn's working time: `● ready · 1m3s`), input focused. `/clear` resets intentionally. A bell rings when a turn finishes (not on cancel) or a question appears (`[tui] sound`), repeating every `bell_spacing_seconds` for up to `bell_limit_seconds` until any key, click or terminal refocus.
 
 With an empty chatbox, ↑ reloads the previous prompt for editing; sending it
 rewinds that turn (history and scrollback) and continues from before it. The
