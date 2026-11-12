@@ -5,11 +5,45 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 )
 
 const sandboxExec = "/usr/bin/sandbox-exec" // absolute: no PATH lookup to hijack
+
+// innerSandboxProbe caches the result of one Seatbelt probe.
+var innerSandboxProbe struct {
+	once sync.Once
+	err  error
+}
+
+// sandboxNestingError reports once whether a Seatbelt profile can be applied
+// here. Inside another sandbox it cannot: sandbox_apply fails with EPERM before
+// the command starts, so say what to pass instead of failing every shell call.
+func sandboxNestingError() error {
+	innerSandboxProbe.once.Do(func() {
+		if _, err := os.Stat(sandboxExec); err != nil {
+			innerSandboxProbe.err = fmt.Errorf("shell sandbox unavailable: %s not found", sandboxExec)
+			return
+		}
+		out, err := exec.Command(sandboxExec, "-p", "(version 1)(allow default)", "/usr/bin/true").CombinedOutput()
+		if err == nil {
+			return
+		}
+		text := strings.TrimSpace(string(out))
+		if i := strings.IndexByte(text, '\n'); i >= 0 {
+			text = text[:i]
+		}
+		if strings.Contains(text, "sandbox_apply") || strings.Contains(text, "Operation not permitted") {
+			innerSandboxProbe.err = fmt.Errorf("already inside another sandbox; pass --outer-sandbox when the caller confines valen (%s)", text)
+			return
+		}
+		innerSandboxProbe.err = fmt.Errorf("shell sandbox probe failed: %s", text)
+	})
+	return innerSandboxProbe.err
+}
 
 // sandboxArgv wraps command in a Seatbelt profile. Paths go in as -D
 // parameters, never into the profile text, so odd characters can't break out.

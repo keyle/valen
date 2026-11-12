@@ -99,6 +99,7 @@ func start() error {
 	shellFlag := flag.String("shell", "", "shell interpreter for shell commands (default: sh)")
 	networkFlag := flag.Bool("network", false, "pre-approve network for shell commands this run (no prompt)")
 	execFlag := flag.Bool("exec", false, "pre-approve destructive shell commands this run (git push, git reset --hard, git clean, rm -r, sudo)")
+	outerSandboxFlag := flag.Bool("outer-sandbox", false, "the caller already confines valen: run shell commands without a second sandbox")
 	printMode := flag.Bool("p", false, "one-shot: answer the quoted prompt and exit")
 	qFlag := flag.Bool("q", false, "start the TUI and run the prompt immediately")
 	planFlag := flag.Bool("plan", false, "plan mode: read-only investigation, present the plan as the reply")
@@ -126,6 +127,7 @@ func start() error {
 		"config": true, "dir": true, "shell": true, "dvlog": true, "f": true, "file": true, "history": true, "r": true, "resume": true,
 	}))
 	setShellInterpreter(*shellFlag)
+	setOuterSandbox(*outerSandboxFlag)
 	if *oneShotFlag {
 		*printMode, *noQuestionFlag, *noTaskFlag, *noTodoFlag = true, true, true, true
 	}

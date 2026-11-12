@@ -8,6 +8,11 @@ import (
 	"os/exec"
 )
 
+// sandboxNestingError returns nil: bubblewrap can nest, but valen skips it only
+// when --outer-sandbox says an outer sandbox is in force, so Linux matches
+// macOS instead of stacking a second policy.
+func sandboxNestingError() error { return nil }
+
 // sandboxArgv wraps command in bubblewrap: the whole filesystem read-only,
 // $HOME masked (reads/writes ask first), writable binds re-expose the safe
 // subset (workdir, worktrees, approved, private temp, tool caches), sensitive

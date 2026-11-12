@@ -29,6 +29,22 @@ func shNet(t *testing.T, cmd string, network bool) string {
 	return out
 }
 
+func TestOuterSandboxRunsTheShellDirectly(t *testing.T) {
+	setOuterSandbox(true)
+	t.Cleanup(func() { setOuterSandbox(false) })
+	cmd, err := sandboxCommand(context.Background(), "echo hi", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{shellCommand(), "-c", "echo hi"}
+	if strings.Join(cmd.Args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("args = %q, want %q", cmd.Args, want)
+	}
+	if cmd.Env == nil {
+		t.Fatal("shell environment must be scrubbed, not inherited")
+	}
+}
+
 // outsideDir is a writable-by-user dir that is neither the root, a temp dir
 // nor a cache dir: the sandbox must block it. Under $HOME, cleaned up after.
 func outsideDir(t *testing.T) string {

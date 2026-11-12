@@ -17,6 +17,11 @@ package main
 // get around it. The per-OS part is sandboxArgv (sandbox_darwin.go uses
 // Seatbelt's sandbox-exec, sandbox_linux.go uses bubblewrap). Other platforms
 // do not compile (sandbox_other.go): running unsandboxed is not an option.
+//
+// When the caller already confines valen (Travis does), --outer-sandbox runs
+// shell commands directly. macOS cannot apply a Seatbelt sandbox inside
+// another one, and Linux follows the same rule so one policy applies on both:
+// the caller's sandbox is the only sandbox.
 
 import (
 	"context"
@@ -42,6 +47,16 @@ const defaultShell = "sh"
 // shellInterpreter is the shell that runs `shell` commands (always as
 // <shell> -c <command>): the -shell flag overrides the "sh" default.
 var shellInterpreter atomic.Value // string
+
+// outerSandbox is set by --outer-sandbox: the caller already confines this
+// process, so shell commands run without a second sandbox.
+var outerSandbox atomic.Bool
+
+// setOuterSandbox records that an outer sandbox is in force.
+func setOuterSandbox(on bool) { outerSandbox.Store(on) }
+
+// outerSandboxActive reports whether the caller's sandbox replaces ours.
+func outerSandboxActive() bool { return outerSandbox.Load() }
 
 // setShellInterpreter sets the shell; an empty value restores the default.
 func setShellInterpreter(shell string) {
@@ -353,6 +368,16 @@ func looksNetworkDenied(out string) bool {
 // sandboxCommand builds the exec.Cmd that runs command under the sandbox with
 // the policy as it stands now (approvals made mid-session are picked up).
 func sandboxCommand(ctx context.Context, command string, network bool) (*exec.Cmd, error) {
+	if outerSandboxActive() {
+		// The caller's sandbox is the only one: a second Seatbelt sandbox
+		// cannot be applied inside the first, and Linux follows the same rule.
+		cmd := exec.CommandContext(ctx, shellCommand(), "-c", command)
+		cmd.Env = scrubShellEnv()
+		return cmd, nil
+	}
+	if err := sandboxNestingError(); err != nil {
+		return nil, err
+	}
 	name, args, err := sandboxArgv(command, sandboxPolicy{
 		Root: getFileRoot(), Writable: writableRoots(), Readable: readableRoots(),
 		ReadOnly: append(gitReadOnlyPaths(), systemReadOnlyPaths()...),
