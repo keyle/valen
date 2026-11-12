@@ -337,6 +337,35 @@ func TestCompactionModelOverride(t *testing.T) {
 	}
 }
 
+func TestCompactionAffinity(t *testing.T) {
+	cfg, err := loadConfig(writeConfig(t, `model = "openrouter/moonshotai/kimi-k3"
+[compaction]
+model = "openrouter/anthropic/claude-haiku-5-5"
+affinity = "Nitro"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Compaction.Routing != "nitro" || cfg.Compaction.Affinity != "" {
+		t.Fatalf("compaction affinity=%q routing=%q", cfg.Compaction.Affinity, cfg.Compaction.Routing)
+	}
+	if got := wireModelID(compactionModel(cfg), compactionRouting(cfg)); got != "anthropic/claude-haiku-5-5:nitro" {
+		t.Fatalf("summarizer wire model=%q", got)
+	}
+	// Independent of the session model's own routing.
+	if got := wireModelID(cfg.Model, cfg.Routing); got != "moonshotai/kimi-k3" {
+		t.Fatalf("session wire model=%q", got)
+	}
+	// Dropped for non-OpenRouter summarizers; conflicting aliases rejected.
+	cfg, err = loadConfig(writeConfig(t, "model = \"openrouter/moon/v1\"\n[compaction]\nmodel = \"muse-flash\"\nrouting = \"nitro\"\n"))
+	if err != nil || cfg.Compaction.Routing != "nitro" || compactionRouting(cfg) != "" {
+		t.Fatalf("go summarizer routing=%q err=%v", compactionRouting(cfg), err)
+	}
+	if _, err := loadConfig(writeConfig(t, "model = \"openrouter/moon/v1\"\n[compaction]\nrouting = \"floor\"\naffinity = \"nitro\"\n")); err == nil {
+		t.Fatal("conflicting compaction routing and affinity must be rejected")
+	}
+}
+
 func TestPruneOldToolOutputs(t *testing.T) {
 	h := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleSystem, Content: "sys"}}
 	for i := 0; i < 8; i++ {

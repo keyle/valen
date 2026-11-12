@@ -136,6 +136,13 @@ func compactionModel(cfg Config) string {
 	return cfg.Model
 }
 
+// compactionRouting resolves the summarizer's OpenRouter affinity: the
+// [compaction] routing when set, dropped for non-OpenRouter summarizer models
+// exactly like the top-level affinity.
+func compactionRouting(cfg Config) string {
+	return effectiveRouting(compactionModel(cfg), cfg.Compaction.Routing)
+}
+
 // cheapestThinking picks the lowest-cost reasoning level a model accepts so
 // summaries stay cheap. Empty means provider default (omit the field).
 func cheapestThinking(model string) string {
@@ -406,6 +413,7 @@ func summarizeHead(ctx context.Context, cfg Config, client *openai.Client, apiKe
 	model := compactionModel(cfg)
 	sumCfg := cfg
 	sumCfg.Model = model
+	sumCfg.Routing = compactionRouting(cfg)
 	sumCfg.Thinking = compactionThinking(cfg)
 	sumCfg.MaxRounds = 2
 	sumCfg.Temperature = nil

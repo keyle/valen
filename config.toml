@@ -84,6 +84,7 @@ openai_key = ""
 [compaction]                    # summary-mode, send-side only (disk JSONL stays lossless).
 model = "openrouter/anthropic/claude-sonnet-5.5"
 thinking = "high"
+# affinity = "nitro"            # summarizer OpenRouter routing (none/floor/nitro/exacto); needs an openrouter/ model.
 # auto = true                     # prune older outputs; protect latest 2 user turns + 40k older tokens; summarize older turns.
 # keep_tokens = 15000             # soft whole-turn tail target; entire current turn always kept; threshold keep*3.
 # buffer = 30000                  # headroom below max_context_tokens; default 10% of the budget.

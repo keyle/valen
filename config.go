@@ -112,13 +112,17 @@ type Config struct {
 // empty means the session model; set a cheap flash model to keep large
 // sessions cheap for the big model. Thinking selects the summarizer effort
 // explicitly (default "medium" when the model accepts it, else the cheapest
-// level); the main-turn effort stays in top-level `thinking`.
+// level); the main-turn effort stays in top-level `thinking`. Routing
+// (alias Affinity) is the summarizer's OpenRouter provider-sorting variant,
+// independent of the session model's top-level affinity.
 type CompactionConfig struct {
 	Auto       *bool  `toml:"auto"`
 	KeepTokens int    `toml:"keep_tokens"`
 	Buffer     int    `toml:"buffer"`
 	Model      string `toml:"model"`
 	Thinking   string `toml:"thinking"`
+	Routing    string `toml:"routing"`
+	Affinity   string `toml:"affinity"`
 }
 
 // TUIConfig mirrors the [tui] table: transcript rendering and the
@@ -221,6 +225,20 @@ func routingAlias(routing, affinity string) (string, error) {
 	return r, nil
 }
 
+// resolveCompactionAffinity folds the [compaction] affinity alias onto its
+// routing field and validates the result, mirroring the top-level pair.
+func resolveCompactionAffinity(routing, affinity string) (string, error) {
+	r, err := routingAlias(routing, affinity)
+	if err != nil {
+		return "", err
+	}
+	r = normalizeRouting(r)
+	if !validRouting(r) {
+		return "", fmt.Errorf("compaction affinity %q is not valid (try: none, floor, nitro, exacto)", r)
+	}
+	return r, nil
+}
+
 func loadConfig(path string) (Config, error) {
 	var cfg Config
 	md, err := toml.DecodeFile(path, &cfg)
@@ -278,6 +296,11 @@ func loadConfig(path string) (Config, error) {
 	}
 	cfg.Compaction.Model = strings.TrimSpace(cfg.Compaction.Model)
 	cfg.Compaction.Thinking = strings.ToLower(strings.TrimSpace(cfg.Compaction.Thinking))
+	routing, err = resolveCompactionAffinity(cfg.Compaction.Routing, cfg.Compaction.Affinity)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.Compaction.Routing, cfg.Compaction.Affinity = routing, ""
 	if err := validateExplicitCompactionThinking(compactionModel(cfg), cfg.Compaction.Thinking); err != nil {
 		return cfg, err
 	}
