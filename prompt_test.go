@@ -207,6 +207,19 @@ func TestEffectiveSystemSideloadsAgents(t *testing.T) {
 	}
 }
 
+// The embedded prompts carry the selective-testing policy; no config or
+// home-folder AGENTS.md is needed for it.
+func TestEffectiveSystemCarriesTargetedTestPolicy(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	useTempRoot(t)
+	got := effectiveSystem(Config{Model: "glm-5.3-flash"})
+	for _, want := range []string{"targeted `go test -run", "full suite"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("embedded system prompt missing %q", want)
+		}
+	}
+}
+
 // TestPlanModeRefusesMutatingTools: the read-only guarantee is enforced at
 // the tool layer, not just asked for in the prompt. MCP tools are opaque,
 // so they are refused too.

@@ -17,10 +17,12 @@ How to work in this repo: fast loop, small steps, together.
 
 1. Prefer many small iterations over one big drop. Think deeply, verify
    cheaply: confirm with the smallest possible check before widening.
-2. While iterating run ONLY targeted tests:
-   `go test -run 'TestName|TestOther' .`. Run the full suite only when
-   something looks off, when touching shared code (`runTurn`, config loading,
-   registry), or as the final gate.
+2. While iterating run ONLY targeted tests for the areas you changed:
+   root files → `go test -run 'TestName|TestOther' .`; an internal package →
+   `go test ./internal/<pkg>`; an unfocused working tree →
+   `make test-changed` (packages whose `.go` files changed). Run the full
+   suite only when something looks off, when touching shared code (`runTurn`,
+   config loading, registry, `prompts.go`), or as the final gate.
 3. Final gate: `gofmt -l .` clean, `go vet ./...` green, `go test ./...`
    green (`-race` for concurrency-adjacent changes). Pass `network=true`:
    tests are offline `httptest` fakes but still bind a loopback port.

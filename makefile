@@ -15,6 +15,19 @@ prod:
 test:
 	go test ./...
 
+# Targeted loop: test only the Go packages with modified, staged or untracked
+# files. The full suite stays the final gate (see AGENTS.md).
+test-changed:
+	@pkgs=$$(git status --porcelain=v1 --untracked-files=all \
+		| cut -c4- | sed 's/.* -> //' \
+		| grep '\.go$$' \
+		| while IFS= read -r f; do dirname "$$f"; done \
+		| sort -u \
+		| awk '{ print ($$0 == "." ? "." : "./" $$0) }'); \
+	if [ -z "$$pkgs" ]; then echo "test-changed: no Go changes"; exit 0; fi; \
+	echo "test-changed: $$pkgs"; \
+	go test $$pkgs
+
 tag:
 	@test -z "$$(git status --porcelain)" || { echo "working tree is dirty: commit or stash first"; exit 1; }; \
 	upstream=$$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null) || { echo "no upstream branch configured"; exit 1; }; \

@@ -112,6 +112,30 @@ func TestFilesValenTuned(t *testing.T) {
 	}
 }
 
+func TestPromptsPreferTargetedTests(t *testing.T) {
+	files := map[string]string{
+		"meta": meta, "default": def, "anthropic": anthropic,
+		"beast": beast, "codex": codex, "copilot": copilot,
+		"gemini": gemini, "gpt": gpt, "astra": gptAstra,
+		"kimi": kimi, "trinity": trinity, "plan": plan,
+	}
+	for name, body := range files {
+		if !strings.Contains(body, "targeted test") {
+			t.Fatalf("%s prompt must direct targeted tests", name)
+		}
+		if !strings.Contains(body, "full suite") {
+			t.Fatalf("%s prompt must bound the full suite to broad/shared changes", name)
+		}
+		if strings.Contains(body, "run the project's tests") {
+			t.Fatalf("%s prompt still asks for the project-wide suite", name)
+		}
+	}
+	shared := SystemPrompt("glm-5.3-flash", false, "/work")
+	if !strings.Contains(shared, "targeted `go test -run") {
+		t.Fatal("shared system prompt must carry the targeted go test -run rule")
+	}
+}
+
 func TestDefaultPromptForbidsGuessedPaths(t *testing.T) {
 	def := ForModel("glm-5.3-flash")
 	for _, want := range []string{"Never guess absolute paths", "/Users", "glob/read first"} {

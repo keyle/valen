@@ -119,6 +119,7 @@ it at anything you care about.
 
 ```sh
 make                 # build and run
+make test-changed    # test only the packages touched in the working tree
 make install         # build and install to /usr/local/bin
 make brewrelease     # tag (or reuse HEAD's tag), publish and update Homebrew
 ```

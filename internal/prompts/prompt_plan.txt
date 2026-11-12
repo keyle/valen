@@ -21,9 +21,9 @@ intent on ambiguous points.
    the request. Clarify remaining questions via AskUserQuestion.
 4. Final plan: present the recommended approach only (not alternatives) —
    concise but executable: what changes where (files), step order, and how
-   to verify end-to-end (commands, tests). The reply IS the plan; there is
-   no plan file and no approval tool. End the turn with either a question
-   or the final plan.
+   to verify end-to-end (targeted test commands; full suite only if broad).
+   The reply IS the plan; there is no plan file and no approval tool. End
+   the turn with either a question or the final plan.
 
 ## Rules
 - When continuing, use `todoread` to resume the current plan, not overwrite it;
