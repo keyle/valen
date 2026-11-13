@@ -60,6 +60,13 @@ func shouldRetryRound(ctx context.Context, err error) bool {
 	if isContextOverflow(err) || errors.Is(err, errContentFilter) || errors.Is(err, errOutputLimit) {
 		return false
 	}
+	// A malformed tool call/response is deterministic: the provider rejected
+	// the state already sent (Gemini 3 signed reasoning, bad upstream output),
+	// and an identical resend cannot repair it.
+	var stopErr *chatStopError
+	if errors.As(err, &stopErr) && strings.HasPrefix(strings.ToUpper(stopErr.Native), "MALFORMED_") {
+		return false
+	}
 	// 4xx means the request itself was refused (bad payload, key, credits,
 	// model): resending it unchanged gets the same answer. 408 and 429 are
 	// the transient exceptions.
@@ -86,6 +93,17 @@ func errStatus(err error) int {
 	return 0
 }
 
+// chatRetryCap is the attempt budget for one failed round. A provider stop
+// reported as `error` without a precise native reason gets exactly one retry:
+// it may be a transient hiccup, but five identical resends only burn time.
+func chatRetryCap(err error) int {
+	var stopErr *chatStopError
+	if errors.As(err, &stopErr) && strings.EqualFold(stopErr.Reason, "error") && stopErr.Native == "" {
+		return 2
+	}
+	return roundMaxAttempts
+}
+
 // roundWithRetry runs one model round, retrying failures with backoff and
 // announcing each wait as a "retry" event. Usage from failed attempts is
 // still summed so the token counter stays honest.
@@ -96,16 +114,17 @@ func roundWithRetry(ctx context.Context, onEvent func(Event), history []openai.C
 		total.PromptTokens += u.PromptTokens
 		total.CompletionTokens += u.CompletionTokens
 		total.TotalTokens += u.TotalTokens
-		if err == nil || attempt+1 >= roundMaxAttempts || !shouldRetryRound(ctx, err) {
+		cap := chatRetryCap(err)
+		if err == nil || attempt+1 >= cap || !shouldRetryRound(ctx, err) {
 			return msg, total, err
 		}
 		delay := roundRetryDelay(attempt)
-		dvlog.Logf("round retry attempt=%d/%d sleep=%s err=%v", attempt+1, roundMaxAttempts, delay, err)
+		dvlog.Logf("round retry attempt=%d/%d sleep=%s err=%v", attempt+1, cap, delay, err)
 		if onEvent != nil {
 			// Args/Output carry the friendly title and raw details so the
 			// ctrl+x errors view can list the retried failure.
 			fe := friendlyError(err)
-			onEvent(Event{Kind: "retry", Text: fmt.Sprintf("Provider error — retrying in %s (attempt %d/%d)…", delay.Round(100*time.Millisecond), attempt+2, roundMaxAttempts), Args: fe.Title, Output: fe.Details})
+			onEvent(Event{Kind: "retry", Text: fmt.Sprintf("Provider error — retrying in %s (attempt %d/%d)…", delay.Round(100*time.Millisecond), attempt+2, cap), Args: fe.Title, Output: fe.Details})
 		}
 		select {
 		case <-ctx.Done():

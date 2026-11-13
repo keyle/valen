@@ -758,7 +758,7 @@ func TestDeepSeekToolCallReasoningPadded(t *testing.T) {
 		{Role: "tool", ToolCallID: "c1", Content: "ok"},
 		{Role: "assistant", Content: "done"},
 	}}
-	raw, _ := json.Marshal(chatWireBody(cfg, req))
+	raw, _ := json.Marshal(chatWireBody(cfg, req, nil))
 	var got struct {
 		Messages []map[string]any `json:"messages"`
 	}
@@ -770,11 +770,11 @@ func TestDeepSeekToolCallReasoningPadded(t *testing.T) {
 		t.Fatalf("plain reply must stay untouched: %v", got.Messages[3])
 	}
 	cfg.Thinking = "none"
-	if _, ok := chatWireBody(cfg, req).(openai.ChatCompletionRequest); !ok {
+	if _, ok := chatWireBody(cfg, req, nil).(openai.ChatCompletionRequest); !ok {
 		t.Fatal("thinking none must leave the request untouched")
 	}
 	cfg.Model, cfg.Thinking = "glm-5.3-flash", "high"
-	if _, ok := chatWireBody(cfg, req).(openai.ChatCompletionRequest); !ok {
+	if _, ok := chatWireBody(cfg, req, nil).(openai.ChatCompletionRequest); !ok {
 		t.Fatal("non-deepseek must be untouched")
 	}
 }
@@ -791,7 +791,7 @@ func TestOpenRouterProviderWireBody(t *testing.T) {
 
 	read := func() (ignore, only []string, zdr bool, collection string) {
 		t.Helper()
-		raw, _ := json.Marshal(chatWireBody(cfg, req))
+		raw, _ := json.Marshal(chatWireBody(cfg, req, nil))
 		var got struct {
 			Provider struct {
 				Ignore         []string `json:"ignore"`
@@ -852,7 +852,7 @@ func TestOpenRouterProviderWireBody(t *testing.T) {
 
 	cfg.ProviderOnly = nil
 	cfg.Model = "glm-5.3"
-	if _, ok := chatWireBody(cfg, req).(openai.ChatCompletionRequest); !ok {
+	if _, ok := chatWireBody(cfg, req, nil).(openai.ChatCompletionRequest); !ok {
 		t.Fatal("Go models must not get a provider object")
 	}
 }

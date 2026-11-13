@@ -351,11 +351,20 @@ func outputTokens(cfg Config) int {
 	return defaultMaxTokens
 }
 
+// adoptChatNative records the round's native tool state for the next request.
+// It is active-loop state only: a fresh turn starts with an empty map.
+func adoptChatNative(native map[string]chatNative, extras map[string]chatNative) {
+	for id, n := range extras {
+		native[id] = n
+	}
+}
+
 // runChatTurn keeps fallback capability local to this execution loop.
 func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, registry *Registry, history *[]openai.ChatCompletionMessage, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
 	stream := true
 	tools := registry.OpenAITools()
 	imgs := imageAttachments(turnAttachments(ctx))
+	native := make(map[string]chatNative)
 	return runModelTurn(ctx, cfg, registry, history, onEvent, func(ctx context.Context, history []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
 		req := openai.ChatCompletionRequest{Model: wireModelID(cfg.Model, cfg.Routing), Messages: chatMessagesWithImages(chatSendMessages(history), imgs), Tools: tools, MaxTokens: outputTokens(cfg)}
 		if cfg.Temperature != nil {
@@ -364,13 +373,16 @@ func runChatTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey 
 		applyThinkingToRequest(&req, cfg.Model, cfg.Thinking)
 		round := func() (openai.ChatCompletionMessage, openai.Usage, error) {
 			if stream {
-				msg, usage, err := chatRoundStream(ctx, cfg, apiKey, hc, req, onEvent)
+				msg, usage, extras, err := chatRoundStreamDetailed(ctx, cfg, apiKey, hc, req, native, onEvent)
 				if !isStreamRejected(err) {
+					adoptChatNative(native, extras)
 					return msg, usage, err
 				}
 				stream = false
 			}
-			return chatRoundOnce(ctx, cfg, apiKey, hc, req)
+			msg, usage, extras, err := chatRoundOnceDetailed(ctx, cfg, apiKey, hc, req, native)
+			adoptChatNative(native, extras)
+			return msg, usage, err
 		}
 		msg, usage, err := round()
 		if errors.Is(err, errContentFilter) && ctx.Err() == nil {

@@ -80,13 +80,49 @@ func TestShouldRetryRoundStatus(t *testing.T) {
 	}
 }
 
+// A deterministic provider stop (native MALFORMED_*) cannot be repaired by an
+// identical resend, so it must surface after one attempt.
+func TestMalformedStopIsNotRetried(t *testing.T) {
+	calls := 0
+	_, _, err := roundWithRetry(context.Background(), nil, nil,
+		func(context.Context, []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
+			calls++
+			return openai.ChatCompletionMessage{}, openai.Usage{}, chatFinishError("error", "MALFORMED_FUNCTION_CALL", "rejected")
+		})
+	var stop *chatStopError
+	if !errors.As(err, &stop) || calls != 1 {
+		t.Fatalf("err=%v calls=%d", err, calls)
+	}
+}
+
+// A bare finish_reason "error" may be a transient hiccup: retry once, then
+// surface the stop instead of five identical resends.
+func TestBareErrorStopCapsRetries(t *testing.T) {
+	oldB, oldM := roundRetryBase, roundRetryMax
+	roundRetryBase, roundRetryMax = time.Millisecond, time.Millisecond
+	defer func() { roundRetryBase, roundRetryMax = oldB, oldM }()
+	calls := 0
+	var events []Event
+	_, _, err := roundWithRetry(context.Background(), func(e Event) { events = append(events, e) }, nil,
+		func(context.Context, []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
+			calls++
+			return openai.ChatCompletionMessage{}, openai.Usage{}, chatFinishError("error", "", "")
+		})
+	if err == nil || calls != 2 || len(events) != 1 {
+		t.Fatalf("err=%v calls=%d events=%d", err, calls, len(events))
+	}
+	if !strings.Contains(events[0].Args, "provider stopped the response") || !strings.Contains(events[0].Output, `native=""`) {
+		t.Fatalf("retry event lost the stop detail: %+v", events[0])
+	}
+}
+
 // A round cut off at the output cap must not be resent: same request, same cap.
 func TestOutputLimitIsNotRetried(t *testing.T) {
 	calls := 0
 	_, usage, err := roundWithRetry(context.Background(), nil, nil,
 		func(context.Context, []openai.ChatCompletionMessage) (openai.ChatCompletionMessage, openai.Usage, error) {
 			calls++
-			return openai.ChatCompletionMessage{}, openai.Usage{CompletionTokens: 7}, chatFinishError("length")
+			return openai.ChatCompletionMessage{}, openai.Usage{CompletionTokens: 7}, chatFinishError("length", "", "")
 		})
 	if !errors.Is(err, errOutputLimit) || calls != 1 || usage.CompletionTokens != 7 {
 		t.Fatalf("err=%v calls=%d usage=%d", err, calls, usage.CompletionTokens)
@@ -106,7 +142,7 @@ func TestOutputLimitSentinelAcrossTransports(t *testing.T) {
 	if !errors.Is(messagesErr, errOutputLimit) || shouldRetryRound(ctx, messagesErr) {
 		t.Fatalf("messages: err=%v must be a non-retryable output limit", messagesErr)
 	}
-	if !errors.Is(chatFinishError("length"), errOutputLimit) {
+	if !errors.Is(chatFinishError("length", "", ""), errOutputLimit) {
 		t.Fatal("chat: length must wrap errOutputLimit")
 	}
 }

@@ -53,6 +53,10 @@ func friendlyError(err error) FriendlyError {
 		return FriendlyError{"An MCP server hiccuped; the conversation kept going without its tools.", msg}
 	}
 
+	var stopErr *chatStopError
+	if errors.As(err, &stopErr) {
+		return friendlyChatStop(stopErr)
+	}
 	var ae *openai.APIError
 	if errors.As(err, &ae) {
 		return friendlyStatus(ae.HTTPStatusCode, ae.Message)
@@ -243,6 +247,56 @@ func orAllowedProvidersTitle(te *transportError) string {
 	return singleLine("OpenRouter has no allowed provider for this model"+detail+". Update provider_only in valen.toml (or your saved OpenRouter provider preferences) or pick another model.", 300)
 }
 
+// friendlyChatStop maps a non-normal chat stop. Native reasons are the
+// provider's precise cause; MALFORMED_FUNCTION_CALL is Gemini 3 rejecting a
+// tool continuation whose signed reasoning state was not replayed.
+func friendlyChatStop(e *chatStopError) FriendlyError {
+	native := strings.ToUpper(e.Native)
+	details := chatStopDetails(e)
+	switch {
+	case strings.Contains(native, "MALFORMED_FUNCTION_CALL"), strings.Contains(native, "MALFORMED_TOOL_CALL"), strings.Contains(native, "UNEXPECTED_TOOL_CALL"):
+		return FriendlyError{
+			Title:   "The provider rejected the model's tool-call state (" + e.Native + ") — signed reasoning from an earlier round was lost. Resend for a fresh round; if it repeats, /clear or switch model.",
+			Details: details,
+		}
+	case errors.Is(e, errContentFilter):
+		return FriendlyError{
+			Title:   "The provider's content filter stopped the response. Rephrase or resend, or switch model.",
+			Details: details,
+		}
+	}
+	title := "The provider stopped the response"
+	switch {
+	case e.Native != "":
+		title += " (" + e.Native + ")"
+	case e.Reason != "":
+		title += " (" + e.Reason + ")"
+	}
+	if d := singleLine(e.Detail, 200); d != "" {
+		title += ": " + d
+	} else {
+		title += "."
+	}
+	return FriendlyError{Title: title, Details: details}
+}
+
+// chatStopDetails keeps the stop's reason, native reason, provider message and
+// raw body so ctrl+x diagnoses the failure without re-running the turn.
+func chatStopDetails(e *chatStopError) string {
+	transport := e.Transport
+	if transport == "" {
+		transport = "chat"
+	}
+	parts := []string{fmt.Sprintf("%s stop: reason=%q native=%q", transport, e.Reason, e.Native)}
+	if d := strings.TrimSpace(e.Detail); d != "" {
+		parts = append(parts, d)
+	}
+	if raw := strings.TrimSpace(e.Raw); raw != "" {
+		parts = append(parts, "Raw response:\n"+raw)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
 func friendlyStatus(code int, detail string) FriendlyError {
 	switch code {
 	case 401, 403:
@@ -256,7 +310,12 @@ func friendlyStatus(code int, detail string) FriendlyError {
 	case 500, 502, 503, 504:
 		return FriendlyError{"The provider hiccuped (5xx). Sending again usually works.", fmt.Sprintf("HTTP %d: %s", code, detail)}
 	case 0:
-		return FriendlyError{"No response from the provider.", detail}
+		// No status means the failure arrived inside a 200 stream; that is a
+		// provider stop, not a silent empty response.
+		if msg := singleLine(detail, 200); msg != "" {
+			return FriendlyError{"The provider stopped the response: " + msg, detail}
+		}
+		return FriendlyError{"The provider stopped the response before finishing.", detail}
 	default:
 		// Generic codes (notably 400): surface the provider message in
 		// the transcript title so the failure is actionable without

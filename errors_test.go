@@ -40,6 +40,9 @@ func TestFriendlyError(t *testing.T) {
 		{"openrouter 403 attestation", &transportError{Transport: "openrouter", Status: 403, Message: "This model requires you to complete the following before use: 18+ age confirmation. Confirm at https://openrouter.ai/settings/preferences."}, "18+ age confirmation"},
 		{"openrouter 404", &transportError{Transport: "openrouter", Status: 404, Message: "No endpoints found for foo/bar"}, "OpenRouter refused the request (404)"},
 		{"other", errors.New("weird"), "Something went wrong"},
+		{"chat malformed native", chatFinishError("error", "MALFORMED_FUNCTION_CALL", "bad tool state"), "signed reasoning"},
+		{"chat stop detail", chatFinishError("error", "", "upstream exploded"), "upstream exploded"},
+		{"stream stop", &transportError{Transport: "chat", Status: 0, Message: "stream died"}, "provider stopped the response"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

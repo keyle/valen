@@ -153,7 +153,7 @@ cheapest fallback per model) summarizes.
 | MCP handshake / call | 30s / 2m | Slow servers warn-and-continue at startup, never abort the run |
 | Parallel tools | max 8 known read-only builtins, max 5 `task` subagents | Any other tool makes the whole batch serial |
 | Stream body cap | 8MiB LimitReader/round | A runaway stream can't OOM the harness |
-| Retry | 3 attempts, 300ms→800ms, 429/502/503/504 + network errors | Overloads back off; 400s never retry (stream-fallback depends on it) |
+| Retry | up to 5 attempts, 1s→30s backoff; 429/502/503/504 + network errors | Overloads back off; 400s, output caps and deterministic `MALFORMED_*` stops never retry; a bare `error` stop gets one retry |
 | HTTP deadlines | 300s per attempt including body; headers 60s, dial/TLS 10s | Optional `request_timeout_seconds`; no blocking retry-body drain, no new dependency |
 | Task subagent | ≤25 rounds, depth 1 | A flailing delegate can't eat the session budget |
 | Web | search 8 results/1MiB; fetch 512KiB→8000 chars | Snippets stay plannable, pages stay skimmable |
@@ -317,8 +317,8 @@ log, and registry are transport-agnostic. Model ID selects the transport
 | --- | --- | --- | --- |
 | Thinking knob | `reasoning_effort` / `enable_thinking` (family-dependent) | `{type: enabled, budget 1024…6144}` / `disabled` for `none` | `{effort}` verbatim; `none`/empty omitted (Muse Spark 400s on `none`) |
 | Tool results | `role: tool`, fresh registry-capped text | user `tool_result`, same text + last cache breakpoint | `function_call_output`, same text |
-| Active-turn reasoning | native `ReasoningContent` | native thinking/signature/redacted blocks replayed in order | native reasoning/encrypted content and output phases replayed, stateless |
-| Beyond active loop / resume | native Chat reasoning checkpointed | display thinking stored, native blocks/signatures not persisted | display summaries stored, native items/encryption/phases not persisted |
+| Active-turn reasoning | native `ReasoningContent`; tool loops replay `reasoning_details` and `extra_content.google.thought_signature` | native thinking/signature/redacted blocks replayed in order | native reasoning/encrypted content and output phases replayed, stateless |
+| Beyond active loop / resume | reasoning text checkpointed; signed `reasoning_details`/`thought_signature` not persisted | display thinking stored, native blocks/signatures not persisted | display summaries stored, native items/encryption/phases not persisted |
 | Caching | server prefix over stable bytes | + 3 explicit breakpoints | server prefix over stable bytes |
 | Answer cap | `max_tokens` (65536 default) | `max_tokens` (65536 default) | `max_output_tokens` (65536 default) |
 | Unknown thinking | full vocabulary until a 400 teaches the list, cached to disk | same | same |
@@ -358,6 +358,7 @@ Disk keeps every appended turn and checkpoint; memory retains only the latest
 checkpoint. Compaction does not rewrite prior records; resume preserves the
 compacted continuation rather than restoring all old output to the wire.
 Failures/cancellations also checkpoint completed work. Native Messages
-signatures and Responses encrypted reasoning remain active-loop-only, not
-durable resume metadata. See `EXECUTION-REVIEW.md` for the pinned OpenCode
+signatures, Responses encrypted reasoning and Chat's signed
+`reasoning_details`/`thought_signature` remain active-loop-only, not durable
+resume metadata. See `EXECUTION-REVIEW.md` for the pinned OpenCode
 comparison and remaining gaps.

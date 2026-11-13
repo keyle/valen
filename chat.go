@@ -143,17 +143,43 @@ func openRouterProvider(cfg Config) *orProvider {
 	return &p
 }
 
+// chatNative is provider state go-openai does not model: OpenRouter's
+// reasoning_details array and each tool call's extra_content (Gemini 3 thought
+// signatures). It is captured per tool call and replayed on the next request of
+// the same active tool loop only; ordinary history keeps the text form.
+type chatNative struct {
+	ReasoningDetails json.RawMessage
+	ExtraContent     json.RawMessage
+}
+
+func cleanRaw(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	return raw
+}
+
+func jsonString(raw json.RawMessage) string {
+	var s string
+	if len(raw) == 0 || json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return s
+}
+
 // chatWireBody patches the serialized request. OpenRouter gets the provider
 // routing object (ignore/only) plus each assistant reasoning_content mirrored
 // as `reasoning` (its documented field). DeepSeek thinking mode 400s unless
 // every assistant tool-call message carries reasoning_content, and go-openai
-// omits empty strings, so those get an explicit "". extra_body keys are
-// merged first, so valen's own fields win. Everything else is sent untouched.
-func chatWireBody(cfg Config, req openai.ChatCompletionRequest) any {
+// omits empty strings, so those get an explicit "". Captured native state
+// (reasoning_details, tool-call extra_content) is reattached by call ID.
+// extra_body keys are merged first, so valen's own fields win. Everything else
+// is sent untouched.
+func chatWireBody(cfg Config, req openai.ChatCompletionRequest, native map[string]chatNative) any {
 	mirror := modelProvider(cfg.Model) == ProviderOpenRouter
 	pad := strings.HasPrefix(modelBaseID(cfg.Model), "deepseek") && strings.ToLower(strings.TrimSpace(cfg.Thinking)) != "none"
 	provider := openRouterProvider(cfg)
-	need := provider != nil || len(cfg.ExtraBody) > 0
+	need := provider != nil || len(cfg.ExtraBody) > 0 || len(native) > 0
 	for _, m := range req.Messages {
 		if m.Role == openai.ChatMessageRoleAssistant && ((mirror && m.ReasoningContent != "") || (pad && len(m.ToolCalls) > 0 && m.ReasoningContent == "")) {
 			need = true
@@ -181,7 +207,7 @@ func chatWireBody(cfg Config, req openai.ChatCompletionRequest) any {
 			body["provider"] = pb
 		}
 	}
-	if mirror || pad {
+	if mirror || pad || len(native) > 0 {
 		var msgs []map[string]json.RawMessage
 		if json.Unmarshal(body["messages"], &msgs) == nil {
 			for _, m := range msgs {
@@ -195,6 +221,34 @@ func chatWireBody(cfg Config, req openai.ChatCompletionRequest) any {
 				if pad && !ok && len(m["tool_calls"]) > 0 {
 					m["reasoning_content"] = json.RawMessage(`""`)
 				}
+				if len(native) == 0 {
+					continue
+				}
+				var calls []map[string]json.RawMessage
+				if json.Unmarshal(m["tool_calls"], &calls) != nil {
+					continue
+				}
+				var details json.RawMessage
+				patched := false
+				for _, call := range calls {
+					n, ok := native[jsonString(call["id"])]
+					if !ok {
+						continue
+					}
+					if details == nil {
+						details = n.ReasoningDetails
+					}
+					if len(n.ExtraContent) > 0 {
+						call["extra_content"] = n.ExtraContent
+						patched = true
+					}
+				}
+				if details != nil {
+					m["reasoning_details"] = details
+				}
+				if patched {
+					m["tool_calls"], _ = json.Marshal(calls)
+				}
 			}
 			body["messages"], _ = json.Marshal(msgs)
 		}
@@ -205,33 +259,41 @@ func chatWireBody(cfg Config, req openai.ChatCompletionRequest) any {
 // chatRoundOnce is the non-streaming round, kept as the fallback when a
 // provider rejects `stream: true`.
 func chatRoundOnce(ctx context.Context, cfg Config, apiKey string, hc *http.Client, req openai.ChatCompletionRequest) (openai.ChatCompletionMessage, openai.Usage, error) {
+	msg, usage, _, err := chatRoundOnceDetailed(ctx, cfg, apiKey, hc, req, nil)
+	return msg, usage, err
+}
+
+func chatRoundOnceDetailed(ctx context.Context, cfg Config, apiKey string, hc *http.Client, req openai.ChatCompletionRequest, native map[string]chatNative) (openai.ChatCompletionMessage, openai.Usage, map[string]chatNative, error) {
 	var usage openai.Usage
 	endpoint, headers, sendCfg, httpClient := chatTarget(cfg, apiKey, hc)
-	resp, err := postAPI(ctx, httpClient, sendCfg, endpoint, chatWireBody(cfg, req), headers)
+	resp, err := postAPI(ctx, httpClient, sendCfg, endpoint, chatWireBody(cfg, req, native), headers)
 	if err != nil {
-		return openai.ChatCompletionMessage{}, usage, err
+		return openai.ChatCompletionMessage{}, usage, nil, err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return openai.ChatCompletionMessage{}, usage, err
+		return openai.ChatCompletionMessage{}, usage, nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return openai.ChatCompletionMessage{}, usage, parseTransportError(chatTransportLabel(cfg), resp.StatusCode, raw)
+		return openai.ChatCompletionMessage{}, usage, nil, parseTransportError(chatTransportLabel(cfg), resp.StatusCode, raw)
+	}
+	if te := chatBodyError(chatTransportLabel(cfg), raw); te != nil {
+		return openai.ChatCompletionMessage{}, usage, nil, te
 	}
 	var out openai.ChatCompletionResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return openai.ChatCompletionMessage{}, usage, fmt.Errorf("api: chat: decode: %w", err)
+		return openai.ChatCompletionMessage{}, usage, nil, fmt.Errorf("api: chat: decode: %w", err)
 	}
 	if len(out.Choices) == 0 {
-		return openai.ChatCompletionMessage{}, usage, errors.New("api: empty choices in response")
+		return openai.ChatCompletionMessage{}, usage, nil, errors.New("api: empty choices in response")
 	}
 	msg := out.Choices[0].Message
-	if err := chatFinishError(string(out.Choices[0].FinishReason)); err != nil {
-		return openai.ChatCompletionMessage{}, out.Usage, err
+	if err := chatFinishError(string(out.Choices[0].FinishReason), chatNativeFinish(raw, 0), ""); err != nil {
+		return openai.ChatCompletionMessage{}, out.Usage, nil, err
 	}
 	fillReasoning(&msg, raw)
-	return msg, out.Usage, validateModelReply(msg)
+	return msg, out.Usage, chatNativeFromBody(raw), validateModelReply(msg)
 }
 
 // errContentFilter marks a round the provider cut off with a content filter.
@@ -241,50 +303,297 @@ var errContentFilter = errors.New("content filter")
 // reasoning also spends). Resending the same request hits the same cap.
 var errOutputLimit = errors.New("output limit")
 
-func chatFinishError(reason string) error {
+// chatStopError is a provider stop that was not a normal completion. Reason is
+// the normalized finish_reason; Native is the provider's precise reason
+// (OpenRouter's native_finish_reason, e.g. MALFORMED_FUNCTION_CALL); Detail is
+// the provider message when the stop carried one. Cause carries the output-limit
+// and content-filter sentinels so errors.Is keeps working everywhere.
+type chatStopError struct {
+	Reason    string
+	Native    string
+	Detail    string
+	Raw       string
+	Transport string
+	Cause     error
+}
+
+func (e *chatStopError) Error() string {
+	label := e.Reason
+	if label == "" {
+		label = "error"
+	}
+	if e.Native != "" && !strings.EqualFold(e.Native, label) {
+		label += "/" + e.Native
+	}
+	msg := "api: chat: incomplete response (" + label + ")"
+	if d := singleLine(e.Detail, 300); d != "" {
+		msg += ": " + d
+	}
+	return msg
+}
+
+func (e *chatStopError) Unwrap() error { return e.Cause }
+
+func chatFinishError(reason, native, detail string) error {
 	switch reason {
 	case "", "stop", "tool_calls", "function_call":
 		return nil
 	case "length":
-		return fmt.Errorf("api: chat: incomplete response (%s): %w", reason, errOutputLimit)
+		return &chatStopError{Reason: reason, Native: native, Detail: detail, Cause: errOutputLimit}
 	case "content_filter":
-		return fmt.Errorf("api: chat: incomplete response (%s): %w", reason, errContentFilter)
+		return &chatStopError{Reason: reason, Native: native, Detail: detail, Cause: errContentFilter}
 	default:
-		return fmt.Errorf("api: chat: incomplete response (%s)", reason)
+		return &chatStopError{Reason: reason, Native: native, Detail: detail}
 	}
 }
 
+// chatNativeFinish extracts native_finish_reason for one choice. OpenRouter
+// sends it alongside finish_reason, including on the usage chunk that repeats
+// the stop; providers without it leave it empty.
+func chatNativeFinish(raw []byte, index int) string {
+	if !bytes.Contains(raw, []byte(`"native_finish_reason"`)) {
+		return ""
+	}
+	var c struct {
+		Choices []struct {
+			Index              int    `json:"index"`
+			NativeFinishReason string `json:"native_finish_reason"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal(raw, &c) != nil {
+		return ""
+	}
+	for _, ch := range c.Choices {
+		if ch.Index == index {
+			return ch.NativeFinishReason
+		}
+	}
+	return ""
+}
+
+// chatBodyError returns the provider error carried inside a 200 body, if any.
+// A 200 with an error object is not an empty-choices bug; it is the provider's
+// own failure and its message is the actionable part.
+func chatBodyError(transport string, raw []byte) *transportError {
+	if !bytes.Contains(raw, []byte(`"error"`)) {
+		return nil
+	}
+	var env struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(raw, &env) != nil || cleanRaw(env.Error) == nil {
+		return nil
+	}
+	return parseTransportError(transport, 0, raw)
+}
+
+// chatNativeFromBody extracts the native tool state from a unary chat body,
+// keyed by tool call ID. A round without tool calls has nothing to replay.
+func chatNativeFromBody(raw []byte) map[string]chatNative {
+	if !bytes.Contains(raw, []byte(`"reasoning_details"`)) && !bytes.Contains(raw, []byte(`"extra_content"`)) {
+		return nil
+	}
+	var body struct {
+		Choices []struct {
+			Message struct {
+				ReasoningDetails json.RawMessage `json:"reasoning_details"`
+				ToolCalls        []struct {
+					ID           string          `json:"id"`
+					ExtraContent json.RawMessage `json:"extra_content"`
+				} `json:"tool_calls"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal(raw, &body) != nil || len(body.Choices) == 0 {
+		return nil
+	}
+	m := body.Choices[0].Message
+	details := cleanRaw(m.ReasoningDetails)
+	native := make(map[string]chatNative, len(m.ToolCalls))
+	for _, tc := range m.ToolCalls {
+		if tc.ID == "" {
+			continue
+		}
+		extra := cleanRaw(tc.ExtraContent)
+		if details != nil || extra != nil {
+			native[tc.ID] = chatNative{ReasoningDetails: details, ExtraContent: extra}
+		}
+	}
+	if len(native) == 0 {
+		return nil
+	}
+	return native
+}
+
+// streamReasoningDetails returns a chunk's reasoning_details delta for one
+// choice, raw so unknown detail types survive the round trip.
+func streamReasoningDetails(data string, index int) json.RawMessage {
+	if !strings.Contains(data, `"reasoning_details"`) {
+		return nil
+	}
+	var c struct {
+		Choices []struct {
+			Index int `json:"index"`
+			Delta struct {
+				ReasoningDetails json.RawMessage `json:"reasoning_details"`
+			} `json:"delta"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal([]byte(data), &c) != nil {
+		return nil
+	}
+	for _, ch := range c.Choices {
+		if ch.Index == index {
+			return cleanRaw(ch.Delta.ReasoningDetails)
+		}
+	}
+	return nil
+}
+
+// streamToolExtras returns a chunk's per-tool-call extra_content keyed by tool
+// call index. Gemini 3 sends its thought signature there.
+func streamToolExtras(data string, index int) map[int]json.RawMessage {
+	if !strings.Contains(data, `"extra_content"`) {
+		return nil
+	}
+	var c struct {
+		Choices []struct {
+			Index int `json:"index"`
+			Delta struct {
+				ToolCalls []struct {
+					Index        *int            `json:"index"`
+					ExtraContent json.RawMessage `json:"extra_content"`
+				} `json:"tool_calls"`
+			} `json:"delta"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal([]byte(data), &c) != nil {
+		return nil
+	}
+	out := map[int]json.RawMessage{}
+	for _, ch := range c.Choices {
+		if ch.Index != index {
+			continue
+		}
+		for _, tc := range ch.Delta.ToolCalls {
+			idx := 0
+			if tc.Index != nil {
+				idx = *tc.Index
+			}
+			if extra := cleanRaw(tc.ExtraContent); extra != nil {
+				out[idx] = extra
+			}
+		}
+	}
+	return out
+}
+
+// mergeJSONString appends fragment to a JSON string field in place.
+func mergeJSONString(obj map[string]json.RawMessage, key, fragment string) {
+	enc, err := json.Marshal(jsonString(obj[key]) + fragment)
+	if err == nil {
+		obj[key] = enc
+	}
+}
+
+// chatReasoningDetails accumulates streamed reasoning_details. OpenRouter
+// reuses index 0 for every logical block while streaming, so entries merge by
+// consecutive type: text and summary fragments concatenate, a signature-only
+// text delta folds into the preceding entry, and encrypted blobs stay discrete.
+// The replayed array must match the model's original output element for element.
+type chatReasoningDetails struct {
+	entries []map[string]json.RawMessage
+}
+
+func (a *chatReasoningDetails) add(raw json.RawMessage) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return
+	}
+	var items []map[string]json.RawMessage
+	if json.Unmarshal(raw, &items) != nil {
+		return
+	}
+	for _, item := range items {
+		if len(item) == 0 {
+			continue
+		}
+		typ := jsonString(item["type"])
+		last := len(a.entries) - 1
+		switch typ {
+		case "reasoning.text", "reasoning.summary":
+			key := "text"
+			if typ == "reasoning.summary" {
+				key = "summary"
+			}
+			fragment := jsonString(item[key])
+			if last >= 0 && jsonString(a.entries[last]["type"]) == typ {
+				mergeJSONString(a.entries[last], key, fragment)
+				// signature/format/id may arrive in a later, text-less delta.
+				for k, v := range item {
+					if k != "type" && k != key {
+						a.entries[last][k] = v
+					}
+				}
+				continue
+			}
+			a.entries = append(a.entries, item)
+		default:
+			a.entries = append(a.entries, item)
+		}
+	}
+}
+
+func (a *chatReasoningDetails) raw() json.RawMessage {
+	if len(a.entries) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(a.entries)
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
 type chatToolAcc struct {
-	id   string
-	name string
-	args strings.Builder
+	id    string
+	name  string
+	args  strings.Builder
+	extra json.RawMessage
 }
 
 // chatRoundStream runs one round as SSE, emitting text/thinking deltas live.
 // A unary JSON body (provider ignored streaming) folds through the same
 // validation as chatRoundOnce without emitting deltas.
 func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Client, req openai.ChatCompletionRequest, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, error) {
+	msg, usage, _, err := chatRoundStreamDetailed(ctx, cfg, apiKey, hc, req, nil, onEvent)
+	return msg, usage, err
+}
+
+// chatRoundStreamDetailed also returns the round's native tool state for the
+// next request of the same active loop: reasoning_details and per-call
+// extra_content. It is never emitted to the UI or stored in ordinary history.
+func chatRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string, hc *http.Client, req openai.ChatCompletionRequest, native map[string]chatNative, onEvent func(Event)) (openai.ChatCompletionMessage, openai.Usage, map[string]chatNative, error) {
 	var usage openai.Usage
 	req.Stream = true
 	req.StreamOptions = &openai.StreamOptions{IncludeUsage: true}
 	endpoint, headers, sendCfg, httpClient := chatTarget(cfg, apiKey, hc)
 	start := time.Now()
-	resp, err := postAPI(ctx, httpClient, sendCfg, endpoint, chatWireBody(cfg, req), headers)
+	resp, err := postAPI(ctx, httpClient, sendCfg, endpoint, chatWireBody(cfg, req, native), headers)
 	if err != nil {
-		return openai.ChatCompletionMessage{}, usage, err
+		return openai.ChatCompletionMessage{}, usage, nil, err
 	}
 	defer resp.Body.Close()
 	br := bufio.NewReader(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode != http.StatusOK {
 		raw, err := io.ReadAll(br)
 		if err != nil {
-			return openai.ChatCompletionMessage{}, usage, err
+			return openai.ChatCompletionMessage{}, usage, nil, err
 		}
-		return openai.ChatCompletionMessage{}, usage, parseTransportError(chatTransportLabel(cfg), resp.StatusCode, raw)
+		return openai.ChatCompletionMessage{}, usage, nil, parseTransportError(chatTransportLabel(cfg), resp.StatusCode, raw)
 	}
 	sse, raw, err := splitBodyMode(br)
 	if err != nil {
-		return openai.ChatCompletionMessage{}, usage, err
+		return openai.ChatCompletionMessage{}, usage, nil, err
 	}
 	emit := func(kind, text string) {
 		if onEvent != nil && text != "" {
@@ -292,15 +601,18 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 		}
 	}
 	if !sse {
+		if te := chatBodyError(chatTransportLabel(cfg), raw); te != nil {
+			return openai.ChatCompletionMessage{}, usage, nil, te
+		}
 		var out openai.ChatCompletionResponse
 		if err := json.Unmarshal(raw, &out); err != nil {
-			return openai.ChatCompletionMessage{}, usage, fmt.Errorf("api: chat: decode: %w", err)
+			return openai.ChatCompletionMessage{}, usage, nil, fmt.Errorf("api: chat: decode: %w", err)
 		}
 		if len(out.Choices) == 0 {
-			return openai.ChatCompletionMessage{}, usage, errors.New("api: empty choices in response")
+			return openai.ChatCompletionMessage{}, usage, nil, errors.New("api: empty choices in response")
 		}
-		if err := chatFinishError(string(out.Choices[0].FinishReason)); err != nil {
-			return openai.ChatCompletionMessage{}, out.Usage, err
+		if err := chatFinishError(string(out.Choices[0].FinishReason), chatNativeFinish(raw, 0), ""); err != nil {
+			return openai.ChatCompletionMessage{}, out.Usage, nil, err
 		}
 		msg := out.Choices[0].Message
 		fillReasoning(&msg, raw)
@@ -312,13 +624,14 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 				onEvent(Event{Kind: "or_meta", ORMeta: &meta})
 			}
 		}
-		return msg, out.Usage, validateModelReply(msg)
+		return msg, out.Usage, chatNativeFromBody(raw), validateModelReply(msg)
 	}
 
 	var content, thinking strings.Builder
+	var reasoning chatReasoningDetails
 	accs := map[int]*chatToolAcc{}
 	var order []int
-	var eventErr, finishErr error
+	var eventErr, finishErr, stopErr error
 	var terminal bool
 	orMeta := ORMeta{}
 	sentProvider, sentCost := false, false
@@ -350,7 +663,15 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 			return false
 		}
 		if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
-			eventErr = parseTransportError(chatTransportLabel(cfg), 0, []byte(ev.data))
+			te := parseTransportError(chatTransportLabel(cfg), 0, []byte(ev.data))
+			if ce, ok := stopErr.(*chatStopError); ok {
+				// The stop reason names the failure; the error body names the
+				// provider's message. Keep both for the errors view.
+				ce.Detail, ce.Raw, ce.Transport = te.Message, te.Raw, te.Transport
+				eventErr = ce
+			} else {
+				eventErr = te
+			}
 			return false
 		}
 		if chunk.Usage != nil {
@@ -378,19 +699,27 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 			if choice.Index != 0 {
 				continue
 			}
-			if err := chatFinishError(string(choice.FinishReason)); err != nil {
-				if !errors.Is(err, errOutputLimit) {
+			if err := chatFinishError(string(choice.FinishReason), chatNativeFinish([]byte(ev.data), choice.Index), ""); err != nil {
+				switch {
+				case errors.Is(err, errOutputLimit):
+					// Keep reading: the usage chunk follows the finish_reason
+					// chunk, and a truncated round's tokens still count.
+					finishErr = err
+				case strings.EqualFold(string(choice.FinishReason), "error"):
+					// OpenRouter reports the precise native reason on this
+					// chunk and may send the provider error body after it.
+					stopErr = err
+				default:
 					eventErr = err
 					return false
 				}
-				// Keep reading: the usage chunk follows the finish_reason
-				// chunk, and a truncated round's tokens still count.
-				finishErr = err
 			}
 			if choice.FinishReason != "" {
 				terminal = true
 			}
 			d := choice.Delta
+			reasoning.add(streamReasoningDetails(ev.data, choice.Index))
+			extras := streamToolExtras(ev.data, choice.Index)
 			altReasoning := altStreamReasoning(ev.data, choice.Index)
 			if d.Content != "" {
 				markDelta()
@@ -427,22 +756,28 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 				if tc.Function.Name != "" {
 					a.name = tc.Function.Name
 				}
+				if extra := extras[idx]; extra != nil {
+					a.extra = extra
+				}
 				a.args.WriteString(tc.Function.Arguments)
 			}
 		}
 		return true
 	})
 	if eventErr != nil {
-		return openai.ChatCompletionMessage{}, usage, eventErr
+		return openai.ChatCompletionMessage{}, usage, nil, eventErr
 	}
 	if finishErr != nil {
-		return openai.ChatCompletionMessage{}, usage, finishErr
+		return openai.ChatCompletionMessage{}, usage, nil, finishErr
+	}
+	if stopErr != nil {
+		return openai.ChatCompletionMessage{}, usage, nil, stopErr
 	}
 	if scanErr != nil {
-		return openai.ChatCompletionMessage{}, usage, scanErr
+		return openai.ChatCompletionMessage{}, usage, nil, scanErr
 	}
 	if !terminal {
-		return openai.ChatCompletionMessage{}, usage, errors.New("api: chat: incomplete stream (missing [DONE] or finish_reason)")
+		return openai.ChatCompletionMessage{}, usage, nil, errors.New("api: chat: incomplete stream (missing [DONE] or finish_reason)")
 	}
 	if modelProvider(cfg.Model) == ProviderOpenRouter {
 		if !firstDelta.IsZero() {
@@ -465,6 +800,8 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 		}
 	}
 	var calls []openai.ToolCall
+	details := reasoning.raw()
+	var nativeOut map[string]chatNative
 	for _, idx := range order {
 		a := accs[idx]
 		calls = append(calls, openai.ToolCall{
@@ -475,6 +812,13 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 				Arguments: a.args.String(),
 			},
 		})
+		if a.id == "" || (details == nil && a.extra == nil) {
+			continue
+		}
+		if nativeOut == nil {
+			nativeOut = map[string]chatNative{}
+		}
+		nativeOut[a.id] = chatNative{ReasoningDetails: details, ExtraContent: a.extra}
 	}
 	msg := openai.ChatCompletionMessage{
 		Role:             openai.ChatMessageRoleAssistant,
@@ -482,7 +826,7 @@ func chatRoundStream(ctx context.Context, cfg Config, apiKey string, hc *http.Cl
 		ReasoningContent: thinking.String(),
 		ToolCalls:        calls,
 	}
-	return msg, usage, validateModelReply(msg)
+	return msg, usage, nativeOut, validateModelReply(msg)
 }
 
 // withNoQuestionRule appends the no-question policy to the system message.

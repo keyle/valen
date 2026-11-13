@@ -196,6 +196,12 @@ captured into `ReasoningContent` and sent back on assistant messages as both
 fields, since thinking-mode upstreams 400 when it is not passed back.
 DeepSeek models (any provider) also get an explicit `reasoning_content: ""` on
 assistant tool-call messages that have none, unless `thinking = "none"`.
+During a tool loop, OpenRouter's provider-native state also replays on the next
+request: the assistant's `reasoning_details` array verbatim (signed and
+encrypted entries included) and each tool call's
+`extra_content.google.thought_signature`, matched by tool-call ID. Only the
+snake_case `extra_content` form is sent back. This state is bare wire data:
+it is not stored in history and never crosses into a fresh turn.
 History stays OpenAI-shaped in memory; the non-chat transports convert each
 round and fold the reply back, so the TUI, session log and tool registry are
 transport-agnostic.
@@ -224,7 +230,8 @@ transport loop, not across later turns, overflow redispatch, or session
 resume. Ordinary history/checkpoints preserve text and tool transactions,
 not those native blocks/items. Chat's native `ReasoningContent` remains in
 history and is checkpointed. Display `<think>` text is not a substitute for
-signed or encrypted replay.
+signed or encrypted replay; Chat's `reasoning_details` and per-call
+`extra_content` are active-loop-only like the other transports' native state.
 
 Sampling params are omitted unless configured: some models reject a
 `temperature` that differs from their fixed value. The same rule covers
@@ -315,11 +322,15 @@ backstop stays terminal there.
   and the token tally go to stderr, so `valen "..." > out.md` stays clean.
 - `resp.Choices` empty is an error, not a panic.
 - API errors are returned wrapped (`api: ...`) with the provider's message.
-  Transient 429/502/503/504 and network errors retry with backoff (3 attempts)
-  before surfacing, so overloads back off instead of failing the turn. A round
-  stopped at the output cap (`length`, `max_tokens`, `max_output_tokens`) is not
-  retried: it reports the friendly "ran out of output tokens" error, and its
-  usage still counts.
+  Transient 429/502/503/504 and network errors retry with backoff (up to 5
+  attempts) before surfacing, so overloads back off instead of failing the
+  turn. A provider stop keeps its native reason (OpenRouter's
+  `native_finish_reason`, e.g. `MALFORMED_FUNCTION_CALL`) and any provider
+  error body; the transcript names that cause instead of a generic failure.
+  Deterministic `MALFORMED_*` stops are not retried; a bare `error` stop
+  without a native reason gets one retry. A round stopped at the output cap
+  (`length`, `max_tokens`, `max_output_tokens`) is not retried: it reports the
+  friendly "ran out of output tokens" error, and its usage still counts.
   Each HTTP attempt has a `request_timeout_seconds` deadline including body
   reads; connection setup also has 10s dial/TLS and 60s response-header limits.
   Retryable bodies close without a blocking drain. This is not an idle timeout
@@ -333,7 +344,9 @@ backstop stays terminal there.
 - SSE requires a transport terminal marker (Chat `[DONE]` or finish reason,
   Messages `message_stop`, Responses `response.completed`). Provider errors,
   failed/incomplete responses, unfinished blocks and invalid tool calls are
-  errors, never executable partial tool work. Tool calls need unique IDs,
+  errors, never executable partial tool work. A bare `error` finish reason is a
+  stop, not a completion: the scan keeps reading for the provider's later
+  top-level error chunk, which names the cause. Tool calls need unique IDs,
   names, function type and JSON-object arguments. A thinking-only response
   with no tools is an error, not a successful final answer.
 - `AskUserQuestion` is part of the same loop: the model may ask multiple

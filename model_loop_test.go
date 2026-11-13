@@ -31,13 +31,25 @@ func TestModelLoopFreshReadsAndNativeReplayOnWire(t *testing.T) {
 				model, capField, path := "m", "max_tokens", "/chat/completions"
 				switch transport {
 				case "chat":
-					first, _ = json.Marshal(map[string]any{"choices": []any{map[string]any{"message": msg, "finish_reason": "tool_calls"}}, "usage": map[string]int{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
+					callMaps := make([]map[string]any, len(calls))
+					for i, call := range calls {
+						callMaps[i] = map[string]any{
+							"id": call.ID, "type": "function", "function": call.Function,
+							"extra_content": map[string]any{"google": map[string]any{"thought_signature": fmt.Sprintf("sig-%d", i)}},
+						}
+					}
+					firstMsg := map[string]any{
+						"role": "assistant", "content": "checking", "reasoning_content": "native plan",
+						"reasoning_details": []any{map[string]any{"type": "reasoning.text", "text": "native plan", "signature": "signed-plan", "format": "google-gemini-v1"}},
+						"tool_calls":        callMaps,
+					}
+					first, _ = json.Marshal(map[string]any{"choices": []any{map[string]any{"message": firstMsg, "finish_reason": "tool_calls"}}, "usage": map[string]int{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
 					final = completion(nil, "done")
 					deltaCalls := make([]map[string]any, len(calls))
 					for i, call := range calls {
-						deltaCalls[i] = map[string]any{"index": i, "id": call.ID, "type": "function", "function": call.Function}
+						deltaCalls[i] = map[string]any{"index": i, "id": call.ID, "type": "function", "function": call.Function, "extra_content": map[string]any{"google": map[string]any{"thought_signature": fmt.Sprintf("sig-%d", i)}}}
 					}
-					chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": "checking", "reasoning_content": "native plan", "tool_calls": deltaCalls}, "finish_reason": "tool_calls"}}, "usage": map[string]int{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
+					chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": "checking", "reasoning_content": "native plan", "reasoning_details": []any{map[string]any{"type": "reasoning.text", "text": "native plan", "signature": "signed-plan", "format": "google-gemini-v1"}}, "tool_calls": deltaCalls}, "finish_reason": "tool_calls"}}, "usage": map[string]int{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
 					firstStream, finalStream = "data: "+string(chunk)+"\n\ndata: [DONE]\n\n", chatTextStream("done")
 				case "messages":
 					model, path = "minimax-m2.7", "/messages"
@@ -136,13 +148,24 @@ func TestModelLoopFreshReadsAndNativeReplayOnWire(t *testing.T) {
 				} else if !strings.Contains(string(wire), "opaque-plan") || (transport == "messages" && !strings.Contains(string(wire), "signed-plan")) || (transport == "responses" && !strings.Contains(string(wire), `"phase":"commentary"`)) {
 					t.Fatalf("native continuation lost: %s", wire)
 				}
+				if transport == "chat" {
+					for _, want := range []string{`"reasoning_details"`, `"signature":"signed-plan"`, `"thought_signature":"sig-0"`, `"thought_signature":"sig-3"`} {
+						if !strings.Contains(string(wire), want) {
+							t.Fatalf("chat native continuation lost %s: %s", want, wire)
+						}
+					}
+				}
 				// A fresh execution closure must not retain native metadata.
 				history = append(history, openai.ChatCompletionMessage{Role: "user", Content: "next"})
 				if _, _, err := runTurn(context.Background(), cfg, nil, "", srv.Client(), r, &history, nil); err != nil {
 					t.Fatal(err)
 				}
 				wire, _ = json.Marshal(requests[len(requests)-1])
-				if transport != "chat" && (strings.Contains(string(wire), "opaque-plan") || strings.Contains(string(wire), "signed-plan")) {
+				if transport == "chat" {
+					if strings.Contains(string(wire), "reasoning_details") || strings.Contains(string(wire), "thought_signature") {
+						t.Fatalf("chat native continuation leaked across turns: %s", wire)
+					}
+				} else if strings.Contains(string(wire), "opaque-plan") || strings.Contains(string(wire), "signed-plan") {
 					t.Fatal("native continuation leaked across turns")
 				}
 			})
@@ -164,6 +187,7 @@ func TestChatRoundRejectsInvalidCompletion(t *testing.T) {
 		{"missing_call_id", `{"choices":[{"message":{"role":"assistant","tool_calls":[{"type":"function","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`, "incomplete tool call"},
 		{"bad_call_args", `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"read","arguments":"[]"}}]},"finish_reason":"tool_calls"}]}`, "invalid tool arguments"},
 		{"partial_call_stream", "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"1\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n", "invalid tool arguments"},
+		{"error_native_unary", `{"choices":[{"message":{"role":"assistant"},"finish_reason":"error","native_finish_reason":"MALFORMED_FUNCTION_CALL"}]}`, "MALFORMED_FUNCTION_CALL"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(tc.body)) }))
@@ -180,6 +204,31 @@ func TestChatRoundRejectsInvalidCompletion(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A provider stop carries its native reason on the finish_reason chunk, and
+// OpenRouter may follow it with the provider's error body. Both must survive
+// so the transcript names the real cause and the round is not retried.
+func TestChatStreamStopKeepsNativeReasonAndLaterError(t *testing.T) {
+	var bodies []string
+	srv := sseServer(t, &bodies,
+		"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"error\",\"native_finish_reason\":\"MALFORMED_FUNCTION_CALL\"}]}\n\n"+
+			"data: {\"error\":{\"message\":\"provider rejected the tool call\",\"code\":502}}\n\n")
+	_, usage, err := chatRoundStream(context.Background(), newTestConfig(srv.URL), "", srv.Client(), openai.ChatCompletionRequest{}, nil)
+	var stop *chatStopError
+	if !errors.As(err, &stop) || stop.Native != "MALFORMED_FUNCTION_CALL" || stop.Detail != "provider rejected the tool call" {
+		t.Fatalf("stop=%+v err=%v", stop, err)
+	}
+	if !strings.Contains(stop.Raw, "provider rejected the tool call") || usage.CompletionTokens != 0 {
+		t.Fatalf("raw=%q usage=%+v", stop.Raw, usage)
+	}
+	if shouldRetryRound(context.Background(), err) {
+		t.Fatal("MALFORMED_FUNCTION_CALL must not retry")
+	}
+	fe := friendlyError(err)
+	if !strings.Contains(fe.Title, "signed reasoning") || !strings.Contains(fe.Details, `native="MALFORMED_FUNCTION_CALL"`) {
+		t.Fatalf("friendly=%+v", fe)
 	}
 }
 
