@@ -766,6 +766,21 @@ func TestTUICtrlEnterCSIQueuesWhileBusy(t *testing.T) {
 	}
 }
 
+func TestTUIQueuedPromptAutoRunsAfterTurn(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.busy = true
+	m.input.SetValue("hello")
+	_, _ = m.Update(csiMsg("\x1b[13;5u"))
+	m.input.SetValue("draft")
+	_, _ = m.Update(turnDoneMsg{prompt: "first", answer: "ok", history: m.history, model: m.cfg.Model})
+	if len(m.queued) != 0 || !m.busy || m.pendingPrompt != "hello" {
+		t.Fatalf("queued prompt did not auto-run: queued=%d busy=%v pending=%q", len(m.queued), m.busy, m.pendingPrompt)
+	}
+	if got := m.input.Value(); got != "draft" {
+		t.Fatalf("auto-run clobbered the draft: %q", got)
+	}
+}
+
 func TestTUIEnterCSINoModifierSubmitsLikeEnter(t *testing.T) {
 	// Bare CSI 13u is unmodified enter: empty input is a no-op (same as the
 	// enter key), and it must never insert a newline.

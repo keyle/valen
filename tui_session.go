@@ -80,6 +80,7 @@ func (m *tuiModel) compactCmd() tea.Cmd {
 	ctx, cancel := context.WithCancel(base)
 	m.cancel = cancel
 	m.busy = true
+	m.input.Placeholder = inputPlaceholder(m.cfg.Plan, true)
 	m.toolStatus = "Compacting…"
 	m.notice = ""
 	m.pinBottom()

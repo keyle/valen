@@ -118,6 +118,7 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	ctx = withSteerQueue(ctx, m.steer)
 	m.cancel = cancel
 	m.busy = true
+	m.input.Placeholder = inputPlaceholder(m.cfg.Plan, true)
 	m.pendingSteers = nil
 	m.pendingPrompt = trimmed
 	m.pendingPlan = m.cfg.Plan
@@ -270,7 +271,8 @@ func (m *tuiModel) queuePrompt(text string) {
 }
 
 // startNextQueued starts the oldest queued prompt as a normal turn, restoring
-// its mode and chips first.
+// its mode and chips for that one submit. The composer is left alone so a
+// half-typed draft survives the auto-start.
 func (m *tuiModel) startNextQueued() tea.Cmd {
 	if len(m.queued) == 0 {
 		return nil
@@ -279,11 +281,11 @@ func (m *tuiModel) startNextQueued() tea.Cmd {
 	m.queued = m.queued[1:]
 	m.queueParked = false
 	m.applyPlanMode(q.plan)
-	m.input.SetValue(q.text)
-	m.input.CursorEnd()
-	m.pendingAttachments = q.attach
-	m.imgSeq = q.imgSeq
-	return m.submit(q.text)
+	draftAttach, draftSeq := m.pendingAttachments, m.imgSeq
+	m.pendingAttachments, m.imgSeq = q.attach, q.imgSeq
+	cmd := m.submit(q.text)
+	m.pendingAttachments, m.imgSeq = draftAttach, draftSeq
+	return cmd
 }
 
 // applyPlanMode toggles plan mode at runtime: flips the flag, reseeds the
@@ -296,7 +298,7 @@ func (m *tuiModel) applyPlanMode(on bool) {
 	} else {
 		m.history = seedHistory(m.cfg)
 	}
-	m.input.Placeholder = inputPlaceholder(on)
+	m.input.Placeholder = inputPlaceholder(on, m.busy)
 	if on {
 		m.notice = "Plan Mode enabled: read only and planning"
 	} else {
@@ -822,6 +824,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.history[0].Content = effectiveSystem(m.cfg)
 		}
 		m.busy = false
+		m.input.Placeholder = inputPlaceholder(m.cfg.Plan, false)
 		// The turn may have written files: refresh the picker index lazily.
 		m.fileIndexAt = time.Time{}
 		fcmd := m.syncFilePicker()
@@ -878,15 +881,16 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(fcmd, m.fetchQuotaCmd())
 		}
 		cmds := []tea.Cmd{fcmd, m.fetchQuotaCmd(), m.startAttention()}
-		// A clean finish with an empty chatbox runs the next queued message;
-		// a half-typed draft is never overwritten.
-		if msg.err == nil && !m.queueParked && len(m.queued) > 0 && strings.TrimSpace(m.input.Value()) == "" {
+		// A clean finish runs the next queued message. The composer is not
+		// touched, so a half-typed draft stays put.
+		if msg.err == nil && !m.queueParked && len(m.queued) > 0 {
 			cmds = append(cmds, m.startNextQueued())
 		}
 		return m, tea.Batch(cmds...)
 
 	case compactDoneMsg:
 		m.busy = false
+		m.input.Placeholder = inputPlaceholder(m.cfg.Plan, false)
 		m.toolStatus = ""
 		m.cancel = nil
 		if msg.err != nil {

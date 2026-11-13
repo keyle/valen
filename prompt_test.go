@@ -245,7 +245,7 @@ func TestPlanModeRefusesMutatingTools(t *testing.T) {
 // mode, and the switch notices stay short.
 func TestPlanModeLabelsAndPlaceholder(t *testing.T) {
 	m := newTestModel(t, testConfig("https://unused"))
-	if m.input.Placeholder != inputPlaceholder(false) || strings.Contains(m.input.Placeholder, "TAB") {
+	if m.input.Placeholder != inputPlaceholder(false, false) || strings.Contains(m.input.Placeholder, "TAB") {
 		t.Fatalf("work placeholder=%q", m.input.Placeholder)
 	}
 	m.applyPlanMode(true)
@@ -253,9 +253,19 @@ func TestPlanModeLabelsAndPlaceholder(t *testing.T) {
 		t.Fatalf("plan placeholder=%q notice=%q", m.input.Placeholder, m.notice)
 	}
 	m.applyPlanMode(false)
-	if m.notice != "Work mode enabled" || m.input.Placeholder != inputPlaceholder(false) {
+	if m.notice != "Work mode enabled" || m.input.Placeholder != inputPlaceholder(false, false) {
 		t.Fatalf("work notice=%q", m.notice)
 	}
+	m.busy = true
+	m.applyPlanMode(true)
+	if m.input.Placeholder != inputPlaceholder(true, true) || !strings.Contains(m.input.Placeholder, "steer now") {
+		t.Fatalf("busy placeholder=%q", m.input.Placeholder)
+	}
+	m.applyPlanMode(false)
+	if m.input.Placeholder != inputPlaceholder(false, true) {
+		t.Fatalf("busy work placeholder=%q", m.input.Placeholder)
+	}
+	m.busy = false
 	if h := userHead(true, "now"); !strings.Contains(h, "You (PLAN)") {
 		t.Fatalf("plan head=%q", h)
 	}

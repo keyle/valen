@@ -282,11 +282,11 @@ Rules:
   is memory only (a restart drops it, like a chatbox draft) and bounded at 32.
   Queued messages render as dim "queued" bubbles under the live turn, with the
   count in the status row.
-- A clean finish starts the next queued prompt when the chatbox is empty, so a
-  half-typed draft is never overwritten. Esc-cancel or a failed turn parks the
-  queue: bubbles and count stay visible, nothing runs until the user acts.
-  Enter on an empty chatbox starts the next queued prompt; sending anything
-  unparkes the rest.
+- A clean finish starts the next queued prompt; the composer is left untouched,
+  so a half-typed draft survives. Esc-cancel or a failed turn parks the queue:
+  bubbles and count stay visible, nothing runs until the user acts. Enter on an
+  empty chatbox starts the next queued prompt; sending anything unparkes the
+  rest.
 - `max_rounds` and consecutive-identical-batch guards apply per turn through
   the shared `runModelTurn`, same as `SPEC.md`; no synthetic recovery rounds.
 - Token totals accumulate per session.

@@ -522,8 +522,12 @@ type tuiModel struct {
 }
 
 // inputPlaceholder is the ghosted chatbox hint; plan mode tells the user how
-// to leave instead of the generic prompt.
-func inputPlaceholder(plan bool) string {
+// to leave instead of the generic prompt. While a turn runs, enter steers it
+// and ctrl+enter queues behind it.
+func inputPlaceholder(plan, busy bool) string {
+	if busy {
+		return "Type a message... (ENTER to steer now, CTRL+ENTER to queue for after)"
+	}
 	if plan {
 		return "Plan mode…  TAB to switch (/help)"
 	}
@@ -532,7 +536,7 @@ func inputPlaceholder(plan bool) string {
 
 func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session *Session) *tuiModel {
 	ta := textarea.New()
-	ta.Placeholder = inputPlaceholder(cfg.Plan)
+	ta.Placeholder = inputPlaceholder(cfg.Plan, false)
 	ta.ShowLineNumbers = false
 	// No white thick bar: the textarea default Prompt is
 	// lipgloss.ThickBorder().Left + " " (a white ▌ on every line).
