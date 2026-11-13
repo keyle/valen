@@ -92,6 +92,12 @@ func isORPrivacyRefusal(err error) bool {
 	if te.Status != http.StatusForbidden && te.Status != http.StatusNotFound {
 		return false
 	}
+	// An allowlist refusal is fixed by provider_only, not by relaxing
+	// privacy: never offer the privacy prompt for it, even when its body
+	// also mentions data policy wording.
+	if isORAllowedProvidersRefusal(te) {
+		return false
+	}
 	return isORPrivacyMessage(te.Message + "\n" + te.Raw)
 }
 

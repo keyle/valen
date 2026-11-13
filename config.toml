@@ -34,7 +34,9 @@ openai_key = ""
 # provider_ignore = ["baseten"]  # provider slugs to skip per request. Default
 #                                # ["baseten"]; an explicit [] disables it.
 # provider_only = []             # allowlist instead of the blacklist.
-# OpenRouter privacy filters (openrouter/… models only; ignored on Go/Zen/OpenAI):
+# OpenRouter privacy filters (openrouter/… models only; ignored on Go/Zen/OpenAI).
+# These are request fields for OpenRouter; they do not constrain OpenCode Go/Zen
+# models (e.g. muse-spark-*-contributor), which follow that provider's own terms.
 # zdr = true                     # only zero-data-retention endpoints are eligible.
 # data_collection = false        # false denies providers that may store or
 #                                # train on prompts. A refusal offers a session-

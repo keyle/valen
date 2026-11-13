@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -107,8 +108,23 @@ func friendlyError(err error) FriendlyError {
 			case 402:
 				fe.Title = "Out of credits on the OpenRouter account. Top up at openrouter.ai, then resend."
 			case 404:
-				if isORPrivacyMessage(te.Message + "\n" + te.Raw) {
+				switch {
+				// The allowlist check comes first: its routing step is
+				// authoritative, so a ZDR-sounding phrase in the body can't
+				// turn an allowlist refusal into a privacy one.
+				case isORAllowedProvidersRefusal(te):
+					fe.Title = orAllowedProvidersTitle(te)
+				case isORPrivacyMessage(te.Message + "\n" + te.Raw):
 					fe.Title = "No OpenRouter endpoint matches your privacy filters (zdr/data_collection or the account's privacy settings). Pick another model or relax them."
+				default:
+					// Unknown model, unsupported tool use, no endpoints:
+					// surface the provider message like 400/403 instead of
+					// the OpenCode-flavored "plan" fallback.
+					if msg := singleLine(te.Message, 200); msg != "" {
+						fe.Title = "OpenRouter refused the request (404): " + msg
+					} else {
+						fe.Title = "OpenRouter refused the request (404)."
+					}
 				}
 			default:
 				// Other OpenRouter 4xx/5xx: keep friendlyStatus wording
@@ -170,6 +186,61 @@ func singleLine(s string, n int) string {
 		return "…"
 	}
 	return string(r[:n]) + "…"
+}
+
+// orRoutingRefusal is the routing metadata OpenRouter attaches to a 404 that
+// explains why no endpoint was eligible. Available lists the providers serving
+// the model; Allowed is the provider.only allowlist that filtered them out.
+type orRoutingRefusal struct {
+	Available []string
+	Allowed   []string
+	Step      string
+}
+
+func parseORRoutingRefusal(raw string) orRoutingRefusal {
+	var body struct {
+		Error struct {
+			Metadata struct {
+				AvailableProviders []string `json:"available_providers"`
+				RequestedProviders []string `json:"requested_providers"`
+				FailedRoutingStep  string   `json:"failed_routing_step"`
+			} `json:"metadata"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(raw), &body) != nil {
+		return orRoutingRefusal{}
+	}
+	return orRoutingRefusal{
+		Available: body.Error.Metadata.AvailableProviders,
+		Allowed:   body.Error.Metadata.RequestedProviders,
+		Step:      body.Error.Metadata.FailedRoutingStep,
+	}
+}
+
+// isORAllowedProvidersRefusal reports OpenRouter's 404 when provider.only
+// excludes every provider that serves the model. The message names the
+// allowlist; the routing funnel names the failing step when it does not.
+func isORAllowedProvidersRefusal(te *transportError) bool {
+	if strings.Contains(strings.ToLower(te.Message), "no allowed providers") {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(parseORRoutingRefusal(te.Raw).Step), "Filter by Allowed Providers")
+}
+
+// orAllowedProvidersTitle names both provider lists and the setting to change,
+// so the transcript points at the allowlist instead of blaming the plan.
+func orAllowedProvidersTitle(te *transportError) string {
+	r := parseORRoutingRefusal(te.Raw)
+	detail := ""
+	switch {
+	case len(r.Available) > 0 && len(r.Allowed) > 0:
+		detail = fmt.Sprintf(": it is served by %s, but provider_only permits %s", strings.Join(r.Available, ", "), strings.Join(r.Allowed, ", "))
+	case len(r.Allowed) > 0:
+		detail = fmt.Sprintf(": provider_only permits %s", strings.Join(r.Allowed, ", "))
+	case len(r.Available) > 0:
+		detail = fmt.Sprintf(": it is served by %s", strings.Join(r.Available, ", "))
+	}
+	return singleLine("OpenRouter has no allowed provider for this model"+detail+". Update provider_only in valen.toml (or your saved OpenRouter provider preferences) or pick another model.", 300)
 }
 
 func friendlyStatus(code int, detail string) FriendlyError {

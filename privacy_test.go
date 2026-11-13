@@ -12,6 +12,15 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
+// TestORAllowedProvidersRefusalDoesNotPrompt: provider_only refusals are
+// not privacy refusals even when phrased as "no allowed providers".
+func TestORAllowedProvidersRefusalDoesNotPrompt(t *testing.T) {
+	body := `{"error":{"message":"No allowed providers are available for the selected model.","code":404,"metadata":{"failed_routing_step":"Filter by Allowed Providers"}}}`
+	if isORPrivacyRefusal(parseTransportError("openrouter", http.StatusNotFound, []byte(body))) {
+		t.Fatal("allowlist refusals must not trigger the privacy prompt")
+	}
+}
+
 func TestORPrivacyRefusalDetection(t *testing.T) {
 	cases := []struct {
 		status int

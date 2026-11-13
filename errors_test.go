@@ -38,6 +38,7 @@ func TestFriendlyError(t *testing.T) {
 		{"openrouter 402", &transportError{Transport: "openrouter", Status: 402, Message: "Insufficient credits"}, "OpenRouter account"},
 		{"openrouter provisioning 401", &transportError{Transport: "openrouter", Status: 401, Message: "User not found."}, "provisioning/management"},
 		{"openrouter 403 attestation", &transportError{Transport: "openrouter", Status: 403, Message: "This model requires you to complete the following before use: 18+ age confirmation. Confirm at https://openrouter.ai/settings/preferences."}, "18+ age confirmation"},
+		{"openrouter 404", &transportError{Transport: "openrouter", Status: 404, Message: "No endpoints found for foo/bar"}, "OpenRouter refused the request (404)"},
 		{"other", errors.New("weird"), "Something went wrong"},
 	}
 	for _, c := range cases {
@@ -56,6 +57,52 @@ func TestFriendlyError(t *testing.T) {
 func TestFriendlyErrorNil(t *testing.T) {
 	if fe := friendlyError(nil); fe.Title != "" || fe.Details != "" {
 		t.Fatalf("expected zero value, got %+v", fe)
+	}
+}
+
+// TestOpenRouterAllowedProvidersRefusal: a 404 from provider.only excluding
+// every provider names both lists and the setting to change instead of
+// claiming the model is unavailable on the plan.
+func TestOpenRouterAllowedProvidersRefusal(t *testing.T) {
+	body := `{"error":{"message":"No allowed providers are available for the selected model. Providers serving openai/gpt-6.1-terra-20261026: azure, openai, but your request's provider.only preference permits only: together, digitalocean, google-vertex, meta.","code":404,"metadata":{"available_providers":["azure","openai"],"requested_providers":["together","digitalocean","google-vertex","meta"],"routing_funnel":[{"step":"Initial Endpoints","endpoint_count":7},{"step":"Filter by Allowed Providers","endpoint_count":0}],"failed_routing_step":"Filter by Allowed Providers"}}}`
+	fe := friendlyError(parseTransportError("openrouter", 404, []byte(body)))
+	for _, want := range []string{"provider_only", "azure, openai", "together, digitalocean, google-vertex, meta"} {
+		if !strings.Contains(fe.Title, want) {
+			t.Fatalf("title %q does not contain %q", fe.Title, want)
+		}
+	}
+	if strings.Contains(fe.Title, "plan") {
+		t.Fatalf("title must not blame the plan: %q", fe.Title)
+	}
+	if strings.Contains(fe.Title, "privacy") {
+		t.Fatalf("allowlist title must not read as a privacy refusal: %q", fe.Title)
+	}
+	if !strings.Contains(fe.Details, "Filter by Allowed Providers") {
+		t.Fatalf("details must keep the routing metadata: %q", fe.Details)
+	}
+}
+
+// TestOpenRouterAllowedProvidersMetadata: the funnel step alone identifies the
+// refusal even when the message is generic.
+func TestOpenRouterAllowedProvidersMetadata(t *testing.T) {
+	body := `{"error":{"message":"No endpoints found","metadata":{"failed_routing_step":"Filter by Allowed Providers"}}}`
+	fe := friendlyError(parseTransportError("openrouter", 404, []byte(body)))
+	if !strings.Contains(fe.Title, "provider_only") {
+		t.Fatalf("metadata must identify the allowlist refusal: %q", fe.Title)
+	}
+}
+
+// TestOpenRouterPrivacyRefusalTitle: a data-policy 404 keeps the privacy
+// wording and never mentions provider_only, so ZDR refusals stay distinct
+// from allowlist refusals.
+func TestOpenRouterPrivacyRefusalTitle(t *testing.T) {
+	body := `{"error":{"message":"No endpoints found matching your data policy (Zero data retention).","code":404,"metadata":{"failed_routing_step":"Filter by Data Policy"}}}`
+	fe := friendlyError(parseTransportError("openrouter", 404, []byte(body)))
+	if !strings.Contains(fe.Title, "privacy filters") {
+		t.Fatalf("title must name the privacy filters: %q", fe.Title)
+	}
+	if strings.Contains(fe.Title, "provider_only") {
+		t.Fatalf("privacy title must not mention the allowlist: %q", fe.Title)
 	}
 }
 
