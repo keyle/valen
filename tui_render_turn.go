@@ -245,6 +245,17 @@ func userBody(plan bool) lipgloss.Style {
 	}
 	return userBodyStyle
 }
+
+// renderDimUser draws a message that arrived mid-turn ("steer") or waits for
+// the next one ("queued"), dim so it never reads as the turn's opening prompt.
+func renderDimUser(text string, bodyW, textW int, label string, plan bool) string {
+	if plan {
+		label += " (PLAN)"
+	}
+	head := queuedHeadStyle.Render("You") + "  " + queuedHeadStyle.Render(label)
+	body := queuedBodyStyle.Width(bodyW).Render(breakLongWords(text, textW))
+	return lipgloss.JoinVertical(lipgloss.Left, head, "", body)
+}
 func (m *tuiModel) renderTurnMode(t *Turn, w int, compact bool) string {
 	var parts []string
 	// bodyW is the style width; textW leaves room for the left border plus
@@ -283,6 +294,9 @@ func (m *tuiModel) renderTurnMode(t *Turn, w int, compact bool) string {
 
 	for _, tr := range t.Tools {
 		parts = append(parts, m.renderToolLine(tr))
+	}
+	for _, st := range t.Steers {
+		parts = append(parts, renderDimUser(st.Text, bodyW, textW, "steer", st.Plan))
 	}
 
 	if t.Reply != "" {
@@ -355,6 +369,9 @@ func (m *tuiModel) renderTurnFull(t *Turn) string {
 			body.WriteString("\nerror: " + tr.Err)
 		}
 		b.WriteString(m.wrapPlain(body.String()) + "\n\n")
+	}
+	for _, st := range t.Steers {
+		b.WriteString(m.wrapPlain("You · steer\n"+st.Text) + "\n\n")
 	}
 	if t.Error != nil {
 		b.WriteString(m.wrapPlain("✗ "+t.Error.Title+"\n"+t.Error.Details) + "\n\n")

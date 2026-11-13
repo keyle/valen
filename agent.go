@@ -256,6 +256,17 @@ func runModelTurn(ctx context.Context, cfg Config, registry *Registry, history *
 		if err := ctx.Err(); err != nil {
 			return openai.ChatCompletionMessage{}, usage, err
 		}
+		// Steers typed while the turn runs land here: after a round, never
+		// mid-stream (a half-streamed tool batch cannot be retracted), and
+		// never before round 1 (there is no "current step" to steer yet).
+		if n > 0 {
+			for _, st := range drainSteers(ctx) {
+				*history = append(*history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: st.text})
+				if onEvent != nil {
+					onEvent(Event{Kind: "user_steer", Text: st.text})
+				}
+			}
+		}
 		if err := checkContextBudget(cfg, *history, toolsTok); err != nil {
 			return openai.ChatCompletionMessage{}, usage, err
 		}

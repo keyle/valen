@@ -199,11 +199,17 @@ func (m *tuiModel) statusView() string {
 		if m.roundCur > 0 && m.roundMax > 0 {
 			prog = fmt.Sprintf(" · round %d/%d", m.roundCur, m.roundMax)
 		}
+		if n := len(m.queued); n > 0 {
+			prog += fmt.Sprintf(" · %d queued", n)
+		}
 		left = statusBusyStyle.Render(fmt.Sprintf("%s working  %s%s  %s", m.spinner.View(), tool, prog, elapsed))
 	} else {
 		left = "● ready"
 		if m.lastTurnDur > 0 {
 			left += " · " + formatThinkDur(m.lastTurnDur)
+		}
+		if n := len(m.queued); n > 0 {
+			left += fmt.Sprintf(" · %d queued", n)
 		}
 		left = statusIdleStyle.Render(left)
 	}
@@ -439,20 +445,32 @@ func (m *tuiModel) renderChat() string {
 	w := m.viewWidth()
 	if m.session == nil || len(m.session.Turns) == 0 {
 		m.chatCache, m.chatCacheTurns = nil, 0
-		if m.pendingPrompt == "" {
+		if m.pendingPrompt == "" && len(m.queued) == 0 {
 			return ""
 		}
 	}
 	committed := m.committedTurns(w)
+	queued := m.renderQueued(w)
 	if m.pendingPrompt == "" {
+		if queued != "" {
+			if committed == "" {
+				committed = queued
+			} else {
+				committed += "\n\n" + queued
+			}
+		}
 		if m.lastReply() != "" {
 			committed += "\n\n" + m.copyRow()
 		}
 		return committed
 	}
-	if committed == "" {
-		return m.renderPending(w)
-	}
 	// Generous vertical padding between turns reads like a conversation.
-	return committed + "\n\n\n" + m.renderPending(w)
+	live := m.renderPending(w)
+	if queued != "" {
+		live += "\n\n" + queued
+	}
+	if committed == "" {
+		return live
+	}
+	return committed + "\n\n\n" + live
 }

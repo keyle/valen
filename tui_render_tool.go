@@ -348,6 +348,26 @@ func (m *tuiModel) renderPendingToolRow(t pendingTool, cw int) string {
 	// Tool styles carry PaddingLeft(2), so break two short of cw.
 	return toolRunStyle.Width(cw).Render(breakLongWords(label, cw-2))
 }
+
+// renderQueued draws the next-turn queue under the live turn; parked items
+// stay visible but run nothing until the user sends again.
+func (m *tuiModel) renderQueued(w int) string {
+	if len(m.queued) == 0 {
+		return ""
+	}
+	bodyW := min(w-4, 120)
+	textW := bodyW - 2
+	head := metaStyle.Render(fmt.Sprintf("%d queued", len(m.queued)))
+	if m.queueParked {
+		head += metaStyle.Render(" · enter runs the next one")
+	}
+	parts := make([]string, 0, len(m.queued))
+	for _, q := range m.queued {
+		parts = append(parts, renderDimUser(q.text, bodyW, textW, "queued", q.plan))
+	}
+	return head + "\n\n" + strings.Join(parts, "\n\n")
+}
+
 func (m *tuiModel) renderPending(w int) string {
 	bodyW := min(w-4, 120)
 	textW := bodyW - 2
@@ -384,6 +404,9 @@ func (m *tuiModel) renderPending(w int) string {
 	}
 	if len(m.pendingTools) > 0 {
 		parts = append(parts, "")
+	}
+	for _, st := range m.pendingSteers {
+		parts = append(parts, renderDimUser(st.Text, bodyW, textW, "steer", st.Plan), "")
 	}
 	if answer != "" {
 		parts = append(parts, asstHeadStyle.Render(" ✦ "+m.cfg.Model))

@@ -45,11 +45,13 @@ func (m *tuiModel) startFreshSession() {
 	m.orSpent, m.orSpentSet = 0, false
 	m.pendingCost, m.pendingCostSet = 0, false
 	m.pendingTools = nil
+	m.pendingSteers = nil
 	m.pendingText = ""
 	m.pendingThinking = ""
 	m.pendingThinkIdx = 0
 	m.toolStatus = ""
 	m.cancel = nil
+	m.queued, m.queueParked = nil, false
 	m.chatCache, m.chatCacheTurns = nil, 0
 	m.clearInput()
 	m.notice = "New session " + m.session.ID + " — blank."
@@ -112,6 +114,9 @@ func (m *tuiModel) exportTranscript() (string, bool) {
 		}
 		for _, tr := range t.Tools {
 			fmt.Fprintf(&b, "> tool `%s` `%s`%s\n>\n> %s\n\n", tr.Name, truncatePlain(tr.Args, 120), toolDurSuffix(tr.DurMs), truncatePlain(tr.Output, 2000))
+		}
+		for _, st := range t.Steers {
+			fmt.Fprintf(&b, "> steer: %s\n\n", st.Text)
 		}
 		if t.Reply != "" {
 			fmt.Fprintf(&b, "%s\n\n", t.Reply)

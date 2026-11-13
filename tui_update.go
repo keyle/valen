@@ -111,9 +111,14 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	if base == nil {
 		base = context.Background()
 	}
+	// Fresh buffer per turn: anything steered into the previous turn has
+	// either been delivered or moved back to the queue in turnDoneMsg.
+	m.steer = &steerQueue{}
 	ctx, cancel := context.WithCancel(base)
+	ctx = withSteerQueue(ctx, m.steer)
 	m.cancel = cancel
 	m.busy = true
+	m.pendingSteers = nil
 	m.pendingPrompt = trimmed
 	m.pendingPlan = m.cfg.Plan
 	m.session.nameSession(trimmed)
@@ -150,6 +155,7 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 		}
 		h := append(histBase, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: prompt})
 		var tools []ToolRecord
+		var steers []Steer
 		var thinking, answer string
 		var orMeta *ORMeta
 		var turnCost float64
@@ -166,6 +172,8 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 				// The failed attempt's partial output is replayed by the
 				// next attempt; drop it so nothing shows twice.
 				answer, thinking = roundAnswer, roundThinking
+			case "user_steer":
+				steers = append(steers, Steer{Text: ev.Text, Plan: cfg.Plan})
 			case "tool_start":
 				tools = append(tools, ToolRecord{ID: ev.ID, Name: ev.Text, Args: ev.Args})
 			case "tool_result":
@@ -208,8 +216,74 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 				thinking = streamedThinking
 			}
 		}
-		return turnDoneMsg{prompt: trimmed, thinking: thinking, answer: answer, tools: tools, usage: usage, err: err, history: h, model: cfg.Model, effort: cfg.Thinking, plan: cfg.Plan, orMeta: orMeta, turnCost: turnCost, hasTurnCost: hasTurnCost}
+		return turnDoneMsg{prompt: trimmed, thinking: thinking, answer: answer, tools: tools, steers: steers, usage: usage, err: err, history: h, model: cfg.Model, effort: cfg.Thinking, plan: cfg.Plan, orMeta: orMeta, turnCost: turnCost, hasTurnCost: hasTurnCost}
 	}
+}
+
+// handleCtrlEnter queues the chatbox text for the next turn while the agent
+// is working; when idle it is just another enter.
+func (m *tuiModel) handleCtrlEnter() (tea.Model, tea.Cmd) {
+	if !m.busy {
+		return m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	}
+	if text := strings.TrimSpace(m.input.Value()); text != "" {
+		m.queuePrompt(text)
+	}
+	return m, nil
+}
+
+// steerInput hands the chatbox text to the running turn. It lands between
+// rounds, never mid-stream; attachments cannot ride a running turn, so those
+// queue for the next one.
+func (m *tuiModel) steerInput(text string) {
+	if len(m.pendingForText()) > 0 || m.steer == nil || !m.steer.push(steerItem{text: text, plan: m.pendingPlan}) {
+		m.queuePrompt(text)
+		return
+	}
+	m.input.SetValue("")
+	m.closeFilePicker()
+	m.notice = "Steering — lands after the current step."
+	m.noticeErr = false
+	m.pinBottom()
+}
+
+// queuePrompt appends a message to the next-turn queue and clears the
+// composer, keeping the mode and chips it was typed in.
+func (m *tuiModel) queuePrompt(text string) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return
+	}
+	if len(m.queued) >= steerCap {
+		m.notice = fmt.Sprintf("Queue full (%d) — send it when this turn ends.", steerCap)
+		m.noticeErr = true
+		return
+	}
+	m.queued = append(m.queued, queuedPrompt{text: trimmed, plan: m.cfg.Plan, attach: m.pendingForText(), imgSeq: m.imgSeq})
+	m.input.SetValue("")
+	m.clearAttachments()
+	m.closeFilePicker()
+	m.queueParked = false
+	m.notice = fmt.Sprintf("Queued (%d) — runs after this turn.", len(m.queued))
+	m.noticeErr = false
+	m.pinBottom()
+}
+
+// startNextQueued starts the oldest queued prompt as a normal turn, restoring
+// its mode and chips first.
+func (m *tuiModel) startNextQueued() tea.Cmd {
+	if len(m.queued) == 0 {
+		return nil
+	}
+	q := m.queued[0]
+	m.queued = m.queued[1:]
+	m.queueParked = false
+	m.applyPlanMode(q.plan)
+	m.input.SetValue(q.text)
+	m.input.CursorEnd()
+	m.pendingAttachments = q.attach
+	m.imgSeq = q.imgSeq
+	return m.submit(q.text)
 }
 
 // applyPlanMode toggles plan mode at runtime: flips the flag, reseeds the
@@ -403,6 +477,11 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if mod == 1 {
 			return m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
 		}
+		// ctrl+enter queues for the next turn while the agent is working;
+		// idle it has nothing to queue for, so it behaves like enter.
+		if mod == 5 {
+			return m.handleCtrlEnter()
+		}
 		m.insertInputNewline()
 		return m, nil
 	}
@@ -469,6 +548,9 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.retryErrs = m.retryErrs[1:]
 				}
 			}
+		case "user_steer":
+			m.pendingSteers = append(m.pendingSteers, Steer{Text: msg.text, Plan: m.pendingPlan})
+			m.toolStatus = "steering…"
 		case "tool_start":
 			m.pendingTools = append(m.pendingTools, pendingTool{name: msg.text, args: msg.args, id: msg.id})
 			if n := m.runningToolCount(); n > 1 {
@@ -701,7 +783,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case turnDoneMsg:
 		turn := Turn{
-			At: msg.promptAt(), Prompt: msg.prompt, Thinking: msg.thinking, Reply: msg.answer, Tools: msg.tools,
+			At: msg.promptAt(), Prompt: msg.prompt, Thinking: msg.thinking, Reply: msg.answer, Tools: msg.tools, Steers: msg.steers,
 			Usage: Usage{Prompt: msg.usage.PromptTokens, Completion: msg.usage.CompletionTokens, Total: msg.usage.TotalTokens},
 			Model: msg.model, Effort: msg.effort, Plan: msg.plan, History: msg.history,
 			ORMeta: msg.orMeta,
@@ -753,10 +835,30 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.toolStatus = ""
 		m.roundCur, m.roundMax = 0, 0
 		m.pendingTools = nil
+		m.pendingSteers = nil
 		m.pendingText = ""
 		m.pendingThinking = ""
 		m.pendingThinkIdx = 0
 		m.cancel = nil
+		// Steers typed after the last round boundary never reached the model:
+		// keep them, in order, ahead of the messages queued for later.
+		if left := m.steer.drain(); len(left) > 0 {
+			items := make([]queuedPrompt, 0, len(left))
+			for _, st := range left {
+				items = append(items, queuedPrompt{text: st.text, plan: st.plan})
+			}
+			m.queued = append(items, m.queued...)
+		}
+		m.steer = &steerQueue{}
+		if msg.err != nil {
+			// A failed or cancelled turn parks the queue: keep it visible,
+			// run nothing until the user sends again.
+			m.queueParked = len(m.queued) > 0
+			if isCancel(msg.err) && len(m.queued) > 0 {
+				m.notice = fmt.Sprintf("Cancelled — %d queued · enter runs the next one.", len(m.queued))
+				m.noticeErr = false
+			}
+		}
 		if m.session != nil {
 			if err := m.session.append(turn); err != nil {
 				m.notice = "Session save failed: " + err.Error()
@@ -775,7 +877,13 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// The user stopped it themselves: no bell.
 			return m, tea.Batch(fcmd, m.fetchQuotaCmd())
 		}
-		return m, tea.Batch(fcmd, m.fetchQuotaCmd(), m.startAttention())
+		cmds := []tea.Cmd{fcmd, m.fetchQuotaCmd(), m.startAttention()}
+		// A clean finish with an empty chatbox runs the next queued message;
+		// a half-typed draft is never overwritten.
+		if msg.err == nil && !m.queueParked && len(m.queued) > 0 && strings.TrimSpace(m.input.Value()) == "" {
+			cmds = append(cmds, m.startNextQueued())
+		}
+		return m, tea.Batch(cmds...)
 
 	case compactDoneMsg:
 		m.busy = false

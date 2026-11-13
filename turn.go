@@ -18,7 +18,7 @@ import (
 // Event reports progress during a turn so frontends stay responsive. Its JSON
 // tags are the wire format of headless --stream (one object per line).
 type Event struct {
-	Kind string `json:"kind"` // "round_start", "compacting", "tool_start", "tool_result", "text_delta", "thinking_delta"
+	Kind string `json:"kind"` // "round_start", "user_steer", "compacting", "tool_start", "tool_result", "text_delta", "thinking_delta"
 	Text string `json:"text,omitempty"`
 	// Args carries tool JSON arguments on tool_start; Output carries the
 	// tool result on tool_result.

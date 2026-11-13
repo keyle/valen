@@ -406,13 +406,25 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		text := strings.TrimSpace(m.input.Value())
 		if text == "" {
+			// An empty chatbox on a parked queue: enter is the explicit
+			// "start the queued work" action.
+			if !m.busy && len(m.queued) > 0 {
+				return m, m.startNextQueued()
+			}
 			return m, nil
 		}
 		if m.busy {
-			m.notice = "Working… press esc twice to cancel."
-			m.noticeErr = false
+			// Slash commands are not conversation: never steer them into the
+			// running turn as model input.
+			if strings.HasPrefix(text, "/") {
+				m.notice = "Commands run when the turn ends."
+				m.noticeErr = false
+				return m, nil
+			}
+			m.steerInput(text)
 			return m, nil
 		}
+		m.queueParked = false
 		m.input.SetValue("")
 		m.closeFilePicker()
 		cmd := m.submit(text) // consumes m.retrying

@@ -13,6 +13,8 @@ Terms first, because the codebase uses them precisely:
 | **turn** | One user prompt → final assistant answer, including all tool work. The unit billed, logged, and resumed. | `Turn` in `session.go`, `runTurn` in `main.go` |
 | **round** | One model request → response inside a turn. A turn with 5 tool batches = 5+ rounds. | shared `runModelTurn`; transport closures in `runChatTurn` / `runMessagesTurn` / `runResponsesTurn` |
 | **step** | opencode's word for roughly one round (its processor emits `step-start` / `step-finish` events around each model call plus its tool calls). Valen has no step events; round is the equivalent unit. | opencode `session/processor.ts` |
+| **steer** | A message typed while the turn runs. It is appended to history as a user message at the next round boundary and its event renders inline; the turn keeps going. | `steerQueue` in `steer.go`, drained in `runModelTurn` |
+| **queue** | A message typed for a later turn (Ctrl+Enter while busy). Rendered but not sent; TUI memory only. | `queuedPrompt` / `queued` in `tui.go` |
 | **batch** | Tool calls emitted in one round. Read-only builtin and `task` batches may overlap; other batches execute serially. Results append in request order. | `runToolCalls` in `main.go` |
 | **history** | OpenAI-shaped continuation state carried across turns; older turns may be pruned/summarized. Separate session records keep the transcript and tool outputs. | `[]openai.ChatCompletionMessage`, `Turn.History` |
 
@@ -52,6 +54,8 @@ and press Enter in the TUI. What happens, in order:
 6. **Rounds 2..N.** Repeat 3–5. Each round re-sends the *entire* grown
    continuation history plus schemas: this is the `rounds × history` cost
    from §3. `runModelTurn` does not insert synthetic nudge/recovery rounds.
+   Steers typed during the turn are appended as user messages at the top of
+   each round, so the model sees them at the next boundary, never mid-stream.
 7. **Finish.** A completed round with a visible answer and no tools ends the
    turn: reply renders as markdown, session totals refresh once in the
    status row above the chatbox (`N turns · win W/B · ↑P ↓C`, in thousands), the `Turn`

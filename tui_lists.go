@@ -334,7 +334,9 @@ func (m *tuiModel) resumeSessionPath(path string) {
 		m.orMeta = turns[n-1].ORMeta
 	}
 	m.pendingTools = nil
+	m.pendingSteers = nil
 	m.cancel = nil
+	m.queued, m.queueParked = nil, false
 	m.chatCache, m.chatCacheTurns = nil, 0
 	m.notice = "Resumed " + m.session.ID + " (" + itoa(len(turns)) + " turns)."
 	m.noticeErr = false
@@ -565,7 +567,8 @@ func helpBody() string {
 	var b strings.Builder
 	b.WriteString(metaStyle.Render("Keys") + "\n")
 	b.WriteString(helpTable([][2]string{
-		{"enter", "send the prompt"},
+		{"enter", "send the prompt (while working: steer, lands after the current step)"},
+		{"ctrl+enter", "queue the message for a later turn (while working)"},
 		{"shift+enter · alt+enter · ctrl+j", "insert a newline"},
 		{"tab", "switch work/plan mode (cyan box = plan)"},
 		{"esc", "cancel the turn or go back"},

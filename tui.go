@@ -47,6 +47,12 @@ var (
 	userBodyPlanStyle   = lipgloss.NewStyle().Foreground(mkFg).
 				BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderForeground(mkCyan).
 				PaddingLeft(1)
+	// Steered and queued messages are dim: they belong to the thread but were
+	// not the turn's opening prompt.
+	queuedHeadStyle = lipgloss.NewStyle().Italic(true).Foreground(mkComment)
+	queuedBodyStyle = lipgloss.NewStyle().Foreground(mkComment).
+			BorderStyle(lipgloss.NormalBorder()).BorderLeft(true).BorderForeground(mkBorder).
+			PaddingLeft(1)
 	thinkHeaderStyle = lipgloss.NewStyle().Italic(true).Foreground(mkComment)
 	thinkBodyStyle   = lipgloss.NewStyle().Italic(true).Foreground(mkComment).
 				BorderStyle(lipgloss.NormalBorder()).BorderLeft(true).BorderForeground(mkBorder).
@@ -218,6 +224,15 @@ type pendingTool struct {
 	renderOK  bool
 }
 
+// queuedPrompt is one message waiting for a later turn, with the composer
+// state (mode, chips) it was typed in.
+type queuedPrompt struct {
+	text   string
+	plan   bool
+	attach []pendingAttachment
+	imgSeq int
+}
+
 // chatTurnRender caches one committed turn's rendered forms for the scrollback
 // budget: the full render and a lazily-built compact one (reasoning collapsed)
 // used when the transcript is over max_lines. Line counts
@@ -236,6 +251,7 @@ type turnDoneMsg struct {
 	thinking string
 	answer   string
 	tools    []ToolRecord
+	steers   []Steer
 	usage    openai.Usage
 	err      error
 	history  []openai.ChatCompletionMessage
@@ -384,8 +400,15 @@ type tuiModel struct {
 	pendingAttachments []pendingAttachment
 	imgSeq             int
 	pendingPlan        bool
-	pendingSince       time.Time
-	lastTurnDur        time.Duration // working time of the last finished turn, shown beside "ready"
+	// steer is the live turn's injection buffer; queued holds messages meant
+	// for a later turn. Both are memory only — a restart drops them like a
+	// draft. queueParked means "do not auto-run": set when a turn is
+	// cancelled or fails, cleared by an explicit send.
+	steer        *steerQueue
+	queued       []queuedPrompt
+	queueParked  bool
+	pendingSince time.Time
+	lastTurnDur  time.Duration // working time of the last finished turn, shown beside "ready"
 	// retrying marks that the chatbox holds the recalled last prompt: the
 	// next send rewinds that turn first. Cleared whenever the box empties.
 	retrying   bool
@@ -397,6 +420,7 @@ type tuiModel struct {
 	// Live transcript state while a turn streams: tool calls in order plus
 	// assistant text/thinking deltas so far. Cleared on turnDoneMsg.
 	pendingTools    []pendingTool
+	pendingSteers   []Steer
 	pendingText     string
 	pendingThinking string
 	pendingThinkIdx int // reasoning part index of the pendingThinking tail
@@ -559,6 +583,7 @@ func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session 
 		spinner:       sp,
 		modelSearch:   search,
 		sessionRename: rename,
+		steer:         &steerQueue{},
 		showThink:     true,
 		follow:        true,
 		mode:          viewChat,

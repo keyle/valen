@@ -273,8 +273,20 @@ tool activity, overlay recall views — all in one `tuiModel` with async
 
 Rules:
 
-- At most one in-flight run; Enter while working shows
-  "Working… press esc twice to cancel."
+- At most one in-flight run. Enter while working **steers**: the text is
+  appended to the running turn as a user message at the next round boundary
+  (never mid-stream, so a half-streamed tool batch is never retracted) and
+  renders as a dim "steer" bubble. Attachments cannot ride a running turn, so
+  those queue instead.
+- Ctrl+Enter while working **queues** the message for a later turn. The queue
+  is memory only (a restart drops it, like a chatbox draft) and bounded at 32.
+  Queued messages render as dim "queued" bubbles under the live turn, with the
+  count in the status row.
+- A clean finish starts the next queued prompt when the chatbox is empty, so a
+  half-typed draft is never overwritten. Esc-cancel or a failed turn parks the
+  queue: bubbles and count stay visible, nothing runs until the user acts.
+  Enter on an empty chatbox starts the next queued prompt; sending anything
+  unparkes the rest.
 - `max_rounds` and consecutive-identical-batch guards apply per turn through
   the shared `runModelTurn`, same as `SPEC.md`; no synthetic recovery rounds.
 - Token totals accumulate per session.
@@ -318,13 +330,15 @@ type tuiModel struct {
     history  []openai.ChatCompletionMessage
     busy     bool
     pendingPrompt string
+    steer    *steerQueue    // live turn's round-boundary injections
+    queued   []queuedPrompt // next-turn messages (memory only)
     toolStatus    string
     mode     viewMode // chat, history, tools, errors, help, detail
     ...
 }
 
 type toolEventMsg struct{ kind, text string } // "tool_start" | "tool_result"
-type turnDoneMsg struct{ prompt, thinking, answer string; tools []ToolRecord; usage openai.Usage; err error; history []openai.ChatCompletionMessage }
+type turnDoneMsg struct{ prompt, thinking, answer string; tools []ToolRecord; steers []Steer; usage openai.Usage; err error; history []openai.ChatCompletionMessage }
 ```
 
 `submit` snapshots history (copy + user message), flips to busy, renders the
@@ -558,7 +572,8 @@ the full height, starts at its heading and scrolls to follow the selected option
 
 | Key | Chat | Overlays (history/sessions/tools/errors/slots/help/detail) |
 | --- | --- | --- |
-| Enter | send turn | open selected row / resume session |
+| Enter | send turn (busy: steer into the running turn) | open selected row / resume session |
+| Ctrl+Enter | busy: queue for the next turn; idle: same as Enter | — |
 | Esc | cancel run / back | back to chat |
 | Ctrl+C / Ctrl+D | cancel (busy) / quit (idle) | quit |
 | Ctrl+J / Alt+Enter / Shift+Enter | newline in input (shift+enter where the terminal supports it) | — |

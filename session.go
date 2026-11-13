@@ -32,6 +32,14 @@ type Usage struct {
 	Total      int `json:"total"`
 }
 
+// Steer is a message typed into a turn that had already started. It is kept
+// with the turn so the transcript and a resumed session show the whole
+// conversation, not just the opening prompt.
+type Steer struct {
+	Text string `json:"text"`
+	Plan bool   `json:"plan,omitempty"`
+}
+
 // Turn is one user→assistant exchange, including tool work and any failure.
 type Turn struct {
 	At       time.Time                      `json:"at"`
@@ -39,6 +47,7 @@ type Turn struct {
 	Thinking string                         `json:"thinking,omitempty"`
 	Reply    string                         `json:"reply"`
 	Tools    []ToolRecord                   `json:"tools,omitempty"`
+	Steers   []Steer                        `json:"steers,omitempty"`
 	Usage    Usage                          `json:"usage"`
 	Error    *FriendlyError                 `json:"error,omitempty"`
 	Model    string                         `json:"model,omitempty"`
