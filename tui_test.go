@@ -721,7 +721,7 @@ func TestParseEnterCSI(t *testing.T) {
 		{"\x1b[13;2u", 2, true, true},  // Kitty shift+enter
 		{"\x1b[13;2~", 2, true, true},  // xterm modifyOtherKeys shift+enter
 		{"\x1b[13;3u", 3, true, true},  // alt+enter under enhancement
-		{"\x1b[13;5u", 5, true, true},  // ctrl+enter under enhancement
+		{"\x1b[13;5u", 5, true, false}, // ctrl+enter queues (handled apart)
 		{"\x1b[13u", 1, true, false},   // unmodified enter stays submit
 		{"\x1b[13~", 1, true, false},   // unmodified enter stays submit
 		{"\x1b[A", 0, false, false},    // unrelated CSI (up)
@@ -739,7 +739,7 @@ func TestParseEnterCSI(t *testing.T) {
 }
 
 func TestTUIShiftEnterCSIInsertsNewline(t *testing.T) {
-	for _, seq := range []string{"\x1b[13;2u", "\x1b[13;2~", "\x1b[13;3u", "\x1b[13;5u"} {
+	for _, seq := range []string{"\x1b[13;2u", "\x1b[13;2~", "\x1b[13;3u"} {
 		m := newTestModel(t, testConfig("https://unused"))
 		m.input.SetValue("hello")
 		updated, _ := m.Update(csiMsg(seq))
@@ -749,6 +749,20 @@ func TestTUIShiftEnterCSIInsertsNewline(t *testing.T) {
 		if got := m.input.Value(); got != "hello\n" {
 			t.Fatalf("%q should insert newline, got %q", seq, got)
 		}
+	}
+}
+
+func TestTUICtrlEnterCSIQueuesWhileBusy(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.busy = true
+	m.cancel = func() {}
+	m.input.SetValue("hello")
+	_, _ = m.Update(csiMsg("\x1b[13;5u"))
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("ctrl+enter should clear the chatbox, got %q", got)
+	}
+	if len(m.queued) != 1 || m.queued[0].text != "hello" {
+		t.Fatalf("ctrl+enter while busy should queue, got %+v", m.queued)
 	}
 }
 
