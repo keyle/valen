@@ -780,49 +780,74 @@ func TestDeepSeekToolCallReasoningPadded(t *testing.T) {
 }
 
 // TestOpenRouterProviderWireBody: the provider object carries the default
-// BaseTen blacklist, honors an explicit ignore/only, disables on an explicit
-// empty ignore, and never rides Go/Zen requests.
+// BaseTen blacklist plus the strict privacy filters, honors an explicit
+// ignore/only and privacy overrides, and never rides Go/Zen requests.
 func TestOpenRouterProviderWireBody(t *testing.T) {
 	req := openai.ChatCompletionRequest{Model: "m", Messages: []openai.ChatCompletionMessage{{Role: "user", Content: "hi"}}}
 	cfg := newTestConfig("http://x")
 	cfg.Model = "openrouter/moonshotai/kimi-k3"
+	setORPrivacyRelaxed(false)
+	t.Cleanup(func() { setORPrivacyRelaxed(false) })
 
-	read := func() (ignore, only []string) {
+	read := func() (ignore, only []string, zdr bool, collection string) {
 		t.Helper()
 		raw, _ := json.Marshal(chatWireBody(cfg, req))
 		var got struct {
 			Provider struct {
-				Ignore []string `json:"ignore"`
-				Only   []string `json:"only"`
+				Ignore         []string `json:"ignore"`
+				Only           []string `json:"only"`
+				ZDR            bool     `json:"zdr"`
+				DataCollection string   `json:"data_collection"`
 			} `json:"provider"`
 		}
 		if err := json.Unmarshal(raw, &got); err != nil {
 			t.Fatal(err)
 		}
-		return got.Provider.Ignore, got.Provider.Only
+		return got.Provider.Ignore, got.Provider.Only, got.Provider.ZDR, got.Provider.DataCollection
 	}
 
-	ignore, only := read()
+	ignore, only, zdr, collection := read()
 	if len(ignore) != 1 || ignore[0] != "baseten" || only != nil {
 		t.Fatalf("default provider ignore=%v only=%v", ignore, only)
 	}
+	if !zdr || collection != "deny" {
+		t.Fatalf("default privacy zdr=%v data_collection=%q", zdr, collection)
+	}
 
 	cfg.ProviderIgnore = []string{} // explicit [] clears the blacklist
-	if _, ok := chatWireBody(cfg, req).(openai.ChatCompletionRequest); !ok {
-		t.Fatal("explicit empty ignore must leave the request untouched")
+	ignore, only, zdr, collection = read()
+	if ignore != nil || only != nil {
+		t.Fatalf("explicit empty ignore must clear the blacklist: ignore=%v only=%v", ignore, only)
+	}
+	if !zdr || collection != "deny" {
+		t.Fatalf("privacy filters must still ride the request: zdr=%v data_collection=%q", zdr, collection)
 	}
 
 	cfg.ProviderIgnore = []string{"deepinfra"}
-	ignore, only = read()
+	ignore, _, _, _ = read()
 	if len(ignore) != 1 || ignore[0] != "deepinfra" {
 		t.Fatalf("custom ignore=%v", ignore)
 	}
 
 	cfg.ProviderIgnore = nil
 	cfg.ProviderOnly = []string{"anthropic"}
-	ignore, only = read()
+	ignore, only, _, _ = read()
 	if len(only) != 1 || only[0] != "anthropic" || ignore != nil {
 		t.Fatalf("only provider ignore=%v only=%v", ignore, only)
+	}
+
+	off, on := false, true
+	cfg.ZDR, cfg.DataCollection = &off, &on
+	_, _, zdr, collection = read()
+	if zdr || collection != "allow" {
+		t.Fatalf("explicit privacy overrides zdr=%v data_collection=%q", zdr, collection)
+	}
+
+	setORPrivacyRelaxed(true)
+	cfg.ZDR, cfg.DataCollection = nil, nil
+	_, _, zdr, collection = read()
+	if zdr || collection != "allow" {
+		t.Fatalf("session relaxation zdr=%v data_collection=%q", zdr, collection)
 	}
 
 	cfg.ProviderOnly = nil

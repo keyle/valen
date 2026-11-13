@@ -166,6 +166,17 @@ func runTurn(ctx context.Context, cfg Config, client *openai.Client, apiKey stri
 		ctx = prompts.WithPlanMode(ctx)
 	}
 	msg, usage, err := dispatchTurn(ctx, cfg, client, apiKey, hc, registry, history, onEvent)
+	if err != nil && isORPrivacyRefusal(err) && promptORPrivacyRelax(ctx, cfg) {
+		// The user allowed the strict privacy filters to be relaxed after
+		// OpenRouter found no eligible endpoint; retry the same turn with
+		// the session-wide relaxation (a second refusal is terminal).
+		dvlog.Logf("openrouter privacy filters relaxed for this session; retrying turn")
+		m2, u2, err2 := dispatchTurn(ctx, cfg, client, apiKey, hc, registry, history, onEvent)
+		usage.PromptTokens += u2.PromptTokens
+		usage.CompletionTokens += u2.CompletionTokens
+		usage.TotalTokens += u2.TotalTokens
+		msg, err = m2, err2
+	}
 	if err != nil {
 		maybeLearnThinkingLevels(cfg.Model, err.Error())
 		// One recovery compaction when the provider rejects history as too

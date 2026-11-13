@@ -69,7 +69,14 @@ type Config struct {
 	// The two are mutually exclusive, so ProviderOnly wins when set.
 	ProviderIgnore []string `toml:"provider_ignore"`
 	ProviderOnly   []string `toml:"provider_only"`
-	BaseURL        string   `toml:"base_url"`
+	// ZDR / DataCollection are OpenRouter's per-request privacy filters
+	// (`provider.zdr` / `provider.data_collection`). ZDR nil means true:
+	// only zero-retention endpoints are eligible. DataCollection nil means
+	// false: providers that may store or train on prompts are denied.
+	// OpenRouter only; ignored on Go/Zen/OpenAI.
+	ZDR            *bool  `toml:"zdr"`
+	DataCollection *bool  `toml:"data_collection"`
+	BaseURL        string `toml:"base_url"`
 	// OpenCodeKey / OpenRouterKey / OpenAIKey are the API keys themselves.
 	// Empty by default: the OPENCODE_API_KEY / OPENROUTER_API_KEY /
 	// OPENAI_API_KEY env vars are used instead. persistModelSelection only

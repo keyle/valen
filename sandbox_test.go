@@ -125,11 +125,10 @@ func TestSandboxAllowsTempDir(t *testing.T) {
 
 func TestSandboxReadsOutsideAsk(t *testing.T) {
 	useTempRoot(t)
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		t.Skip("no home dir")
+	other := filepath.Join(outsideDir(t), "ok.txt")
+	if err := os.WriteFile(other, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	other := filepath.Join(home, ".valen-probe-r.txt")
 	// Explicit outside reads ask first: no prompter denies, like git push.
 	if err := gateShell(context.Background(), "cat "+other, false); err == nil {
 		t.Fatal("outside read should need approval")
@@ -725,7 +724,11 @@ func TestFileAccessPromptShowsToolCall(t *testing.T) {
 	}
 
 	got = AskQuestion{}
-	_ = gateShell(context.Background(), "cat "+filepath.Join(outside, "y"), false)
+	probe := filepath.Join(outside, "y")
+	if err := os.WriteFile(probe, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = gateShell(context.Background(), "cat "+probe, false)
 	if !strings.Contains(got.Question, "Requested by: shell: cat ") {
 		t.Fatalf("shell prompt lacks command: %q", got.Question)
 	}

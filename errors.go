@@ -106,6 +106,10 @@ func friendlyError(err error) FriendlyError {
 				}
 			case 402:
 				fe.Title = "Out of credits on the OpenRouter account. Top up at openrouter.ai, then resend."
+			case 404:
+				if isORPrivacyMessage(te.Message + "\n" + te.Raw) {
+					fe.Title = "No OpenRouter endpoint matches your privacy filters (zdr/data_collection or the account's privacy settings). Pick another model or relax them."
+				}
 			default:
 				// Other OpenRouter 4xx/5xx: keep friendlyStatus wording
 				// but prefix the transport so the transcript never reads

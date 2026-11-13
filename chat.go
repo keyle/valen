@@ -110,29 +110,35 @@ func fillReasoning(msg *openai.ChatCompletionMessage, raw []byte) {
 }
 
 // orProvider is the OpenRouter `provider` routing object valen sends: only
-// the slugs we model. Empty fields stay omitted so OpenRouter's own defaults
-// (load balancing, other filters) apply.
+// the fields we model. ZDR and DataCollection are always present because
+// valen's defaults are privacy-first (zero retention, no data collection).
 type orProvider struct {
-	Ignore []string `json:"ignore,omitempty"`
-	Only   []string `json:"only,omitempty"`
+	Ignore         []string `json:"ignore,omitempty"`
+	Only           []string `json:"only,omitempty"`
+	ZDR            bool     `json:"zdr"`
+	DataCollection string   `json:"data_collection"`
 }
 
 // openRouterProvider builds the `provider` object for cfg, nil on Go/Zen (the
 // object is OpenRouter-only). provider_only wins; otherwise provider_ignore,
 // defaulting to [baseten] when unset. An explicit empty ignore disables it.
+// The privacy filters follow zdr/data_collection, with a session-wide
+// relaxation applied when the user allowed one after a refusal.
 func openRouterProvider(cfg Config) *orProvider {
 	if modelProvider(cfg.Model) != ProviderOpenRouter {
 		return nil
 	}
-	p := orProvider{Only: cfg.ProviderOnly}
+	relaxed := orPrivacyRelaxed()
+	p := orProvider{ZDR: zdrEnabled(cfg) && !relaxed, DataCollection: "deny"}
+	if dataCollectionAllowed(cfg) || relaxed {
+		p.DataCollection = "allow"
+	}
+	p.Only = cfg.ProviderOnly
 	if len(p.Only) == 0 {
 		p.Ignore = cfg.ProviderIgnore
 		if p.Ignore == nil {
 			p.Ignore = defaultProviderIgnore
 		}
-	}
-	if len(p.Ignore) == 0 && len(p.Only) == 0 {
-		return nil
 	}
 	return &p
 }

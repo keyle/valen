@@ -86,6 +86,12 @@ func TestProviderRoutingConfig(t *testing.T) {
 	if base.ProviderIgnore != nil || base.ProviderOnly != nil {
 		t.Fatalf("unset provider lists must stay nil: %+v", base)
 	}
+	if base.ZDR != nil || base.DataCollection != nil {
+		t.Fatalf("unset privacy filters must stay nil: zdr=%v data_collection=%v", base.ZDR, base.DataCollection)
+	}
+	if !zdrEnabled(base) || dataCollectionAllowed(base) {
+		t.Fatal("nil privacy settings must default to strict")
+	}
 	cfg, err := loadConfig(writeConfig(t, `model = "openrouter/moonshotai/kimi-k3"
 provider_ignore = [" BaseTen ", "baseten", "deepinfra"]
 `))
@@ -112,6 +118,19 @@ provider_ignore = ["baseten"]
 provider_only = ["anthropic"]
 `)); err == nil {
 		t.Fatal("both provider lists must be rejected")
+	}
+	privacy, err := loadConfig(writeConfig(t, `model = "openrouter/moonshotai/kimi-k3"
+zdr = false
+data_collection = true
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if privacy.ZDR == nil || *privacy.ZDR || privacy.DataCollection == nil || !*privacy.DataCollection {
+		t.Fatalf("explicit privacy filters not decoded: zdr=%v data_collection=%v", privacy.ZDR, privacy.DataCollection)
+	}
+	if zdrEnabled(privacy) || !dataCollectionAllowed(privacy) {
+		t.Fatal("explicit privacy filters must override the defaults")
 	}
 }
 

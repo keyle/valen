@@ -34,6 +34,11 @@ openai_key = ""
 # provider_ignore = ["baseten"]  # provider slugs to skip per request. Default
 #                                # ["baseten"]; an explicit [] disables it.
 # provider_only = []             # allowlist instead of the blacklist.
+# OpenRouter privacy filters (openrouter/… models only; ignored on Go/Zen/OpenAI):
+# zdr = true                     # only zero-data-retention endpoints are eligible.
+# data_collection = false        # false denies providers that may store or
+#                                # train on prompts. A refusal offers a session-
+#                                # only relaxation; nothing is written here.
 # Second provider, OpenRouter: /models lists openrouter/<vendor>/<model>
 # (recent flagships while offline). A send without a key reports
 # "OpenRouter key not found" instead of failing boot.

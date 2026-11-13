@@ -54,6 +54,7 @@ and exposes tools plus any number of stdio MCP servers to the model.
 | `compaction.go` | Summary-mode compaction (prune + cheap-model summary, send-side only) |
 | `usage.go` | Quota for the TUI footer: Go plan quota (`GET /usage`) and OpenRouter balance (`GET /credits`) |
 | `errors.go` | Friendly one-line errors mapped from status codes/causes (ctrl+x has details) |
+| `privacy.go` | OpenRouter `zdr`/`data_collection` filters, data-policy refusal detection, and the session-only relaxation prompt |
 | `think.go` | Splits `<think>` blocks out of replies so the UI can collapse them |
 | `tools.go` | Tool contract, ordered registry, builtin loader, output limits, `shell` |
 | `todos.go` | Session plan (`todowrite`/`todoread`, opencode schema, in-memory + session fold) |
@@ -90,6 +91,8 @@ and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
 | `affinity` | string | empty (`none`) | OpenRouter provider affinity/routing variant, sent as a model-slug suffix: `floor` (cheapest; `provider.sort: "price"`), `nitro` (fastest throughput; `provider.sort: "throughput"`), `exacto` (quality-first tool-use sorting), or empty/`none` (OpenRouter's default load balancing). `routing` is an accepted alias; set only one (conflicting values are a load error). Switch live with `/route [none\|floor\|nitro\|exacto]` or ctrl+y (cycles none → floor → nitro → exacto, wraps); a **silent no-op on Go/Zen/OpenAI**. Cleared at load and on model switches for non-OpenRouter models. The TUI persists the choice to `state.json` alongside `thinking`; also stored in favourite slots. Ignored on non-OpenRouter models |
 | `provider_ignore` | string[] | `["baseten"]` | OpenRouter `provider.ignore`: provider slugs skipped per request (`openrouter/…` models only; a silent no-op on Go/Zen). Unset keeps the default `["baseten"]`, an explicit `[]` disables the blacklist. Mutually exclusive with `provider_only` (which wins when both are set). The `provider` object merges with the `affinity` suffix, which sets `provider.sort` |
 | `provider_only` | string[] | unset | OpenRouter `provider.only`: an allowlist instead of the blacklist. Sent as the request `provider` object alongside `affinity` |
+| `zdr` | bool | `true` | OpenRouter `provider.zdr`: route only to zero-data-retention endpoints (`openrouter/…` models only; a silent no-op elsewhere). Every request sends it explicitly |
+| `data_collection` | bool | `false` | OpenRouter `provider.data_collection`: `false` sends `"deny"` (no provider storage/training), `true` sends `"allow"`. Same scope as `zdr` |
 | `opencode_key` | string | empty | OpenCode API key itself, shared by Go and Zen. Empty falls back to the `OPENCODE_API_KEY` env var. Missing keys never fail boot — the TUI still opens and `/models` lists all providers; picking or sending with a Go/Zen model and no key says "OpenCode API key not found" |
 | `openrouter_key` | string | empty | OpenRouter API key itself. Empty falls back to the `OPENROUTER_API_KEY` env var. Second provider: `/models` always lists OpenRouter models (`openrouter/<vendor>/<model>`, fallback when offline) served via OpenRouter's OpenAI-compatible chat endpoint. Picking or sending with an `openrouter/…` model and no key says "OpenRouter key not found" |
 | `openai_key` | string | empty | OpenAI API key itself. Empty falls back to the `OPENAI_API_KEY` env var. Optional third provider: when a key is configured, `/models` lists `openai/<model>` from the live `/v1/models` catalog (curated fallback offline), served over the OpenAI Responses API. Without a key the provider stays hidden; picking or sending an `openai/…` model anyway says "OpenAI key not found" |
@@ -250,6 +253,21 @@ a **silent no-op** (no notice, no state write). Switch
 live with `/route` or ctrl+y (cycles none → floor → nitro → exacto, wraps). The
 suffix lives on the wire only, so the stored/config model never carries it and
 a model switch or `none` cannot leave a stale suffix.
+
+### OpenRouter privacy filters
+
+Every `openrouter/…` request sends `provider.zdr` and
+`provider.data_collection` from the `zdr` (default `true`) and
+`data_collection` (default `false` → `"deny"`) settings. The filters narrow
+OpenRouter's eligible provider pool, so a model that normally works may have
+no endpoint left. When OpenRouter refuses with a 404/403 whose message (or
+routing metadata) says no endpoint matches the data policy, valen asks once
+whether to relax both filters for the rest of the session. Relaxing widens the
+provider pool but may let a provider retain the prompts/replies and train on
+them; the choice is session-only and never written to config. Keeping the
+filters (or having no interactive prompter, e.g. `--no-question`) returns the
+original refusal, whose title names the filters instead of blaming the plan.
+A second refusal after relaxing is terminal.
 
 ## Agent loop
 
