@@ -355,6 +355,9 @@ func TestAccessAlwaysWidensSandbox(t *testing.T) {
 	path := useAccessFile(t)
 	dir := real(t.TempDir())
 	rd := real(t.TempDir())
+	if err := os.WriteFile(filepath.Join(rd, "y.txt"), []byte("y"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	asked := scriptAccess(t, lblAllowAlways, lblConfirmYes, lblAllowAlways, lblConfirmYes)
 	ctx := context.Background()
 	if err := checkFileAccess(ctx, "write", filepath.Join(dir, "x.txt")); err != nil {
@@ -391,6 +394,9 @@ func TestAccessDenyAlwaysPersistsAndFailsClosed(t *testing.T) {
 	useTempRoot(t)
 	path := useAccessFile(t)
 	dir := real(t.TempDir())
+	if err := os.WriteFile(filepath.Join(dir, "a"), []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	scriptAccess(t, lblDenyAlways, lblConfirmYes)
 	if err := checkFileAccess(context.Background(), "read", filepath.Join(dir, "a")); err == nil {
 		t.Fatal("deny must fail the access")
@@ -403,10 +409,32 @@ func TestAccessDenyAlwaysPersistsAndFailsClosed(t *testing.T) {
 	}
 }
 
+func TestNonexistentPathsDenyWithoutPrompt(t *testing.T) {
+	useTempRoot(t)
+	asked := scriptAccess(t)
+	dir := real(t.TempDir())
+	for _, tc := range []struct{ op, path string }{
+		{"read", filepath.Join(dir, "missing.txt")},
+		{"edit", filepath.Join(dir, "missing.txt")},
+		{"write", filepath.Join(dir, "missing", "x.txt")},
+	} {
+		err := checkFileAccess(context.Background(), tc.op, tc.path)
+		if err == nil || !strings.Contains(err.Error(), "no such file or directory") {
+			t.Fatalf("%s %s: err=%v", tc.op, tc.path, err)
+		}
+	}
+	if len(*asked) != 0 {
+		t.Fatalf("asked %d times, want 0", len(*asked))
+	}
+}
+
 func TestAccessConfirmNoKeepsSessionOnly(t *testing.T) {
 	useTempRoot(t)
 	path := useAccessFile(t)
 	dir := real(t.TempDir())
+	if err := os.WriteFile(filepath.Join(dir, "a"), []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	scriptAccess(t, lblAllowAlways, lblConfirmNo)
 	if err := checkFileAccess(context.Background(), "read", filepath.Join(dir, "a")); err != nil {
 		t.Fatalf("downgraded grant still allows this session: %v", err)

@@ -407,6 +407,16 @@ func checkFileAccess(ctx context.Context, op, abs string) error {
 			"blocked by "+rule+"; a persistent deny beats every allow",
 			"do not retry or work around it"))
 	}
+	// Nonexistent targets are denied without a prompt: a made-up path would
+	// otherwise ask to approve a folder that may not even exist. A write may
+	// create the file itself, but its parent folder must already exist.
+	anchor := abs
+	if op == "write" {
+		anchor = filepath.Dir(abs)
+	}
+	if _, err := os.Stat(anchor); errors.Is(err, os.ErrNotExist) {
+		return errors.New(denialText(accessOpName(op), abs, "no such file or directory", "check the path; it does not exist"))
+	}
 	// /allow-all: book the folder like a session grant without asking, so the
 	// shell sandbox picks it up too (gateShell runs checkFileAccess first).
 	if allowAllEnabled() {

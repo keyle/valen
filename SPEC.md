@@ -401,7 +401,9 @@ for approval through the active `AskUserQuestion` frontend (one answer covers
 the whole folder; allow and deny are both remembered for the session, including
 by parallel subagents, which wait on one shared prompt gate and reuse the
 answer instead of re-asking; shell `network`/destructive-label approvals behave
-the same; see "Access prompts" below). A read approval grants read only; write
+the same; see "Access prompts" below). Paths that do not exist are refused
+without a prompt (a write may create the file, but its parent folder must
+already exist). A read approval grants read only; write
 and edit ask separately and grant read and write. Sibling git worktrees of the
 same repo (`git worktree list`) are in scope and never prompt. Without an
 interactive frontend they are denied with one clear
