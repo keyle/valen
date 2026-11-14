@@ -187,16 +187,19 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   The metadata is live: the provider lands with the first response chunk and
   TTFT with the first token, so both are visible while the model is still
   reasoning; a round's billed cost lands with its usage chunk and shows while
-  tools run, before the turn's result exists. TPS is measured when the round's
-  stream ends. The `used` total includes the busy turn's accrued cost, then
+  tools run, before the turn's result exists. TPS is measured when the answer
+  round's stream ends: tool-call rounds report none, reasoning tokens the
+  stream never carried are subtracted, windows under 250ms (coalesced chunks)
+  report none, and each new round or retry clears the previous rate. The `used` total includes the busy turn's accrued cost, then
   rolls into the session total on commit without double counting.
   The provider is named by the completion body (top-level `provider`); the
   billed cost comes from `usage.cost`; rates
   come from the model catalog's `pricing.prompt`/`pricing.completion`, fetched
   at boot for the current OpenRouter model when no rate is already known (the
   picker and resumed sessions supply them otherwise); throughput is measured
-  locally from the stream (completion tokens over the first-to-last content
-  delta), so it needs no extra request. The session cost sums each turn's
+  locally from the stream (answer-round completion tokens, less hidden
+  reasoning, over the first-to-last streamed delta), so it needs no extra
+  request. The session cost sums each turn's
   billed cost across every tool-loop round, keeps four decimals below a cent,
   resets on a new session, and — being local — shows even without a balance.
   Resuming a session restores the last turn's provider/throughput, the

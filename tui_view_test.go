@@ -913,6 +913,47 @@ func TestRoutingLiveMetadataWhileBusy(t *testing.T) {
 	}
 }
 
+// TestRoutingRoundStartResetsPerf: a new round must not keep showing the
+// previous round's provider or decode rate, and clearing must not rewrite the
+// persisted turn the live metadata may alias.
+func TestRoutingRoundStartResetsPerf(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	m.cfg.Model = "openrouter/moonshotai/kimi-k3"
+	m.width, m.viewport.Width = 200, 200
+	m.busy = true
+	m.pendingSince = time.Now()
+
+	source := &ORMeta{ID: "gen-1", Provider: "Infermatic", TTFT: 4.9, TPS: 42, Cost: 0.0012, HasCost: true}
+	m.orMeta = source
+	m.orSpent, m.orSpentSet = 0.0034, true
+	m.pendingCost, m.pendingCostSet = 0.0012, true
+
+	_, _ = m.Update(toolEventMsg{kind: "round_start"})
+	if m.orMeta == nil || m.orMeta.Provider != "" || m.orMeta.TTFT != 0 || m.orMeta.TPS != 0 {
+		t.Fatalf("round_start must clear the previous round's perf: %+v", m.orMeta)
+	}
+	if m.orMeta.ID != "gen-1" || !m.orMeta.HasCost || m.orMeta.Cost != 0.0012 {
+		t.Fatalf("round_start must keep identity and billing: %+v", m.orMeta)
+	}
+	if source.Provider != "Infermatic" || source.TTFT != 4.9 || source.TPS != 42 {
+		t.Fatalf("clearRoundPerf must copy, not mutate: %+v", source)
+	}
+	got := ansi.Strip(m.footerView())
+	if strings.Contains(got, "Infermatic") || strings.Contains(got, "TPS") {
+		t.Fatalf("footer kept stale perf: %q", got)
+	}
+	if !strings.Contains(got, "$0.0046 used") {
+		t.Fatalf("footer lost cost: %q", got)
+	}
+
+	// A retry drops the failed attempt's provider and rate the same way.
+	m.orMeta = &ORMeta{Provider: "Groq", TTFT: 1.2, TPS: 99}
+	_, _ = m.Update(toolEventMsg{kind: "retry", text: "retrying"})
+	if m.orMeta.Provider != "" || m.orMeta.TTFT != 0 || m.orMeta.TPS != 0 {
+		t.Fatalf("retry must clear the failed attempt's perf: %+v", m.orMeta)
+	}
+}
+
 // TestRoutingSessionCostAccumulates: each OpenRouter turn's billed cost (summed
 // across tool-loop rounds) adds to a running session total, a costless turn
 // leaves it alone, and a new session zeroes it.

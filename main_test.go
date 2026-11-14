@@ -31,7 +31,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.BaseURL != defaultBaseURL || cfg.OpenCodeKey != "" || cfg.OpenRouterKey != "" || cfg.MaxRounds != defaultMaxRounds || cfg.MaxContextTokens != 0 || cfg.MaxTokens != defaultMaxTokens || cfg.MaxStagnantRounds != guard.DefaultMaxStagnantRounds || cfg.RequestTimeoutSeconds != 300 {
+	if cfg.BaseURL != defaultBaseURL || cfg.OpenCodeKey != "" || cfg.OpenRouterKey != "" || cfg.MaxRounds != defaultMaxRounds || cfg.MaxContextTokens != 0 || cfg.MaxTokens != defaultMaxTokens || cfg.MaxStagnantRounds != guard.DefaultMaxStagnantRounds || cfg.RequestTimeoutSeconds != 300 || shellTimeout(cfg) != 5*time.Minute {
 		t.Fatalf("bad defaults: %+v", cfg)
 	}
 	if contextBudget(cfg) != modelContextWindow("kimi-k3") {
@@ -51,6 +51,7 @@ session_id = "ses-fixed"
 max_rounds = 3
 max_stagnant_rounds = 7
 request_timeout_seconds = 12
+shell_timeout_seconds = 42
 temperature = 0.0
 tools = ["shell"]
 
@@ -62,7 +63,7 @@ args = ["-y", "server"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.BaseURL != "https://example.test/v1" || cfg.SessionID != "ses-fixed" || cfg.MaxRounds != 3 || cfg.MaxStagnantRounds != 7 || requestTimeout(cfg) != 12*time.Second {
+	if cfg.BaseURL != "https://example.test/v1" || cfg.SessionID != "ses-fixed" || cfg.MaxRounds != 3 || cfg.MaxStagnantRounds != 7 || requestTimeout(cfg) != 12*time.Second || shellTimeout(cfg) != 42*time.Second {
 		t.Fatalf("bad overrides: %+v", cfg)
 	}
 	if cfg.OpenCodeKey != "go-secret" || cfg.OpenRouterKey != "or-secret" {

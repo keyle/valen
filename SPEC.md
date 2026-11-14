@@ -103,6 +103,7 @@ and caches stay under `$XDG_DATA_HOME/valen` (`~/.local/share/valen`).
 | `max_stagnant_rounds` | int | `25` | Maximum consecutive identical ordered tool batches allowed; changed tool names/normalized arguments/order reset the count. Not a limit on read-only research; the single-call third-repeat guard may stop earlier |
 | `max_context_tokens` | int | `0` (auto) | Fail-fast budget per round (est. runes/4): `0` resolves the model's own input window when known (gemini 1M, claude 500k, gpt 400k, grok/qwen/kimi 256k, glm/minimax 200k, deepseek 128k, else 300k); explicit values override and survive `/models`. Over-budget history aborts the turn with guidance instead of a doomed send |
 | `request_timeout_seconds` | int | `300` | Optional deadline for each HTTP attempt, including response-body reads (SSE or unary), not the whole turn; retries each get a fresh deadline |
+| `shell_timeout_seconds` | int | `300` | Deadline for each `shell` command; `0` or less uses the 5m default. A killed command returns its partial output with `[timed out after …]` |
 | `temperature` | float | unset | Pointer semantics: unset omits the field, `0.0` sends zero |
 | `max_tokens` | int | `65536` | Explicit output cap on all three transports (`max_tokens` on Chat/Messages, `max_output_tokens` on Responses); positive configured values are honored without a floor |
 | `[extra_body]` | table | unset | Keys merged into each chat-transport request body (e.g. `repetition_penalty = 1.1`). Chat transport only: a non-chat model with it set is a load error. `model`, `messages`, `stream`, `stream_options`, `tools`, `tool_choice` and `provider` are rejected because valen sets them |
@@ -157,8 +158,10 @@ locally-measured metadata below shows until a management-key balance lands.
 Each `openrouter/…` completion also feeds best-effort footer metadata: the
 serving provider (top-level `provider`) and billed cost (`usage.cost`) from the
 body or last SSE usage chunk, the catalog's `pricing.prompt`/`completion`
-rates (rendered in the footer as `$ 0.10/0.40`, in/out and per-million implicit), locally-timed throughput (completion tokens over the first-to-last
-content delta, no extra request), and the session's cumulative billed cost
+rates (rendered in the footer as `$ 0.10/0.40`, in/out and per-million implicit), locally-timed throughput (answer-round completion tokens, less
+reasoning the stream did not carry, over the first-to-last delta, no extra
+request; tool-call rounds and sub-250ms windows report none, and a new round or
+retry clears the previous rate), and the session's cumulative billed cost
 (`usage.cost` summed across turns and tool-loop rounds; shown as
 `$X.XXXX used`, four decimals below a cent, with the session scope implicit).
 The session total is measured
@@ -409,7 +412,7 @@ Rules the registry enforces:
 
 | Tool | Args | Behaviour |
 | --- | --- | --- |
-| `shell` | `command`, `network` (bool, default false) | `<shell> -c` in the workdir (`sh` unless `-shell <path>` is given), 60s timeout, combined stdout+stderr; non-zero exit is returned as content with `[exit N]`, a timeout as partial output with `[timed out after …]`, not as an error |
+| `shell` | `command`, `network` (bool, default false) | `<shell> -c` in the workdir (`sh` unless `-shell <path>` is given), 5m timeout (`shell_timeout_seconds`), combined stdout+stderr; non-zero exit is returned as content with `[exit N]`, a timeout as partial output with `[timed out after …]`, not as an error |
 | `web_search` | `query` | DuckDuckGo HTML endpoint, up to 8 results as `N. title / url / snippet`; unwraps `/l/?uddg=` tracker links; 1 MiB body cap |
 | `web_fetch` | `url` | GET with 512 KiB cap, HTML tokenized to text (script/style/noscript dropped), truncated to 8000 chars |
 | `read` | `path`, `offset`, `limit` | Line-windowed read (default 2000 lines, max 5000, ~12KB per call with an offset hint to continue); lines prefixed with their number for `edit` context; long lines trimmed at 1000 chars. An image returns a text descriptor instead, since tool results carry no bytes: when the image rides this turn it says so (`[image shot.png 1280x720, 84 KiB] attached to this message — inspect the image part, no need to read the file`), otherwise it names the way to attach it (`… ask the user to attach it with @shot.png` inside the workdir, `… ask the user to paste the image or its path` outside it) |
@@ -789,7 +792,8 @@ mode at runtime (read-only investigation, reply is the plan; header shows
 shows Go plan usage (`5h` / `7d` / `30d`), yellow past 80% and pink at the cap —
 or the OpenRouter balance (`O.R. $X.XX`) on `openrouter/…` models, followed
 by best-effort serving-provider and throughput metadata when OpenRouter reports
-it (throughput is measured locally from the stream — no extra request), and
+it (throughput is measured locally from the stream's answer round — no extra
+request), and
 the per-million in/out rates (`$ 0.10/0.40`) when the catalog has them. It stays
 hidden on `zen/…` models (pay-as-you-go).
 

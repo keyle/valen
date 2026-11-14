@@ -69,6 +69,8 @@ openai_key = ""
                                 # Read-only research is not stagnation.
 # request_timeout_seconds = 300 # each HTTP attempt, including SSE/unary body;
                                 # retries get fresh deadlines, not a turn limit.
+# shell_timeout_seconds = 300   # each shell command; a timeout kills the
+                                # process tree and returns partial output.
 
 # max_context_tokens = 0       # 0 = auto: the model's own input window when
                                # known (gemini 1M, claude 500k, gpt 400k, grok/

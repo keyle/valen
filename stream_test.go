@@ -93,7 +93,7 @@ func TestChatStreamsOpenRouterTTFTAndTPS(t *testing.T) {
 		}
 		time.Sleep(30 * time.Millisecond)
 		write("data: {\"id\":\"1\",\"provider\":\"Infermatic\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}\n\n")
-		time.Sleep(30 * time.Millisecond)
+		time.Sleep(270 * time.Millisecond)
 		write("data: {\"id\":\"1\",\"provider\":\"Infermatic\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}]}\n\n")
 		write("data: {\"id\":\"1\",\"provider\":\"Infermatic\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":10,\"total_tokens\":20,\"cost\":0.0012}}\n\n")
 		write("data: [DONE]\n\n")
@@ -140,6 +140,74 @@ func TestChatStreamsOpenRouterTTFTAndTPS(t *testing.T) {
 	}
 	if meta.TTFT < 0.02 || meta.TTFT > 1 {
 		t.Fatalf("TTFT=%v, want roughly the 30ms prefill delay", meta.TTFT)
+	}
+}
+
+func TestDecodeTPS(t *testing.T) {
+	tests := []struct {
+		name              string
+		completion        int
+		reasoning         int
+		streamedReasoning bool
+		toolRound         bool
+		span              time.Duration
+		want              float64
+	}{
+		{"visible only", 50, 0, false, false, 500 * time.Millisecond, 100},
+		{"streamed reasoning counts", 110, 100, true, false, time.Second, 110},
+		{"hidden reasoning subtracted", 110, 100, false, false, time.Second, 10},
+		{"all tokens hidden", 100, 100, false, false, time.Second, 0},
+		{"tool round skipped", 50, 0, false, true, time.Second, 0},
+		{"short window skipped", 50, 0, false, false, 100 * time.Millisecond, 0},
+		{"zero completion", 0, 0, false, false, time.Second, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := decodeTPS(tt.completion, tt.reasoning, tt.streamedReasoning, tt.toolRound, tt.span); got != tt.want {
+				t.Fatalf("decodeTPS()=%v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestChatHiddenReasoningTPS: providers can bill reasoning tokens that never
+// cross the stream. Dividing the raw completion count by the visible span
+// would report a rate several times the real one.
+func TestChatHiddenReasoningTPS(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl, _ := w.(http.Flusher)
+		write := func(s string) {
+			w.Write([]byte(s))
+			if fl != nil {
+				fl.Flush()
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+		write("data: {\"id\":\"1\",\"provider\":\"Infermatic\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}\n\n")
+		time.Sleep(270 * time.Millisecond)
+		write("data: {\"id\":\"1\",\"provider\":\"Infermatic\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}]}\n\n")
+		write("data: {\"id\":\"1\",\"provider\":\"Infermatic\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":110,\"total_tokens\":120,\"completion_tokens_details\":{\"reasoning_tokens\":100}}}\n\n")
+		write("data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	oldBase := openRouterBaseURL
+	openRouterBaseURL = srv.URL
+	defer func() { openRouterBaseURL = oldBase }()
+
+	cfg := orTestConfig(srv.URL)
+	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}
+	var meta *ORMeta
+	onEvent := func(ev Event) {
+		if ev.Kind == "or_meta" {
+			meta = mergeORMeta(meta, ev.ORMeta)
+		}
+	}
+	if _, _, err := runChatTurn(context.Background(), cfg, nil, "or-key", srv.Client(), NewRegistry(), &history, onEvent); err != nil {
+		t.Fatal(err)
+	}
+	if meta == nil || meta.TPS <= 0 || meta.TPS >= 60 {
+		t.Fatalf("hidden reasoning must not inflate TPS: meta=%+v", meta)
 	}
 }
 

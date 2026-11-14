@@ -505,18 +505,20 @@ type chatReasoningDetails struct {
 	entries []map[string]json.RawMessage
 }
 
-func (a *chatReasoningDetails) add(raw json.RawMessage) {
+func (a *chatReasoningDetails) add(raw json.RawMessage) bool {
 	if len(raw) == 0 || string(raw) == "null" {
-		return
+		return false
 	}
 	var items []map[string]json.RawMessage
 	if json.Unmarshal(raw, &items) != nil {
-		return
+		return false
 	}
+	added := false
 	for _, item := range items {
 		if len(item) == 0 {
 			continue
 		}
+		added = true
 		typ := jsonString(item["type"])
 		last := len(a.entries) - 1
 		switch typ {
@@ -541,6 +543,7 @@ func (a *chatReasoningDetails) add(raw json.RawMessage) {
 			a.entries = append(a.entries, item)
 		}
 	}
+	return added
 }
 
 func (a *chatReasoningDetails) raw() json.RawMessage {
@@ -559,6 +562,27 @@ type chatToolAcc struct {
 	name  string
 	args  strings.Builder
 	extra json.RawMessage
+}
+
+// minTPSWindow is the shortest first-to-last delta span that yields a TPS
+// figure: shorter windows are timing noise from coalesced chunks, not decode.
+const minTPSWindow = 250 * time.Millisecond
+
+// decodeTPS measures one round's decode rate from our own stream. usage counts
+// hidden reasoning tokens that never crossed the stream, so subtract them when
+// no reasoning was streamed; tool-call rounds measure argument assembly, not
+// decode, and are skipped.
+func decodeTPS(completion, reasoning int, streamedReasoning, toolRound bool, span time.Duration) float64 {
+	if toolRound || span < minTPSWindow {
+		return 0
+	}
+	if !streamedReasoning {
+		completion -= reasoning
+	}
+	if completion <= 0 {
+		return 0
+	}
+	return float64(completion) / span.Seconds()
 }
 
 // chatRoundStream runs one round as SSE, emitting text/thinking deltas live.
@@ -636,6 +660,7 @@ func chatRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string, hc 
 	orMeta := ORMeta{}
 	sentProvider, sentCost := false, false
 	var firstDelta, lastDelta time.Time
+	streamedReasoning := false
 	markDelta := func() {
 		now := time.Now()
 		if firstDelta.IsZero() {
@@ -718,7 +743,13 @@ func chatRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string, hc 
 				terminal = true
 			}
 			d := choice.Delta
-			reasoning.add(streamReasoningDetails(ev.data, choice.Index))
+			details := streamReasoningDetails(ev.data, choice.Index)
+			if reasoning.add(details) {
+				// Reasoning crossed the stream: it marks the generation clock
+				// and the usage chunk bills its tokens to this round's window.
+				streamedReasoning = true
+				markDelta()
+			}
 			extras := streamToolExtras(ev.data, choice.Index)
 			altReasoning := altStreamReasoning(ev.data, choice.Index)
 			if d.Content != "" {
@@ -730,6 +761,7 @@ func chatRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string, hc 
 				if r == "" {
 					r = altReasoning
 				}
+				streamedReasoning = true
 				markDelta()
 				thinking.WriteString(r)
 				emit("thinking_delta", r)
@@ -781,10 +813,14 @@ func chatRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string, hc 
 	}
 	if modelProvider(cfg.Model) == ProviderOpenRouter {
 		if !firstDelta.IsZero() {
-			orMeta.TTFT = firstDelta.Sub(start).Seconds()
-			if lastDelta.After(firstDelta) && usage.CompletionTokens > 0 {
-				orMeta.TPS = float64(usage.CompletionTokens) / lastDelta.Sub(firstDelta).Seconds()
+			reasoningTokens := 0
+			if usage.CompletionTokensDetails != nil {
+				reasoningTokens = usage.CompletionTokensDetails.ReasoningTokens
 			}
+			span := lastDelta.Sub(firstDelta)
+			orMeta.TTFT = firstDelta.Sub(start).Seconds()
+			orMeta.TPS = decodeTPS(usage.CompletionTokens, reasoningTokens, streamedReasoning, len(order) > 0, span)
+			dvlog.Logf("or tps out=%d reasoning=%d streamed=%v tools=%d span=%s tps=%.0f", usage.CompletionTokens, reasoningTokens, streamedReasoning, len(order), dvlog.Dur(span), orMeta.TPS)
 		}
 		if onEvent != nil {
 			m := orMeta
@@ -941,6 +977,8 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 			}
 		}
 		switch ev.Kind {
+		case "round_start", "retry":
+			orMeta = clearRoundPerf(orMeta)
 		case "tool_start":
 			tools = append(tools, ToolRecord{ID: ev.ID, Name: ev.Text, Args: ev.Args})
 		case "tool_result":

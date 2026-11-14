@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestRegistryKeepsInsertionOrder(t *testing.T) {
@@ -98,12 +97,10 @@ func TestShellTool(t *testing.T) {
 
 func TestShellTimeoutMarksPartial(t *testing.T) {
 	requireShellSandbox(t)
-	old := shellTimeout
-	shellTimeout = 50 * time.Millisecond
-	defer func() { shellTimeout = old }()
+	ctx := context.WithValue(context.Background(), turnConfigKey{}, Config{ShellTimeoutSeconds: 1})
 
 	shell := ShellTool()
-	out, err := shell.Fn(context.Background(), `{"command":"echo part; sleep 5; echo never"}`)
+	out, err := shell.Fn(ctx, `{"command":"echo part; sleep 3; echo never"}`)
 	if err != nil {
 		t.Fatalf("timeout should be content, got err=%v", err)
 	}

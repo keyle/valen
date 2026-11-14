@@ -18,9 +18,14 @@ const (
 	maxToolOutput = 16000
 )
 
-// shellTimeout is a var (not const) so offline tests can shrink the wait;
-// production kills shell commands at 60s.
-var shellTimeout = 60 * time.Second
+// shellTimeout resolves the shell deadline: shell_timeout_seconds, else 5m.
+func shellTimeout(cfg Config) time.Duration {
+	seconds := cfg.ShellTimeoutSeconds
+	if seconds <= 0 {
+		seconds = defaultShellTimeoutSeconds
+	}
+	return time.Duration(seconds) * time.Second
+}
 
 // Tool is a function the model may call. Args arrive as the raw JSON string the
 // model produced; the return value is fed back verbatim as the tool result.
@@ -175,7 +180,7 @@ func (b *shellOutput) String() string {
 func ShellTool() Tool {
 	return Tool{
 		Name:        "shell",
-		Description: "Run a shell command and return its combined stdout and stderr. Runs in an OS sandbox: writes only in the workdir, sibling worktrees, approved folders, the private temp dir and tool caches (shared /tmp and $HOME ask first); network off unless network=true. For file operations use the dedicated tools instead (read not cat/head/tail/ls/find, edit not sed/awk, write not heredocs); reserve shell for builds, tests, and system commands. 60s timeout; output capped at 16k.",
+		Description: "Run a shell command and return its combined stdout and stderr. Runs in an OS sandbox: writes only in the workdir, sibling worktrees, approved folders, the private temp dir and tool caches (shared /tmp and $HOME ask first); network off unless network=true. For file operations use the dedicated tools instead (read not cat/head/tail/ls/find, edit not sed/awk, write not heredocs); reserve shell for builds, tests, and system commands. 5m timeout (shell_timeout_seconds); output capped at 16k.",
 		Schema:      json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"shell command to run"},"network":{"type":"boolean","description":"set true only if the command needs the network (downloads, git fetch/push, curl); off by default, the user is asked once per session"}},"required":["command"]}`),
 		Fn: func(ctx context.Context, args string) (string, error) {
 			if prompts.IsPlanMode(ctx) {
@@ -194,7 +199,8 @@ func ShellTool() Tool {
 			if err := gateShell(ctx, a.Command, a.Network); err != nil {
 				return "", err
 			}
-			ctx, cancel := context.WithTimeout(ctx, shellTimeout)
+			timeout := shellTimeout(currentTurnConfig(ctx, Config{}))
+			ctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 			cmd, err := sandboxCommand(ctx, a.Command, a.Network)
 			if err != nil {
@@ -220,7 +226,7 @@ func ShellTool() Tool {
 				// Killed by our own timeout, not the command: say so with the
 				// partial output, so the model splits the work instead of
 				// retrying the same doomed command (and the dv log shows it).
-				return fmt.Sprintf("%s\n[timed out after %s — partial output above; split the command or narrow its scope]", out, shellTimeout), nil
+				return fmt.Sprintf("%s\n[timed out after %s — partial output above; split the command or narrow its scope]", out, timeout), nil
 			case errors.As(err, &exit):
 				if looksSandboxDenied(out) {
 					out += "\n" + sandboxHint(a.Command)

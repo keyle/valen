@@ -66,8 +66,10 @@ type ORMeta struct {
 	// TTFT is seconds from request send to the first streamed token (thinking
 	// or content), so it covers prefill, cache and queueing.
 	TTFT float64 `json:"ttft,omitempty"`
-	// TPS is the decode rate over all streamed tokens: completion tokens
-	// divided by the span from first to last token.
+	// TPS is the decode rate of the last answer round: completion tokens
+	// (minus reasoning the stream did not carry) divided by the span from
+	// first to last streamed delta. Tool-call rounds and sub-250ms windows
+	// report none.
 	TPS float64 `json:"tps,omitempty"`
 }
 
@@ -99,6 +101,18 @@ func mergeORMeta(dst, src *ORMeta) *ORMeta {
 		dst.TPS = src.TPS
 	}
 	return dst
+}
+
+// clearRoundPerf drops the previous round's serving provider and stream
+// timings while keeping identity and billing fields. Callers assign the
+// returned copy: ORMeta may alias persisted session history.
+func clearRoundPerf(m *ORMeta) *ORMeta {
+	if m == nil {
+		return nil
+	}
+	c := *m
+	c.Provider, c.TTFT, c.TPS = "", 0, 0
+	return &c
 }
 
 // parseOpenRouterMeta folds the serving provider and billed cost from one

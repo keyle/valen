@@ -149,7 +149,7 @@ cheapest fallback per model) summarizes.
 | Old output / summary serialization | 2000 chars per ordinary tool result | Older reads become descriptors; this is not a live-send cap |
 | `read` default/max | 2000 / 5000 lines, ~12KB/call | opencode parity on lines; 12KB fits under the 16k storage cap so the offset-continue hint always reaches the model |
 | `grep` | 100 matches, 20/file, skip >1MiB/binaries | One noisy file can't starve the result; same shape as opencode's limit: 100 |
-| `shell` | 60s timeout, combined output | Non-zero exit returns as content (`[exit N]`), never as loop error |
+| `shell` | 5m timeout (`shell_timeout_seconds`), combined output | Non-zero exit returns as content (`[exit N]`), never as loop error |
 | MCP handshake / call | 30s / 2m | Slow servers warn-and-continue at startup, never abort the run |
 | Parallel tools | max 8 known read-only builtins, max 5 `task` subagents | Any other tool makes the whole batch serial |
 | Stream body cap | 8MiB LimitReader/round | A runaway stream can't OOM the harness |
@@ -233,7 +233,7 @@ args, errors-as-output (never crash the loop), 16k truncate.
 
 | Tool | Contract notes |
 | --- | --- |
-| `shell` | `sh -c` in workdir root, 60s, stdout+stderr combined; `[exit N]` is content. Foreground-only (background deferred, TODO D3). |
+| `shell` | `sh -c` in workdir root, 5m (`shell_timeout_seconds`), stdout+stderr combined; `[exit N]` is content. Foreground-only (background deferred, TODO D3). |
 | `read`/`write`/`edit` | Workdir sandbox; escapes ask via the active `AskUserQuestion` frontend (remembered per path), denied headless. `read` on dirs errors (use `glob`). `edit` needs exact `oldString`, refuses ambiguity without `replaceAll`. |
 | `glob`/`grep` | 8-worker fan-out, sorted deterministic output, skips `.git` + dependency/build dirs. `grep` = Go regexp (not ripgrep syntax — a real behavioral difference from opencode). |
 | `web_search`/`web_fetch` | DuckDuckGo HTML + HTML→text; non-200s are errors the model sees, not pages. |

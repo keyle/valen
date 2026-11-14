@@ -47,8 +47,11 @@ the control must be OpenRouter-only and harmless elsewhere.
      last SSE usage chunk when streaming.
    - Input/output per-million rates come from the model catalog's
      `pricing.prompt` / `pricing.completion`.
-   - TPS is measured from our own stream — completion tokens over the wall time
-     from the first to the last content delta — so it needs no extra API call.
+   - TPS is measured from our own stream — answer-round completion tokens
+     (less reasoning the stream did not carry) over the wall time from the
+     first to the last delta — so it needs no extra API call. Tool-call rounds,
+     sub-250ms windows and rounds with no streamed answer report none, and each
+     new round or retry clears the previous rate.
    - The session cost sums every turn's billed cost (all tool-loop rounds),
      four decimals below a cent, resetting on a new/resumed session; being
      local it shows even without a balance.

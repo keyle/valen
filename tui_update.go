@@ -169,10 +169,12 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 				answer = roundBreak(answer)
 				thinking = roundBreak(thinking)
 				roundAnswer, roundThinking = answer, thinking
+				orMeta = clearRoundPerf(orMeta)
 			case "retry":
 				// The failed attempt's partial output is replayed by the
 				// next attempt; drop it so nothing shows twice.
 				answer, thinking = roundAnswer, roundThinking
+				orMeta = clearRoundPerf(orMeta)
 			case "user_steer":
 				steers = append(steers, Steer{Text: ev.Text, Plan: cfg.Plan})
 			case "tool_start":
@@ -541,8 +543,10 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingText = roundBreak(m.pendingText)
 			m.pendingThinking = roundBreak(m.pendingThinking)
 			m.roundText, m.roundThinking = m.pendingText, m.pendingThinking
+			m.orMeta = clearRoundPerf(m.orMeta)
 		case "retry":
 			m.pendingText, m.pendingThinking = m.roundText, m.roundThinking
+			m.orMeta = clearRoundPerf(m.orMeta)
 			m.toolStatus = msg.text
 			if msg.args != "" || msg.output != "" {
 				m.retryErrs = append(m.retryErrs, errEntry{at: time.Now(), title: "Retry: " + msg.args, details: msg.output})

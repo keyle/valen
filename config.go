@@ -18,6 +18,8 @@ const (
 	defaultMaxRounds             = 300
 	defaultMaxTokens             = 65536
 	defaultRequestTimeoutSeconds = 300
+	// defaultShellTimeoutSeconds bounds one `shell` command.
+	defaultShellTimeoutSeconds = 300
 	// defaultSavedSessions bounds saved JSONL sessions per project folder; the
 	// oldest are pruned when a new session starts.
 	defaultSavedSessions = 50
@@ -91,6 +93,8 @@ type Config struct {
 	MaxContextTokens      int    `toml:"max_context_tokens"`
 	MaxTokens             int    `toml:"max_tokens"`
 	RequestTimeoutSeconds int    `toml:"request_timeout_seconds"`
+	// ShellTimeoutSeconds bounds each `shell` command; <= 0 means 5m.
+	ShellTimeoutSeconds int `toml:"shell_timeout_seconds"`
 	// MaxStagnantRounds bounds consecutive identical tool batches, not research.
 	MaxStagnantRounds int `toml:"max_stagnant_rounds"`
 	// Plan starts the session in plan mode: read-only investigation
@@ -328,6 +332,9 @@ func loadConfig(path string) (Config, error) {
 	}
 	if cfg.RequestTimeoutSeconds <= 0 {
 		cfg.RequestTimeoutSeconds = defaultRequestTimeoutSeconds
+	}
+	if cfg.ShellTimeoutSeconds <= 0 {
+		cfg.ShellTimeoutSeconds = defaultShellTimeoutSeconds
 	}
 	if cfg.MaxStagnantRounds <= 0 {
 		cfg.MaxStagnantRounds = guard.DefaultMaxStagnantRounds
