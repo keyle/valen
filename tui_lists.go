@@ -126,12 +126,36 @@ func (m *tuiModel) renderToolsList() string {
 	return b.String()
 }
 
-// sessionItems returns the cached sessions list, loading it on first use.
+// sessionItems returns the visible sessions list, loading it on first use.
+// The visible list is the full cache narrowed by sessionFilter (see
+// filteredSessionItems): unfiltered it is the cache itself.
 func (m *tuiModel) sessionItems() []sessionItem {
 	if m.sessionCache == nil {
 		m.sessionCache = m.loadSessionItems()
 	}
-	return m.sessionCache
+	return m.filteredSessionItems()
+}
+
+// filteredSessionItems rebuilds the visible rows from the full cache and
+// the current search text. Matching is a case-insensitive substring over
+// the title, model and session id, so typing a prompt word, a model name
+// or a ses- id all find the conversation. Keeping the cache intact lets
+// clearing the query reveal sessions hidden by earlier filtering.
+func (m *tuiModel) filteredSessionItems() []sessionItem {
+	q := strings.TrimSpace(m.sessionFilter)
+	if q == "" {
+		return m.sessionCache
+	}
+	lower := strings.ToLower(q)
+	out := make([]sessionItem, 0, len(m.sessionCache))
+	for _, it := range m.sessionCache {
+		hay := it.title + " " + it.model + " " + it.effort + " " +
+			strings.TrimSuffix(filepath.Base(it.path), ".jsonl")
+		if strings.Contains(strings.ToLower(hay), lower) {
+			out = append(out, it)
+		}
+	}
+	return out
 }
 
 // loadSessionItems rescans the project's session folder, reading each JSONL
@@ -199,7 +223,11 @@ func (m *tuiModel) deleteSelectedSession() {
 	m.notice = "Deleted session " + label + "."
 	m.noticeErr = false
 	m.sessionCache = m.loadSessionItems()
-	if n := len(items) - 1; n > 0 && m.cursor >= n {
+	// The cursor indexes the filtered list, so clamp against the rows
+	// still visible after the delete.
+	if n := len(m.sessionItems()); n == 0 {
+		m.cursor = 0
+	} else if m.cursor >= n {
 		m.cursor = n - 1
 	}
 	m.refreshViewport()
@@ -231,6 +259,7 @@ func (m *tuiModel) startSessionRename() {
 	// tail scrolled out of the box until the first keystroke.
 	m.sessionRename.Width = m.sessionRenameWidth()
 	m.renaming = true
+	m.sessionSearch.Blur()
 	m.sessionRename.SetValue(items[m.cursor].title)
 	m.sessionRename.CursorEnd()
 	m.sessionRename.Focus()
@@ -241,6 +270,9 @@ func (m *tuiModel) startSessionRename() {
 func (m *tuiModel) cancelSessionRename() {
 	m.renaming = false
 	m.sessionRename.Blur()
+	if m.mode == viewSessions {
+		m.sessionSearch.Focus()
+	}
 	m.refreshViewport()
 }
 
@@ -277,6 +309,19 @@ func (m *tuiModel) commitSessionRename() {
 	m.notice = "Renamed session to " + title + "."
 	m.noticeErr = false
 	m.sessionCache = m.loadSessionItems()
+	// Keep the cursor on the renamed session when it still matches the
+	// filter (its new title may no longer contain the query).
+	for i, s := range m.sessionItems() {
+		if s.path == it.path {
+			m.cursor = i
+			break
+		}
+	}
+	if n := len(m.sessionItems()); n == 0 {
+		m.cursor = 0
+	} else if m.cursor >= n {
+		m.cursor = n - 1
+	}
 	m.cancelSessionRename()
 }
 
@@ -591,7 +636,7 @@ func helpBody() string {
 		{"ctrl+q", "quit"},
 		{"ctrl+c · ctrl+d", "cancel the turn · quit"},
 		{"ctrl+f", "toggle a favourite in the model picker"},
-		{"r · x", "sessions view: rename the selected title · delete it"},
+		{"alt+r · alt+x", "sessions view: rename the selected title · delete it (type to filter, like /models)"},
 		{"@", "file picker — type to fuzzy-match files and folders, ↑↓ move, enter inserts @path and attaches it, esc closes"},
 		{"ctrl+v", "paste a clipboard image as an attachment (or a file path as a chip)"},
 		{"alt+1…alt+0", "jump to a favourite slot"},
@@ -625,6 +670,7 @@ func helpBody() string {
 		{"/quit", "quit (also :q)"},
 	}))
 	b.WriteString("  /models picker: ↑↓ select · enter switches · ctrl+f stars a favourite · type filters.\n")
+	b.WriteString("  Sessions picker: ↑↓ select · enter resumes · alt+r renames · alt+x deletes · type filters.\n")
 	b.WriteString("  /copy also by clicking the underlined \"copy response\" under the reply.\n")
 	b.WriteString("  /copy and \"copy response\" copy the reply as markdown source; drag-selecting transcript text copies the rendered text you see. Both are useful.\n")
 
@@ -677,18 +723,31 @@ func (m *tuiModel) renderSessionsList() string {
 	cw := m.contentWidth()
 	items := m.sessionItems()
 	var b strings.Builder
+	// Fixed full-width search box, same geometry as the model picker's
+	// filter: pinned to the content width so typing never resizes it.
+	boxW := cw - 2
+	if boxW < 14 {
+		boxW = 14
+	}
+	tiW := boxW - 3
+	if tiW < 12 {
+		tiW = 12
+	}
+	m.sessionSearch.Width = tiW
+	searchBox := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(mkBorder).Padding(0, 1).Width(boxW).Render(m.sessionSearch.View())
+	b.WriteString(searchBox + "\n\n")
 	if m.renaming {
 		// Same fixed-width box as the model picker's filter so typing never
 		// resizes it.
-		boxW := cw - 2
-		if boxW < 14 {
-			boxW = 14
-		}
 		m.sessionRename.Width = m.sessionRenameWidth()
 		box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(mkBorder).Padding(0, 1).Width(boxW).Render(m.sessionRename.View())
 		b.WriteString(box + "\n\n")
 	}
+	b.WriteString(metaStyle.Render("Sessions — ↑/↓ select · enter resumes · alt+r renames · alt+x deletes · type to filter · esc back") + "\n\n")
 	if len(items) == 0 {
+		if q := strings.TrimSpace(m.sessionFilter); q != "" && len(m.sessionCache) > 0 {
+			return b.String() + emptyStyle.Render(fmt.Sprintf("No sessions match %q.", q))
+		}
 		return b.String() + emptyStyle.Render("No saved sessions yet.")
 	}
 	if m.cursor < 0 {
@@ -697,7 +756,6 @@ func (m *tuiModel) renderSessionsList() string {
 	if m.cursor >= len(items) {
 		m.cursor = len(items) - 1
 	}
-	b.WriteString(metaStyle.Render("Sessions — enter resumes · r renames · x deletes · esc back") + "\n\n")
 	// Fixed columns: index, datetime, model, turns, current marker and the
 	// four two-space gaps. The title takes the remaining view width.
 	const (

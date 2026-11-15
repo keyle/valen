@@ -494,11 +494,18 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // ensureCursorVisible scrolls the overlay viewport just enough to keep the
 // cursor row on screen. Regular lists put a two-line title above their rows;
-// the model picker adds its search box and uses cursor+4 instead.
+// the model and sessions pickers add their search box and use cursor+4
+// instead (sessions adds the rename box on top while renaming).
 func (m *tuiModel) ensureCursorVisible() {
 	line := m.cursor + 2
 	if m.mode == viewModels {
 		line = m.cursor + 4
+	}
+	if m.mode == viewSessions {
+		line = m.cursor + 4
+		if m.renaming {
+			line = m.cursor + 9
+		}
 	}
 	if line < m.viewport.YOffset {
 		m.viewport.SetYOffset(line)
@@ -549,16 +556,54 @@ func (m *tuiModel) handleOverlayKey(msg tea.KeyMsg, s string) (tea.Model, tea.Cm
 		}
 		return m, cmd
 	}
+	if m.mode == viewSessions {
+		switch s {
+		case "up":
+			if m.cursor > 0 {
+				m.cursor--
+				m.refreshViewport()
+				m.ensureCursorVisible()
+			}
+			return m, nil
+		case "down":
+			if m.cursor < len(m.sessionItems())-1 {
+				m.cursor++
+				m.refreshViewport()
+				m.ensureCursorVisible()
+			}
+			return m, nil
+		case "enter":
+			return m, m.openSelected()
+		case "alt+r":
+			m.startSessionRename()
+			return m, nil
+		case "alt+x":
+			m.deleteSelectedSession()
+			return m, nil
+		case "pgup", "pgdown":
+			if s == "pgup" {
+				m.viewport.PageUp()
+			} else {
+				m.viewport.PageDown()
+			}
+			return m, nil
+		}
+		// Typing filters, like /models: every other key goes to the search
+		// box, so j/k/r/x/q are ordinary filter characters. Rename/delete
+		// moved to alt+r/alt+x (the filter never needs a modifier).
+		old := m.sessionSearch.Value()
+		var cmd tea.Cmd
+		m.sessionSearch, cmd = m.sessionSearch.Update(msg)
+		if next := m.sessionSearch.Value(); next != old {
+			m.sessionFilter = next
+			m.cursor = 0
+			m.refreshViewport()
+			m.viewport.GotoTop()
+		}
+		return m, cmd
+	}
 	if m.mode == viewSlots && s == "x" {
 		m.unbindSelectedSlot()
-		return m, nil
-	}
-	if m.mode == viewSessions && s == "r" {
-		m.startSessionRename()
-		return m, nil
-	}
-	if m.mode == viewSessions && s == "x" {
-		m.deleteSelectedSession()
 		return m, nil
 	}
 	switch s {

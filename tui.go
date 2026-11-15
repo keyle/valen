@@ -470,8 +470,11 @@ type tuiModel struct {
 	detailBody  string
 	// sessionCache backs the sessions overlay so cursor moves re-render from
 	// memory instead of rescanning every JSONL on disk; reloaded when the
-	// view opens and after a delete.
-	sessionCache []sessionItem
+	// view opens and after a delete. sessionFilter/sessionSearch narrow the
+	// visible rows (see filteredSessionItems), like the /models picker.
+	sessionCache  []sessionItem
+	sessionFilter string
+	sessionSearch textinput.Model
 	// renaming is set while the sessions view has its inline title editor
 	// open; sessionRename holds the draft title.
 	renaming      bool
@@ -565,6 +568,15 @@ func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session 
 	search.TextStyle = lipgloss.NewStyle().Foreground(mkFg)
 	search.Cursor.SetMode(cursor.CursorStatic)
 
+	sessionSearch := textinput.New()
+	sessionSearch.Placeholder = "type to filter sessions"
+	sessionSearch.Prompt = ""
+	sessionSearch.CharLimit = 0
+	sessionSearch.Width = 52
+	sessionSearch.PlaceholderStyle = metaStyle
+	sessionSearch.TextStyle = lipgloss.NewStyle().Foreground(mkFg)
+	sessionSearch.Cursor.SetMode(cursor.CursorStatic)
+
 	rename := textinput.New()
 	rename.Placeholder = "session title"
 	rename.Prompt = ""
@@ -586,6 +598,7 @@ func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session 
 		input:         ta,
 		spinner:       sp,
 		modelSearch:   search,
+		sessionSearch: sessionSearch,
 		sessionRename: rename,
 		steer:         &steerQueue{},
 		showThink:     true,
@@ -767,18 +780,28 @@ func (m *tuiModel) show(mode viewMode) {
 	m.sessionRename.Blur()
 	if mode == viewSessions {
 		m.sessionCache = m.loadSessionItems()
+		// Each open starts unfiltered with the search focused, like /models:
+		// typing immediately narrows the conversations.
+		m.sessionFilter = ""
+		m.sessionSearch.SetValue("")
 	}
 	m.clearSelection()
 	m.viewport.Height = m.viewportHeight()
 	if mode == viewChat {
 		m.input.Focus()
 		m.modelSearch.Blur()
+		m.sessionSearch.Blur()
 	} else {
 		m.input.Blur()
 		if mode == viewModels {
 			m.modelSearch.Focus()
 		} else {
 			m.modelSearch.Blur()
+		}
+		if mode == viewSessions {
+			m.sessionSearch.Focus()
+		} else {
+			m.sessionSearch.Blur()
 		}
 	}
 	m.refreshViewport()

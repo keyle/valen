@@ -22,7 +22,7 @@ const (
 	defaultShellTimeoutSeconds = 300
 	// defaultSavedSessions bounds saved JSONL sessions per project folder; the
 	// oldest are pruned when a new session starts.
-	defaultSavedSessions = 50
+	defaultSavedSessions = 250
 	// defaultMaxContextTokens is the fail-fast ceiling for models with no
 	// known window (see modelContextWindow): stateless transports resend
 	// all of history every round, so burn compounds as rounds × history.
@@ -158,7 +158,7 @@ type TUIConfig struct {
 	SelectScrollMs int `toml:"select_scroll_ms"`
 }
 
-// savedSessions is the saved-session budget per project folder, default 50.
+// savedSessions is the saved-session budget per project folder, default 250.
 func savedSessions(cfg Config) int {
 	if cfg.SavedSessions <= 0 {
 		return defaultSavedSessions

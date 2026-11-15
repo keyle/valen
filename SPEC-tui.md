@@ -379,8 +379,13 @@ soon as the UI comes up; the positional arg is the prompt, never a workdir.
   (first prompt, 60 runes) taking the remaining view width, model name as the
   last `/` segment with no thinking level — Enter
   resumes it (latest `Turn.History` checkpoint plus later legacy turns, same
-  file continues). `r` opens an inline title editor prefilled with the
-  selected title (`Enter` saves to the meta sidecar, `Esc` cancels); `x`
+  file continues). Like `/models`, the filter field is always focused
+  (ghost hint "type to filter sessions"), so typing narrows the list
+  immediately over title, model and session id; ↑↓ move, j/k/r/x/q are
+  ordinary filter characters and Esc closes the view. The search box is
+  pinned to the full content width so typing never resizes it.
+  `alt+r` opens an inline title editor prefilled with the
+  selected title (`Enter` saves to the meta sidecar, `Esc` cancels); `alt+x`
   deletes the selected log and its meta. Esc backs to the current session
   without arming the cancel confirm, so browsing sessions never counts toward
   stopping a running turn.
@@ -594,14 +599,14 @@ the full height, starts at its heading and scrolls to follow the selected option
 | Ctrl+V | paste a clipboard image as an attachment chip (text falls back to the normal paste) | same |
 | Ctrl+O | toggle thinking display (shown by default) | toggle thinking display |
 | Alt+1…9, Alt+0 / Alt+Shift+1…0 | favourite slots: switch to slot / store current model + thinking in slot | same |
-| x | — | slots view: unbind the selected slot; sessions view: delete the selected session |
-| r | — | sessions view: rename the selected title (Enter saves, Esc cancels) |
+| x | — | slots view: unbind the selected slot |
+| alt+r / alt+x | — | sessions view: rename the selected title (Enter saves, Esc cancels) / delete the selected session (typing filters, like /models) |
 | Ctrl+B | toggle status details | toggle status details |
 | Ctrl+P / Ctrl+M | model picker | model picker |
 | `@` | file picker: ↑↓ move, Enter inserts `@path`, Esc closes | — |
 | Ctrl+S | favourite slots view | favourite slots view |
 | Ctrl+Q | quit | quit |
-| ↑↓ / j/k | textarea cursor (PgUp scrolls); ↑ on an empty box recalls the last prompt | move selection (models: ↑↓; view scrolls to follow) |
+| ↑↓ / j/k | textarea cursor (PgUp scrolls); ↑ on an empty box recalls the last prompt | move selection (models/sessions: ↑↓ only — typing filters; view scrolls to follow) |
 | Space / Enter / Esc | — | question overlay: toggle / select+confirm / dismiss |
 
 Function keys are gone; the footer only points at `/help`, which lists every

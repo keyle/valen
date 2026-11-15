@@ -565,7 +565,7 @@ func TestSessionsViewDeletesSelected(t *testing.T) {
 		t.Fatalf("sessions=%+v", items)
 	}
 	m.cursor = 1
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}, Alt: true})
 
 	if _, err := os.Stat(old.Path); !os.IsNotExist(err) {
 		t.Fatalf("selected session file must be deleted: %v", err)
@@ -581,6 +581,91 @@ func TestSessionsViewDeletesSelected(t *testing.T) {
 	}
 	if !strings.Contains(m.notice, "Deleted session old work") || m.noticeErr {
 		t.Fatalf("notice=%q err=%v", m.notice, m.noticeErr)
+	}
+}
+
+func TestSessionsPickerSearchAndEscape(t *testing.T) {
+	m := newTestModel(t, testConfig("https://unused"))
+	mk := func(id, prompt, model string) {
+		t.Helper()
+		s, err := newSession(Config{SessionID: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.append(Turn{Prompt: prompt, Model: model}); err != nil {
+			t.Fatal(err)
+		}
+		if err := saveSessionMeta(metaPath(s.Path), SessionMeta{Title: prompt, Model: model}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("ses-alpha", "fix the login redirect bug", "openrouter/z-ai/glm-5.3")
+	mk("ses-beta", "second session prompt here", "kimi-k3")
+	mk("ses-gamma", "keep work on search", "kimi-k3")
+	time.Sleep(10 * time.Millisecond)
+
+	m.show(viewSessions)
+	if !m.sessionSearch.Focused() {
+		t.Fatal("the sessions filter must be focused on open")
+	}
+	if text := ansi.Strip(m.renderViewportContent()); !strings.Contains(text, "type to filter sessions") {
+		t.Fatalf("picker should render its search box:\n%s", text)
+	}
+	if len(m.sessionItems()) != 3 {
+		t.Fatalf("unfiltered sessions=%d", len(m.sessionItems()))
+	}
+
+	// Typing filters immediately, including j/k/r/x as ordinary characters;
+	// arrows still move the selection within the filtered rows.
+	for _, r := range "login" {
+		_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	if m.sessionSearch.Value() != "login" || len(m.sessionItems()) != 1 ||
+		!strings.Contains(m.sessionItems()[0].title, "login") || m.cursor != 0 {
+		t.Fatalf("typing should filter: query=%q items=%+v cursor=%d", m.sessionSearch.Value(), m.sessionItems(), m.cursor)
+	}
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.cursor != 0 {
+		t.Fatalf("arrow navigation moved past the only result: cursor=%d", m.cursor)
+	}
+	// Clearing the query reveals every session again (cache intact), and
+	// the filter also matches the model name.
+	for range "login" {
+		_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+	if m.sessionSearch.Value() != "" || len(m.sessionItems()) != 3 {
+		t.Fatalf("clearing should reveal all: query=%q n=%d", m.sessionSearch.Value(), len(m.sessionItems()))
+	}
+	for _, r := range "kimi" {
+		_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	if len(m.sessionItems()) != 2 {
+		t.Fatalf("model-name filter want 2, got %+v", m.sessionItems())
+	}
+	// A query with no match renders the empty-filter message.
+	for range "kimi" {
+		_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+	for _, r := range "zzz" {
+		_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	if text := ansi.Strip(m.renderSessionsList()); !strings.Contains(text, `No sessions match "zzz"`) {
+		t.Fatalf("empty filter message missing:\n%s", text)
+	}
+	// Alt+r on the filtered (empty) list is a no-op, not a rename.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}, Alt: true})
+	if m.renaming {
+		t.Fatal("alt+r with no match must not open the rename editor")
+	}
+
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mode != viewChat {
+		t.Fatalf("esc should close the picker: mode=%v", m.mode)
+	}
+	// Reopening starts unfiltered again.
+	m.show(viewSessions)
+	if m.sessionSearch.Value() != "" || len(m.sessionItems()) != 3 {
+		t.Fatalf("reopen should reset the filter: query=%q n=%d", m.sessionSearch.Value(), len(m.sessionItems()))
 	}
 }
 
@@ -609,8 +694,8 @@ func TestSessionsViewRenamesSelected(t *testing.T) {
 	}
 	m.cursor = idx
 
-	// r prefills the editor with the current title.
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	// alt+r prefills the editor with the current title.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}, Alt: true})
 	if !m.renaming || m.sessionRename.Value() != "old work" {
 		t.Fatalf("rename not open/prefilled: open=%v value=%q", m.renaming, m.sessionRename.Value())
 	}
@@ -625,7 +710,7 @@ func TestSessionsViewRenamesSelected(t *testing.T) {
 	}
 
 	// Enter saves the typed title and keeps the model/effort metadata.
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}, Alt: true})
 	m.sessionRename.SetValue("")
 	for _, r := range "renamed title" {
 		_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
@@ -669,7 +754,7 @@ func TestSessionsRenameShowsTitleStartOnOpen(t *testing.T) {
 	}
 	m.show(viewSessions)
 	m.cursor = 0
-	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}, Alt: true})
 	if got := m.sessionRename.Value(); got != long {
 		t.Fatalf("prefill=%q", got)
 	}

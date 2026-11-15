@@ -49,9 +49,9 @@ openai_key = ""
 # sends ride the OpenAI Responses API at https://api.openai.com/v1. OpenAI is
 # hidden from the picker while no key is configured.
 # session_id = "ses-stable-id"   # optional, generated per run when omitted
-# saved_sessions = 50             # saved sessions kept per project folder;
+# saved_sessions = 250            # saved sessions kept per project folder;
                                 # the oldest are pruned when a new session
-                                # starts (0 or less uses the default 50).
+                                # starts (0 or less uses the default 250).
 
 # Prompt files are built in per model family. Add your own standing
 # instructions in ~/.config/valen/AGENTS.md; the project's ./AGENTS.md is

@@ -204,12 +204,12 @@ func TestSessionsPruneToMax(t *testing.T) {
 	}
 }
 
-func TestSavedSessionsDefaultsTo50(t *testing.T) {
+func TestSavedSessionsDefaultsTo250(t *testing.T) {
 	cfg, err := loadConfig(writeConfig(t, "model = \"kimi-k3\"\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SavedSessions != defaultSavedSessions {
-		t.Fatalf("saved_sessions=%d, want %d", cfg.SavedSessions, defaultSavedSessions)
+	if cfg.SavedSessions != 250 {
+		t.Fatalf("saved_sessions=%d, want 250", cfg.SavedSessions)
 	}
 }
