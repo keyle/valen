@@ -297,9 +297,15 @@ Rules:
   a friendly "Cancelled" error; the app does not quit.
 - `AskUserQuestion` opens a question overlay while the turn stays busy:
   ↑↓/j/k moves, Enter selects, Space toggles multi-select, type-your-own
-  accepts free text, and a final confirmation submits or cancels.
-  Esc / Ctrl+C / Ctrl+D first dismisses the pending answers and returns them
-  to the model as a tool error; it does not cancel the run.
+  accepts free text in a single-line box with cursor (←/→, Home/End,
+  Backspace/Delete), the options staying visible while typing. The last
+  paragraph of the model's thinking is condensed above the question in
+  bright white (snapshot taken when the batch arrives). A final
+  confirmation submits answers; Esc there revises from the first question
+  for model batches (access batches keep Esc-cancel so the downgrade path
+  stands), and `n` cancels either. Esc / Ctrl+C / Ctrl+D at the question
+  stage dismisses the pending answers and returns them to the model as a
+  tool error; it does not cancel the run.
 - Ctrl+C / Ctrl+D at idle quits. Ctrl+Q quits. MCP closers run on exit.
 - Text/thinking deltas render into the pending transcript throttled
   (~60ms, rolling 32768-byte UTF-8-safe text/thinking tails) with the viewport
@@ -607,7 +613,7 @@ the full height, starts at its heading and scrolls to follow the selected option
 | Ctrl+S | favourite slots view | favourite slots view |
 | Ctrl+Q | quit | quit |
 | ↑↓ / j/k | textarea cursor (PgUp scrolls); ↑ on an empty box recalls the last prompt | move selection (models/sessions: ↑↓ only — typing filters; view scrolls to follow) |
-| Space / Enter / Esc | — | question overlay: toggle / select+confirm / dismiss |
+| Space / Enter / Esc | — | question overlay: toggle / select+submit, cursor edit in type-your-own, Esc revises model confirmation / dismisses |
 
 Function keys are gone; the footer only points at `/help`, which lists every
 shortcut (and the shortcut line above).

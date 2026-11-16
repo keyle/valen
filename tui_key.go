@@ -199,8 +199,10 @@ func (m *tuiModel) flushMouseHold() {
 	}
 	if m.ask != nil && m.ask.phase == "own" {
 		for _, h := range held {
-			if s := h.String(); len(s) == 1 {
-				m.ask.own += s
+			if s := h.String(); len([]rune(s)) == 1 {
+				for _, r := range s {
+					m.ask.insertOwnRune(r)
+				}
 			}
 		}
 		return

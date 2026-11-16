@@ -775,7 +775,14 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for i := range msg.qs {
 			picks[i] = map[int]bool{}
 		}
-		m.ask = &askState{qs: msg.qs, reply: msg.reply, picks: picks, ownText: make([]string, len(msg.qs)), phase: "pick"}
+		th := m.pendingThinking
+		if t, _ := splitThinking(m.pendingText); t != "" {
+			if strings.TrimSpace(th) != "" {
+				th += "\n\n"
+			}
+			th += t
+		}
+		m.ask = &askState{qs: msg.qs, reply: msg.reply, picks: picks, ownText: make([]string, len(msg.qs)), phase: "pick", thinking: condenseThinking(th)}
 		m.closeFilePicker()
 		m.mode = viewAsk
 		if m.askSince.IsZero() {

@@ -78,6 +78,9 @@ var (
 	// Confirmation hint: bold green like the ready status, so the waiting
 	// state is obvious at a glance.
 	confirmHintStyle = lipgloss.NewStyle().Foreground(mkGreen).Bold(true)
+	// Thinking highlights above the question overlay: bright white, readable
+	// at a glance (unlike the dim italic transcript thinking).
+	askThinkStyle = lipgloss.NewStyle().Foreground(mkFg).Bold(true)
 	// Favourite marker in the model picker: warm yellow, like a lit star.
 	favStyle = lipgloss.NewStyle().Foreground(mkYellow).Bold(true)
 	// Subject of an access prompt (folder / command): bold yellow.
@@ -182,14 +185,16 @@ type askReply struct {
 
 // askState tracks one AskUserQuestion overlay interaction.
 type askState struct {
-	qs      []AskQuestion
-	idx     int
-	cursor  int
-	phase   string // "pick", "own", "review"
-	own     string
-	picks   []map[int]bool // per-question selected option indexes (multi-select)
-	ownText []string       // per-question free text when "type your own" chosen
-	reply   chan askReply
+	qs       []AskQuestion
+	idx      int
+	cursor   int
+	phase    string // "pick", "own", "review"
+	own      string
+	ownPos   int            // rune cursor inside own
+	picks    []map[int]bool // per-question selected option indexes (multi-select)
+	ownText  []string       // per-question free text when "type your own" chosen
+	reply    chan askReply
+	thinking string // condensed thinking highlights snapshotted when asked
 	// rowTop/rowBottom are the selected option's line span in the last
 	// render, so key handling can scroll it into view on short terminals.
 	rowTop, rowBottom int

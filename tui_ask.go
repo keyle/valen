@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -95,6 +96,7 @@ func (m *tuiModel) handleAskKey(s string) (tea.Model, tea.Cmd) {
 			if a.cursor == overflow {
 				a.phase = "own"
 				a.own = ""
+				a.ownPos = 0
 			} else if a.qs[a.idx].MultiSelect {
 				anySelected := false
 				for _, on := range a.picks[a.idx] {
@@ -114,6 +116,8 @@ func (m *tuiModel) handleAskKey(s string) (tea.Model, tea.Cmd) {
 			m.dismissAsk(errAskDismissed)
 		}
 	case "own":
+		a.clampOwnPos()
+		runes := []rune(a.own)
 		switch s {
 		case "enter":
 			if strings.TrimSpace(a.own) == "" {
@@ -122,15 +126,34 @@ func (m *tuiModel) handleAskKey(s string) (tea.Model, tea.Cmd) {
 				a.ownText[a.idx] = strings.TrimSpace(a.own)
 				a.advanceAsk()
 			}
+		case "left":
+			if a.ownPos > 0 {
+				a.ownPos--
+			}
+		case "right":
+			if a.ownPos < len(runes) {
+				a.ownPos++
+			}
+		case "home", "ctrl+a":
+			a.ownPos = 0
+		case "end", "ctrl+e":
+			a.ownPos = len(runes)
 		case "backspace":
-			if len(a.own) > 0 {
-				a.own = a.own[:len(a.own)-1]
+			if a.ownPos > 0 {
+				a.own = string(append(runes[:a.ownPos-1], runes[a.ownPos:]...))
+				a.ownPos--
+			}
+		case "delete":
+			if a.ownPos < len(runes) {
+				a.own = string(append(runes[:a.ownPos], runes[a.ownPos+1:]...))
 			}
 		case "esc":
 			a.phase = "pick"
 		default:
-			if len(s) == 1 {
-				a.own += s
+			if utf8.RuneCountInString(s) == 1 {
+				for _, r := range s {
+					a.insertOwnRune(r)
+				}
 			}
 		}
 	case "review":
@@ -140,7 +163,17 @@ func (m *tuiModel) handleAskKey(s string) (tea.Model, tea.Cmd) {
 			m.ask = nil
 			m.resumeTimer()
 			m.show(viewChat)
-		case "esc", "n":
+		case "esc":
+			if a.isAccessOnly() {
+				m.dismissAsk(errAskDismissed)
+			} else {
+				a.restartAsk()
+			}
+		case "e":
+			if !a.isAccessOnly() {
+				a.restartAsk()
+			}
+		case "n":
 			m.dismissAsk(errAskDismissed)
 		}
 	}
@@ -175,4 +208,84 @@ func (a *askState) advanceAsk() {
 		a.idx = len(a.qs) - 1
 		a.phase = "review"
 	}
+}
+
+// isAccessOnly reports whether every question in the batch is an access
+// decision (NoFreeText). Model batches always allow free text, so they can
+// be told apart this way without extra bookkeeping.
+func (a *askState) isAccessOnly() bool {
+	if len(a.qs) == 0 {
+		return true
+	}
+	for _, q := range a.qs {
+		if !q.NoFreeText {
+			return false
+		}
+	}
+	return true
+}
+
+// restartAsk drops all picks and free text and returns to the first
+// question: esc at the confirmation stage means "I made a mistake", not
+// "cancel the questions".
+func (a *askState) restartAsk() {
+	for i := range a.picks {
+		a.picks[i] = map[int]bool{}
+	}
+	for i := range a.ownText {
+		a.ownText[i] = ""
+	}
+	a.idx = 0
+	a.cursor = 0
+	a.phase = "pick"
+	a.own = ""
+	a.ownPos = 0
+	a.rowTop, a.rowBottom = 0, 0
+}
+
+func (a *askState) clampOwnPos() {
+	if n := len([]rune(a.own)); a.ownPos > n {
+		a.ownPos = n
+	}
+	if a.ownPos < 0 {
+		a.ownPos = 0
+	}
+}
+
+func (a *askState) insertOwnRune(r rune) {
+	runes := []rune(a.own)
+	a.clampOwnPos()
+	end := a.ownPos
+	runes = append(runes, 0)
+	copy(runes[end+1:], runes[end:])
+	runes[end] = r
+	a.own = string(runes)
+	a.ownPos = end + 1
+}
+
+// condenseThinking keeps the last paragraph of the model's reasoning as the
+// highlight above the questions: later reasoning explains the question,
+// earlier paragraphs are stale context. Whitespace collapses to one line
+// and very long paragraphs keep only their tail.
+func condenseThinking(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	last := ""
+	for _, p := range strings.Split(s, "\n\n") {
+		if strings.TrimSpace(p) != "" {
+			last = p
+		}
+	}
+	last = strings.Join(strings.Fields(last), " ")
+	const maxRunes = 500
+	if r := []rune(last); len(r) > maxRunes {
+		tail := string(r[len(r)-maxRunes:])
+		if i := strings.Index(tail, " "); i >= 0 {
+			tail = strings.TrimSpace(tail[i+1:])
+		}
+		last = "… " + tail
+	}
+	return last
 }

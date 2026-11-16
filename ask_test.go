@@ -345,3 +345,199 @@ func TestAskHighlightSubject(t *testing.T) {
 		t.Fatal("subject style must be bold yellow")
 	}
 }
+
+func TestAskOwnCursorEditingKeepsOptionsVisible(t *testing.T) {
+	m := newTUIModel(Config{Model: "m"}, nil, nil, nil)
+	reply := make(chan askReply, 1)
+	qs := []AskQuestion{{Question: "Pick color?", Options: []AskOption{{Label: "Red"}, {Label: "Blue"}}}}
+	m.ask = &askState{qs: qs, picks: []map[int]bool{{}}, ownText: make([]string, 1), phase: "pick", reply: reply}
+	m.mode = viewAsk
+
+	_, _ = m.handleAskKey("down")
+	_, _ = m.handleAskKey("down")
+	_, _ = m.handleAskKey("enter") // enter the own box
+	if m.ask.phase != "own" {
+		t.Fatalf("phase=%q", m.ask.phase)
+	}
+	_, _ = m.handleAskKey("h")
+	_, _ = m.handleAskKey("i")
+	_, _ = m.handleAskKey("x")
+	if m.ask.own != "hix" || m.ask.ownPos != 3 {
+		t.Fatalf("own=%q pos=%d", m.ask.own, m.ask.ownPos)
+	}
+	_, _ = m.handleAskKey("left")
+	_, _ = m.handleAskKey("left")
+	_, _ = m.handleAskKey("!")
+	if m.ask.own != "h!ix" || m.ask.ownPos != 2 {
+		t.Fatalf("insert at cursor: own=%q pos=%d", m.ask.own, m.ask.ownPos)
+	}
+	_, _ = m.handleAskKey("backspace")
+	if m.ask.own != "hix" || m.ask.ownPos != 1 {
+		t.Fatalf("backspace: own=%q pos=%d", m.ask.own, m.ask.ownPos)
+	}
+	_, _ = m.handleAskKey("delete")
+	if m.ask.own != "hx" || m.ask.ownPos != 1 {
+		t.Fatalf("delete: own=%q pos=%d", m.ask.own, m.ask.ownPos)
+	}
+	_, _ = m.handleAskKey("home")
+	if m.ask.ownPos != 0 {
+		t.Fatalf("home pos=%d", m.ask.ownPos)
+	}
+	_, _ = m.handleAskKey("end")
+	if m.ask.ownPos != 2 {
+		t.Fatalf("end pos=%d", m.ask.ownPos)
+	}
+	// The options stay visible while the box is active, with a block cursor.
+	got := ansi.Strip(m.renderAsk())
+	if !strings.Contains(got, "Red") || !strings.Contains(got, "Blue") {
+		t.Fatalf("options hidden while typing:\n%s", got)
+	}
+	if !strings.Contains(got, "hx▏") {
+		t.Fatalf("cursor missing:\n%s", got)
+	}
+	// Multibyte runes edit by rune, not by byte.
+	m.ask.own = "éé"
+	m.ask.ownPos = 2
+	_, _ = m.handleAskKey("left")
+	_, _ = m.handleAskKey("a")
+	if m.ask.own != "éaé" {
+		t.Fatalf("rune insert: own=%q", m.ask.own)
+	}
+	_, _ = m.handleAskKey("esc")
+	if m.ask.phase != "pick" {
+		t.Fatalf("esc must go back to pick: %q", m.ask.phase)
+	}
+	_, _ = m.handleAskKey("down")
+	_, _ = m.handleAskKey("down")
+	_, _ = m.handleAskKey("enter")
+	if m.ask.own != "" || m.ask.ownPos != 0 {
+		t.Fatalf("re-entering must reset the box: %q %d", m.ask.own, m.ask.ownPos)
+	}
+}
+
+func TestAskReviewEscRevisesModelButDismissesAccess(t *testing.T) {
+	newModel := func(qs []AskQuestion) (*tuiModel, chan askReply) {
+		m := newTUIModel(Config{Model: "m"}, nil, nil, nil)
+		reply := make(chan askReply, 1)
+		picks := make([]map[int]bool, len(qs))
+		for i := range picks {
+			picks[i] = map[int]bool{}
+		}
+		m.ask = &askState{qs: qs, picks: picks, ownText: make([]string, len(qs)), phase: "review", reply: reply}
+		m.mode = viewAsk
+		return m, reply
+	}
+
+	// Model batch: esc restarts from the first question, nothing is sent.
+	m, reply := newModel(askFixtureQuestions())
+	m.ask.picks[0][1] = true
+	m.ask.picks[1][0] = true
+	m.ask.ownText[0] = "ultraviolet"
+	m.ask.idx = 1
+	_, _ = m.handleAskKey("esc")
+	if m.ask == nil || m.ask.phase != "pick" || m.ask.idx != 0 || m.ask.cursor != 0 {
+		t.Fatalf("model esc must restart: %+v", m.ask)
+	}
+	if len(m.ask.picks[0]) != 0 || len(m.ask.picks[1]) != 0 || m.ask.ownText[0] != "" {
+		t.Fatalf("restart must clear answers: picks=%v own=%q", m.ask.picks, m.ask.ownText)
+	}
+	select {
+	case r := <-reply:
+		t.Fatalf("restart must not send: %+v", r)
+	default:
+	}
+	// "e" also revises, "n" still cancels a model batch.
+	m.ask.phase = "review"
+	_, _ = m.handleAskKey("e")
+	if m.ask == nil || m.ask.phase != "pick" {
+		t.Fatal("e must revise a model batch")
+	}
+	m.ask.phase = "review"
+	_, _ = m.handleAskKey("n")
+	if m.ask != nil {
+		t.Fatal("n must cancel a model batch")
+	}
+	select {
+	case r := <-reply:
+		if r.err != errAskDismissed {
+			t.Fatalf("n err=%v", r.err)
+		}
+	default:
+		t.Fatal("n must send the dismissal")
+	}
+
+	// Access batch: esc and n still dismiss (downgrade path).
+	qs := []AskQuestion{{Question: "Allow?", NoFreeText: true, Options: []AskOption{{Label: "Yes"}, {Label: "No"}}}}
+	am, areply := newModel(qs)
+	_, _ = am.handleAskKey("esc")
+	if am.ask != nil {
+		t.Fatal("access esc must dismiss")
+	}
+	select {
+	case r := <-areply:
+		if r.err != errAskDismissed {
+			t.Fatalf("access esc err=%v", r.err)
+		}
+	default:
+		t.Fatal("access esc must send the dismissal")
+	}
+	am2, _ := newModel(qs)
+	_, _ = am2.handleAskKey("e")
+	if am2.ask == nil {
+		t.Fatal("e must not dismiss an access batch")
+	}
+}
+
+func TestAskReviewHintsDistinguishReviseFromCancel(t *testing.T) {
+	m := newTUIModel(Config{Model: "m"}, nil, nil, nil)
+	m.ask = &askState{qs: askFixtureQuestions(), picks: []map[int]bool{{}, {}}, ownText: make([]string, 2), phase: "review"}
+	m.mode = viewAsk
+	if got := ansi.Strip(m.renderAsk()); !strings.Contains(got, "esc revises") {
+		t.Fatalf("model review must hint revise:\n%s", got)
+	}
+	qs := []AskQuestion{{Question: "Allow?", NoFreeText: true, Options: []AskOption{{Label: "Yes"}}}}
+	m.ask = &askState{qs: qs, picks: []map[int]bool{{}}, ownText: make([]string, 1), phase: "review"}
+	if got := ansi.Strip(m.renderAsk()); !strings.Contains(got, "esc cancels") {
+		t.Fatalf("access review must hint cancel:\n%s", got)
+	}
+}
+
+func TestCondenseThinkingKeepsLastParagraph(t *testing.T) {
+	if got := condenseThinking("stale first\n\n  current   second\nline  "); got != "current second line" {
+		t.Fatalf("condensed=%q", got)
+	}
+	if got := condenseThinking(""); got != "" {
+		t.Fatalf("empty condensed=%q", got)
+	}
+	long := strings.Repeat("word ", 400)
+	got := condenseThinking(long)
+	if !strings.HasPrefix(got, "… ") || len([]rune(got)) > 502 {
+		t.Fatalf("long condensed=%q", got)
+	}
+}
+
+func TestAskThinkingHighlightsAboveQuestion(t *testing.T) {
+	m := newTUIModel(Config{Model: "m"}, nil, nil, nil)
+	m.pendingThinking = "stale reasoning here\n\nthe choice follows from X because Y"
+	_, _ = m.Update(questionMsg{qs: askFixtureQuestions(), reply: make(chan askReply, 1)})
+	if m.ask.thinking != "the choice follows from X because Y" {
+		t.Fatalf("thinking=%q", m.ask.thinking)
+	}
+	got := ansi.Strip(m.renderAsk())
+	ti, qi := strings.Index(got, "the choice follows"), strings.Index(got, "Question 1 of 2")
+	if ti < 0 || qi < 0 || ti > qi {
+		t.Fatalf("thinking must sit above the question:\n%s", got)
+	}
+	if got := ansi.Strip(m.renderAsk()); strings.Contains(got, "stale reasoning") {
+		t.Fatalf("stale paragraph leaked:\n%s", got)
+	}
+	if askThinkStyle.GetForeground() != mkFg || !askThinkStyle.GetBold() {
+		t.Fatal("thinking highlights must render bright white bold")
+	}
+	// No reasoning: no highlight block at all.
+	m2 := newTUIModel(Config{Model: "m"}, nil, nil, nil)
+	_, _ = m2.Update(questionMsg{qs: askFixtureQuestions(), reply: make(chan askReply, 1)})
+	if m2.ask.thinking != "" || strings.HasPrefix(ansi.Strip(m2.renderAsk()), "Question") == false {
+		t.Fatalf("empty thinking must stay bare: %q", m2.ask.thinking)
+	}
+}

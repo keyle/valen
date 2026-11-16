@@ -18,16 +18,27 @@ func (m *tuiModel) renderAsk() string {
 	cw := m.contentWidth()
 	if a.phase == "review" {
 		var b strings.Builder
-		b.WriteString(m.wrapAskHint("Confirm your answers — enter submits · esc cancels") + "\n\n")
+		if a.isAccessOnly() {
+			b.WriteString(m.wrapAskHint("Confirm your answers — enter submits · esc cancels") + "\n\n")
+		} else {
+			b.WriteString(m.wrapAskHint("Confirm your answers — enter submits · esc revises · n cancels") + "\n\n")
+		}
 		answers := m.askAnswers()
 		for i, q := range a.qs {
 			b.WriteString(m.wrapPlain(q.Question) + "\n" + m.wrapPlain("  → "+answers[i]) + "\n\n")
 		}
-		b.WriteString(m.wrapAskHint("enter = submit · esc = cancel"))
+		if a.isAccessOnly() {
+			b.WriteString(m.wrapAskHint("enter = submit · esc = cancel"))
+		} else {
+			b.WriteString(m.wrapAskHint("enter = submit · esc = revise · n = cancel"))
+		}
 		return b.String()
 	}
 	q := a.qs[a.idx]
 	var b strings.Builder
+	if a.thinking != "" {
+		b.WriteString(askThinkStyle.Width(cw).Render(breakLongWords(a.thinking, cw)) + "\n\n")
+	}
 	fmt.Fprintf(&b, "Question %d of %d", a.idx+1, len(a.qs))
 	if q.Header != "" {
 		fmt.Fprintf(&b, " · %s", q.Header)
@@ -40,10 +51,6 @@ func (m *tuiModel) renderAsk() string {
 		b.WriteString("\n" + accessSubjectStyle.Width(cw).Render(breakLongWords(h, cw)) + "\n")
 	}
 	b.WriteString("\n")
-	if a.phase == "own" {
-		b.WriteString(m.wrapPlain(fmt.Sprintf("Type your answer: %s▏\n\n  enter keeps it · esc back", a.own)))
-		return b.String()
-	}
 	for j, o := range q.Options {
 		row := fmt.Sprintf("%d. %s", j+1, o.Label)
 		if o.Description != "" {
@@ -53,7 +60,7 @@ func (m *tuiModel) renderAsk() string {
 			row = "[" + map[bool]string{true: "x", false: " "}[a.picks[a.idx][j]] + "] " + row
 		}
 		row = breakLongWords(row, cw-2)
-		if j == a.cursor {
+		if j == a.cursor && a.phase == "pick" {
 			rendered := selectedStyle.Width(cw).Render(" " + row)
 			a.rowTop = strings.Count(b.String(), "\n")
 			a.rowBottom = a.rowTop + strings.Count(rendered, "\n")
@@ -63,18 +70,29 @@ func (m *tuiModel) renderAsk() string {
 		}
 	}
 	if !q.NoFreeText {
-		ownRow := breakLongWords(fmt.Sprintf("%d. Type your own answer", len(q.Options)+1), cw-2)
-		if a.cursor == len(q.Options) {
-			rendered := selectedStyle.Width(cw).Render(" " + ownRow)
-			a.rowTop = strings.Count(b.String(), "\n")
-			a.rowBottom = a.rowTop + strings.Count(rendered, "\n")
-			b.WriteString(rendered + "\n")
+		if a.phase == "own" {
+			a.clampOwnPos()
+			runes := []rune(a.own)
+			line := fmt.Sprintf("%d. Type your own answer: %s▏%s", len(q.Options)+1, string(runes[:a.ownPos]), string(runes[a.ownPos:]))
+			b.WriteString(m.wrapPlain("  "+breakLongWords(line, cw-2)) + "\n")
 		} else {
-			b.WriteString(m.wrapPlain("  "+ownRow) + "\n")
+			ownRow := breakLongWords(fmt.Sprintf("%d. Type your own answer", len(q.Options)+1), cw-2)
+			if a.cursor == len(q.Options) {
+				rendered := selectedStyle.Width(cw).Render(" " + ownRow)
+				a.rowTop = strings.Count(b.String(), "\n")
+				a.rowBottom = a.rowTop + strings.Count(rendered, "\n")
+				b.WriteString(rendered + "\n")
+			} else {
+				b.WriteString(m.wrapPlain("  "+ownRow) + "\n")
+			}
 		}
 	}
-	b.WriteString(m.wrapPlain("↑↓/jk move · enter select · esc cancel") + "\n")
-	if q.MultiSelect {
+	if a.phase == "own" {
+		b.WriteString(m.wrapPlain("enter keeps it · esc back") + "\n")
+	} else {
+		b.WriteString(m.wrapPlain("↑↓/jk move · enter select · esc cancel") + "\n")
+	}
+	if q.MultiSelect && a.phase == "pick" {
 		b.WriteString(m.wrapPlain("space toggles"))
 	}
 	return b.String()
