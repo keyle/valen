@@ -252,6 +252,7 @@ type chatTurnRender struct {
 
 // turnDoneMsg carries the finished turn back to the UI thread.
 type turnDoneMsg struct {
+	turnID   string
 	prompt   string
 	thinking string
 	answer   string

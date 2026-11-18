@@ -144,6 +144,9 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 	httpClient := m.httpClient
 	registry := m.registry
 	prog := m.prog
+	sess := m.session
+	turnID := newTurnID()
+	turnAt := m.pendingSince
 	return func() tea.Msg {
 		refs, notices := resolveAttachments(ctx, attachPaths, cfg)
 		if len(notices) > 0 && prog != nil {
@@ -163,6 +166,18 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 		var hasTurnCost bool
 		thinkIdx := 0
 		var roundAnswer, roundThinking string
+		// File-only snapshot: this goroutine must not touch the model, so
+		// the checkpoint never reads or writes live UI state.
+		checkpointNow := func() {
+			if sess == nil {
+				return
+			}
+			_ = sess.checkpoint(Turn{
+				ID: turnID, At: turnAt, Prompt: trimmed, Thinking: thinking, Reply: answer, Tools: tools, Steers: steers,
+				Model: cfg.Model, Effort: cfg.Thinking, Plan: cfg.Plan, History: h, ORMeta: orMeta,
+			})
+		}
+		checkpointNow()
 		onEvent := func(ev Event) {
 			switch ev.Kind {
 			case "round_start":
@@ -170,6 +185,7 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 				thinking = roundBreak(thinking)
 				roundAnswer, roundThinking = answer, thinking
 				orMeta = clearRoundPerf(orMeta)
+				checkpointNow()
 			case "retry":
 				// The failed attempt's partial output is replayed by the
 				// next attempt; drop it so nothing shows twice.
@@ -219,7 +235,7 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 				thinking = streamedThinking
 			}
 		}
-		return turnDoneMsg{prompt: trimmed, thinking: thinking, answer: answer, tools: tools, steers: steers, usage: usage, err: err, history: h, model: cfg.Model, effort: cfg.Thinking, plan: cfg.Plan, orMeta: orMeta, turnCost: turnCost, hasTurnCost: hasTurnCost}
+		return turnDoneMsg{turnID: turnID, prompt: trimmed, thinking: thinking, answer: answer, tools: tools, steers: steers, usage: usage, err: err, history: h, model: cfg.Model, effort: cfg.Thinking, plan: cfg.Plan, orMeta: orMeta, turnCost: turnCost, hasTurnCost: hasTurnCost}
 	}
 }
 
@@ -789,7 +805,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case turnDoneMsg:
 		turn := Turn{
-			At: msg.promptAt(), Prompt: msg.prompt, Thinking: msg.thinking, Reply: msg.answer, Tools: msg.tools, Steers: msg.steers,
+			ID: msg.turnID, At: msg.promptAt(), Prompt: msg.prompt, Thinking: msg.thinking, Reply: msg.answer, Tools: msg.tools, Steers: msg.steers,
 			Usage: Usage{Prompt: msg.usage.PromptTokens, Completion: msg.usage.CompletionTokens, Total: msg.usage.TotalTokens},
 			Model: msg.model, Effort: msg.effort, Plan: msg.plan, History: msg.history,
 			ORMeta: msg.orMeta,

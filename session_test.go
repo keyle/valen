@@ -204,6 +204,92 @@ func TestSessionsPruneToMax(t *testing.T) {
 	}
 }
 
+func TestSessionCheckpointDedup(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	s, err := newSession(Config{SessionID: "ses-checkpoint-dedup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: "system"},
+		{Role: openai.ChatMessageRoleUser, Content: "work"},
+	}
+	id := newTurnID()
+	if err := s.checkpoint(Turn{ID: id, At: time.Now(), Prompt: "work", History: h, Model: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Turns) != 0 || s.TotalUsage.Total != 0 {
+		t.Fatal("checkpoint must not touch memory or usage")
+	}
+	turns, err := loadSession(s.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 1 || turns[0].Status != turnStatusRunning || turns[0].Prompt != "work" {
+		t.Fatalf("starter checkpoint not visible: %+v", turns)
+	}
+	// A later checkpoint for the same turn replaces the starter on load.
+	h2 := append(append([]openai.ChatCompletionMessage(nil), h...), openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: "c1", Content: "out"})
+	if err := s.checkpoint(Turn{ID: id, At: time.Now(), Prompt: "work", Reply: "part", Tools: []ToolRecord{{ID: "c1", Name: "read", Output: "out"}}, History: h2}); err != nil {
+		t.Fatal(err)
+	}
+	// Final save with the same ID wins and counts usage once.
+	if err := s.append(Turn{ID: id, Prompt: "work", Reply: "done", Tools: []ToolRecord{{ID: "c1", Name: "read", Output: "out"}}, History: h2, Usage: Usage{Prompt: 2, Completion: 3, Total: 5}}); err != nil {
+		t.Fatal(err)
+	}
+	turns, err = loadSession(s.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 1 || turns[0].Status != turnStatusDone || turns[0].Reply != "done" || s.TotalUsage.Total != 5 {
+		t.Fatalf("dedup mismatch: %+v usage=%+v", turns, s.TotalUsage)
+	}
+	if got := historyFromTurns(Config{Model: "m"}, turns); len(got) == 0 || got[len(got)-1].Role != openai.ChatMessageRoleTool {
+		t.Fatalf("resume history lost checkpoint: %+v", got)
+	}
+}
+
+func TestSessionInterruptedCheckpointResumes(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	s, err := newSession(Config{SessionID: "ses-interrupted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "keep me"}}
+	if err := s.checkpoint(Turn{ID: newTurnID(), Prompt: "keep me", History: h}); err != nil {
+		t.Fatal(err)
+	}
+	turns, err := loadSession(s.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 1 || turns[0].Status != turnStatusRunning {
+		t.Fatalf("interrupted turn lost: %+v", turns)
+	}
+	if got := historyFromTurns(Config{Model: "m"}, turns); len(got) == 0 || got[len(got)-1].Content != "keep me" {
+		t.Fatalf("interrupted history not resumable: %+v", got)
+	}
+}
+
+func TestSessionLegacyTurnsWithoutIDKept(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	s, err := newSession(Config{SessionID: "ses-legacy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := "{\"at\":\"2026-01-01T00:00:00Z\",\"prompt\":\"a\",\"reply\":\"1\",\"usage\":{\"prompt\":0,\"completion\":0,\"total\":0}}\n{\"at\":\"2026-01-01T00:00:01Z\",\"prompt\":\"b\",\"reply\":\"2\",\"usage\":{\"prompt\":0,\"completion\":0,\"total\":0}}\n"
+	if err := os.WriteFile(s.Path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	turns, err := loadSession(s.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 2 || turns[0].Reply != "1" || turns[1].Reply != "2" {
+		t.Fatalf("legacy turns merged: %+v", turns)
+	}
+}
+
 func TestSavedSessionsDefaultsTo250(t *testing.T) {
 	cfg, err := loadConfig(writeConfig(t, "model = \"kimi-k3\"\n"))
 	if err != nil {

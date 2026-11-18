@@ -357,6 +357,11 @@ id; `/clear` reseeds history in place (log file kept, never deleted).
 Disk keeps every appended turn and checkpoint; memory retains only the latest
 checkpoint. Compaction does not rewrite prior records; resume preserves the
 compacted continuation rather than restoring all old output to the wire.
+A turn is also written as a `running` starter record before the first
+request and again at each round boundary (same turn id, history and tools
+so far, file only), so a quit or kill mid-turn leaves a resumable record;
+`loadSession` keeps only the newest copy per id, and the final `done`
+append replaces it. Queued prompts and undelivered steers stay memory-only.
 Failures/cancellations also checkpoint completed work. Native Messages
 signatures, Responses encrypted reasoning and Chat's signed
 `reasoning_details`/`thought_signature` remain active-loop-only, not durable

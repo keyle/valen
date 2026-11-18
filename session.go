@@ -40,8 +40,21 @@ type Steer struct {
 	Plan bool   `json:"plan,omitempty"`
 }
 
+const (
+	turnStatusRunning = "running"
+	turnStatusDone    = "done"
+)
+
+// newTurnID mints a per-turn id so a turn's starter and round checkpoints
+// share one id and loadSession can keep only the newest copy.
+func newTurnID() string {
+	return fmt.Sprintf("turn-%d", time.Now().UnixNano())
+}
+
 // Turn is one user→assistant exchange, including tool work and any failure.
 type Turn struct {
+	ID       string                         `json:"id,omitempty"`
+	Status   string                         `json:"status,omitempty"`
 	At       time.Time                      `json:"at"`
 	Prompt   string                         `json:"prompt"`
 	Thinking string                         `json:"thinking,omitempty"`
@@ -253,6 +266,12 @@ func (s *Session) nameSession(prompt string) {
 }
 
 func (s *Session) append(t Turn) error {
+	if t.ID == "" {
+		t.ID = newTurnID()
+	}
+	if t.Status == "" {
+		t.Status = turnStatusDone
+	}
 	b, err := json.Marshal(t)
 	if err != nil {
 		return err
@@ -273,6 +292,28 @@ func (s *Session) append(t Turn) error {
 	s.TotalUsage.Prompt += t.Usage.Prompt
 	s.TotalUsage.Completion += t.Usage.Completion
 	s.TotalUsage.Total += t.Usage.Total
+	return s.writeLine(b)
+}
+
+// checkpoint writes one in-progress copy of a turn to disk only: no memory,
+// no usage. The final append with the same ID replaces it on load, so a
+// kill mid-turn still leaves the prompt and finished tool work behind.
+func (s *Session) checkpoint(t Turn) error {
+	if s == nil {
+		return nil
+	}
+	if t.ID == "" {
+		t.ID = newTurnID()
+	}
+	t.Status = turnStatusRunning
+	b, err := json.Marshal(t)
+	if err != nil {
+		return err
+	}
+	return s.writeLine(b)
+}
+
+func (s *Session) writeLine(b []byte) error {
 	// A brand-new session file adds one to the folder's count, so prune
 	// before creating it and keep the configured budget including it. Blank
 	// /new sessions never touch disk and so never prune.
@@ -298,26 +339,44 @@ func loadSession(path string) ([]Turn, error) {
 		return nil, err
 	}
 	defer f.Close()
-	var turns []Turn
 	// A bounded continuation checkpoint can exceed Scanner's old 1 MiB line
 	// limit. Decode one JSONL record at a time without imposing a smaller cap.
 	dec := json.NewDecoder(f)
-	checkpoint := -1
+	var raw []Turn
 	for {
 		var t Turn
 		if err := dec.Decode(&t); err == io.EOF {
-			return turns, nil
+			break
 		} else if err != nil {
 			return nil, err
 		}
-		if len(t.History) > 0 {
-			if checkpoint >= 0 {
-				turns[checkpoint].History = nil
+		raw = append(raw, t)
+	}
+	// A turn is written once per checkpoint under one ID; keep only the
+	// newest copy, at its first position so turn order is unchanged. Turns
+	// saved before IDs existed have no ID and are all kept.
+	turns := make([]Turn, 0, len(raw))
+	byID := make(map[string]int)
+	for _, t := range raw {
+		if t.ID != "" {
+			if i, ok := byID[t.ID]; ok {
+				turns[i] = t
+				continue
 			}
-			checkpoint = len(turns)
+			byID[t.ID] = len(turns)
 		}
 		turns = append(turns, t)
 	}
+	checkpoint := -1
+	for i := range turns {
+		if len(turns[i].History) > 0 {
+			if checkpoint >= 0 {
+				turns[checkpoint].History = nil
+			}
+			checkpoint = i
+		}
+	}
+	return turns, nil
 }
 
 // historyFromTurns rebuilds the wire history for a resumed session: the newest

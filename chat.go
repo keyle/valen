@@ -956,6 +956,24 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 	var orMeta *ORMeta
 	var turnCost float64
 	var hasTurnCost bool
+	var liveText, liveThinking string
+	var roundText, roundThinking string
+	liveThinkIdx := 0
+	turnID := newTurnID()
+	checkpointNow := func() {
+		if session == nil {
+			return
+		}
+		_ = session.checkpoint(Turn{
+			ID: turnID, At: started, Prompt: displayPrompt, Thinking: liveThinking, Reply: liveText, Tools: tools,
+			Model: cfg.Model, Effort: cfg.Thinking, Plan: cfg.Plan, History: history, ORMeta: orMeta,
+			DurMs: time.Since(started).Milliseconds(),
+		})
+	}
+	// The session and prompt are durable before the first request, so a
+	// kill mid-turn still leaves a resumable record behind. A save failure
+	// must never cost the answer.
+	checkpointNow()
 	vt := newHeadlessVerbose(stderr, opts.verbose)
 	var enc *json.Encoder
 	var streamErr error
@@ -977,8 +995,18 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 			}
 		}
 		switch ev.Kind {
-		case "round_start", "retry":
+		case "round_start":
 			orMeta = clearRoundPerf(orMeta)
+			liveText, liveThinking = roundBreak(liveText), roundBreak(liveThinking)
+			roundText, roundThinking = liveText, liveThinking
+			checkpointNow()
+		case "retry":
+			liveText, liveThinking = roundText, roundThinking
+			orMeta = clearRoundPerf(orMeta)
+		case "text_delta":
+			liveText = appendStreamText(liveText, ev.Text)
+		case "thinking_delta":
+			liveThinking, liveThinkIdx = appendThinkingDelta(liveThinking, ev.Text, ev.Index, liveThinkIdx)
 		case "tool_start":
 			tools = append(tools, ToolRecord{ID: ev.ID, Name: ev.Text, Args: ev.Args})
 		case "tool_result":
@@ -1005,7 +1033,7 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 	vt.fallbackThinking(thinking)
 	vt.closeLine()
 	turn := Turn{
-		At: started, Prompt: displayPrompt, Thinking: thinking, Reply: answer, Tools: tools,
+		ID: turnID, At: started, Prompt: displayPrompt, Thinking: thinking, Reply: answer, Tools: tools,
 		Usage: Usage{Prompt: usage.PromptTokens, Completion: usage.CompletionTokens, Total: usage.TotalTokens},
 		Model: cfg.Model, Effort: cfg.Thinking, Plan: cfg.Plan, History: history, ORMeta: orMeta,
 		DurMs: time.Since(started).Milliseconds(),
