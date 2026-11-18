@@ -16,7 +16,10 @@ const (
 // splitThinking extracts think-tag blocks so the UI can render them collapsed
 // instead of inline with the answer. A closing tag with no opening one marks
 // implicit reasoning: some models stream their analysis at the start of
-// content, then the closing tag, then the answer.
+// content, then the closing tag, then the answer. Tags inside markdown code
+// (inline spans and fenced blocks) are literal mentions, not reasoning: an
+// answer discussing think tags writes them in backticks, and treating those
+// as blocks would drop everything after the first mention.
 func splitThinking(content string) (thinking, answer string) {
 	content = strings.ReplaceAll(content, thinkOpenI, thinkOpen)
 	content = strings.ReplaceAll(content, thinkCloseI, thinkClose)
@@ -24,21 +27,34 @@ func splitThinking(content string) (thinking, answer string) {
 	var b strings.Builder
 	rest := content
 	for {
-		i := strings.Index(rest, thinkOpen)
-		if i < 0 {
-			if j := strings.Index(rest, thinkClose); j >= 0 {
-				if pre := strings.TrimSpace(rest[:j]); pre != "" {
-					thoughts = append(thoughts, pre)
-				}
-				b.WriteString(rest[j+len(thinkClose):])
-			} else {
-				b.WriteString(rest)
+		i, tag, ok := indexThinkTag(rest)
+		if !ok {
+			b.WriteString(rest)
+			break
+		}
+		if tag == thinkClose {
+			if pre := strings.TrimSpace(rest[:i]); pre != "" {
+				thoughts = append(thoughts, pre)
 			}
+			b.WriteString(rest[i+len(thinkClose):])
 			break
 		}
 		b.WriteString(rest[:i])
 		rest = rest[i+len(thinkOpen):]
-		j := strings.Index(rest, thinkClose)
+		// Only a closing tag ends the block: skip any nested opening
+		// mention inside the reasoning and keep looking for the close.
+		j := -1
+		for pos := 0; pos < len(rest); {
+			k, tag, ok := indexThinkTag(rest[pos:])
+			if !ok {
+				break
+			}
+			if tag == thinkClose {
+				j = pos + k
+				break
+			}
+			pos += k + len(thinkOpen)
+		}
 		if j < 0 {
 			thoughts = append(thoughts, rest)
 			break
@@ -47,6 +63,48 @@ func splitThinking(content string) (thinking, answer string) {
 		rest = rest[j+len(thinkClose):]
 	}
 	return strings.TrimSpace(strings.Join(thoughts, "\n")), strings.TrimSpace(b.String())
+}
+
+// indexThinkTag finds the first think open or close tag in s that lies
+// outside markdown code, returning its offset and which tag it is. Inline
+// code (a run of one or two backticks) ends at a matching run or a blank
+// line; a fenced block (three or more backticks) ends at the next fence.
+func indexThinkTag(s string) (int, string, bool) {
+	inInline, inlineRun := false, 0
+	inFence := false
+	for i := 0; i < len(s); {
+		if inInline && i+1 < len(s) && s[i] == '\n' && s[i+1] == '\n' {
+			inInline, inlineRun = false, 0
+		}
+		if s[i] == '`' {
+			run := 0
+			for i+run < len(s) && s[i+run] == '`' {
+				run++
+			}
+			switch {
+			case run >= 3:
+				inFence = !inFence
+				inInline, inlineRun = false, 0
+			case inFence:
+			case inInline && run == inlineRun:
+				inInline, inlineRun = false, 0
+			case !inInline:
+				inInline, inlineRun = true, run
+			}
+			i += run
+			continue
+		}
+		if !inInline && !inFence {
+			if strings.HasPrefix(s[i:], thinkOpen) {
+				return i, thinkOpen, true
+			}
+			if strings.HasPrefix(s[i:], thinkClose) {
+				return i, thinkClose, true
+			}
+		}
+		i++
+	}
+	return 0, "", false
 }
 
 // hasThinkTag reports whether content may carry a reasoning block, including

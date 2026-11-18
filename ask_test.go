@@ -541,3 +541,44 @@ func TestAskThinkingHighlightsAboveQuestion(t *testing.T) {
 		t.Fatalf("empty thinking must stay bare: %q", m2.ask.thinking)
 	}
 }
+
+// TestAskVisibleTextShowsAboveQuestion: the preamble the model streamed as
+// visible text before asking ("Let me find … I found …") lives in
+// pendingText, not pendingThinking, so a reasoning-only snapshot loses it.
+// It must show, in full, above the question.
+func TestAskVisibleTextShowsAboveQuestion(t *testing.T) {
+	m := newTUIModel(Config{Model: "m"}, nil, nil, nil)
+	m.pendingText = "Let me find the bookings grid and its current search to plan the changes.\n\nI found the grid — it is bookings_dialog.dart. Search currently just hides non-matches.\n\nAnswers noted: dim non-matches, auto-scroll to the first match. Implementing now."
+	_, _ = m.Update(questionMsg{qs: askFixtureQuestions(), reply: make(chan askReply, 1)})
+	if m.ask.thinking != m.pendingText {
+		t.Fatalf("thinking=%q", m.ask.thinking)
+	}
+	got := ansi.Strip(m.renderAsk())
+	for _, want := range []string{"Let me find the bookings grid", "I found the grid", "Answers noted: dim non-matches"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("visible text lost (%q):\n%s", want, got)
+		}
+	}
+	if ti, qi := strings.Index(got, "Let me find"), strings.Index(got, "Question 1 of 2"); ti < 0 || qi < 0 || ti > qi {
+		t.Fatalf("visible text must sit above the question:\n%s", got)
+	}
+	// Reasoning and visible text combine: reasoning first (condensed), then
+	// the full preamble.
+	m3 := newTUIModel(Config{Model: "m"}, nil, nil, nil)
+	m3.pendingThinking = "stale reasoning\n\nthe choice follows from X"
+	m3.pendingText = "Let me find the grid.\n\nAnswers noted."
+	_, _ = m3.Update(questionMsg{qs: askFixtureQuestions(), reply: make(chan askReply, 1)})
+	want := "the choice follows from X\n\nLet me find the grid.\n\nAnswers noted."
+	if m3.ask.thinking != want {
+		t.Fatalf("combined=%q want=%q", m3.ask.thinking, want)
+	}
+	// Think tags inside the visible text split the same way as the chat:
+	// tag reasoning condenses, the answer after the tag shows in full.
+	m4 := newTUIModel(Config{Model: "m"}, nil, nil, nil)
+	m4.pendingText = "<think>stale tag reasoning\n\ntag reasoning here</think>Let me find the grid.\n\nAnswers noted."
+	_, _ = m4.Update(questionMsg{qs: askFixtureQuestions(), reply: make(chan askReply, 1)})
+	want = "tag reasoning here\n\nLet me find the grid.\n\nAnswers noted."
+	if m4.ask.thinking != want {
+		t.Fatalf("tag combined=%q want=%q", m4.ask.thinking, want)
+	}
+}

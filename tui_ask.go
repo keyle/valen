@@ -263,6 +263,51 @@ func (a *askState) insertOwnRune(r rune) {
 	a.ownPos = end + 1
 }
 
+// askThinkingSnapshot builds the overall thoughts shown above the questions:
+// the model's reasoning (condensed to its last paragraph, earlier reasoning
+// is stale context) followed by the visible text streamed so far this turn.
+// The visible text is the preamble the user already saw in the chat — for
+// many models that preamble is where the "thinking so far" actually lives,
+// so dropping it (as a reasoning-only snapshot does) loses the context the
+// question follows. It keeps all its paragraphs, capped to its tail.
+func askThinkingSnapshot(pendingThinking, pendingText string) string {
+	tagThink, answer := splitThinking(pendingText)
+	reasoning := pendingThinking
+	if tagThink != "" {
+		if strings.TrimSpace(reasoning) != "" {
+			reasoning += "\n\n"
+		}
+		reasoning += tagThink
+	}
+	var parts []string
+	if r := condenseThinking(reasoning); r != "" {
+		parts = append(parts, r)
+	}
+	if a := condenseAskText(answer); a != "" {
+		parts = append(parts, a)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// condenseAskText keeps the visible text above the questions as streamed,
+// capped to its tail like the live transcript so a long turn cannot flood
+// the overlay.
+func condenseAskText(s string) string {
+	out := strings.TrimSpace(s)
+	if out == "" {
+		return ""
+	}
+	const maxRunes = 3000
+	if r := []rune(out); len(r) > maxRunes {
+		tail := string(r[len(r)-maxRunes:])
+		if i := strings.IndexAny(tail, " \n"); i >= 0 {
+			tail = strings.TrimSpace(tail[i+1:])
+		}
+		out = "… " + tail
+	}
+	return out
+}
+
 // condenseThinking keeps the last paragraph of the model's reasoning as the
 // highlight above the questions: later reasoning explains the question,
 // earlier paragraphs are stale context. Whitespace collapses to one line

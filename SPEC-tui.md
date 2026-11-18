@@ -298,9 +298,10 @@ Rules:
 - `AskUserQuestion` opens a question overlay while the turn stays busy:
   ↑↓/j/k moves, Enter selects, Space toggles multi-select, type-your-own
   accepts free text in a single-line box with cursor (←/→, Home/End,
-  Backspace/Delete), the options staying visible while typing. The last
-  paragraph of the model's thinking is condensed above the question in
-  bright white (snapshot taken when the batch arrives). A final
+  Backspace/Delete), the options staying visible while typing. The overall
+  thoughts so far — the last paragraph of the model's reasoning plus the
+  visible text streamed this turn — show above the question in bright white
+  (snapshot taken when the batch arrives). A final
   confirmation submits answers; Esc there revises from the first question
   for model batches (access batches keep Esc-cancel so the downgrade path
   stands), and `n` cancels either. Esc / Ctrl+C / Ctrl+D at the question
@@ -420,7 +421,10 @@ soon as the UI comes up; the positional arg is the prompt, never a workdir.
 
 ## Thinking / reasoning display
 
-- `<think>...</think>` parsed into `Turn.Thinking` via `splitThinking`.
+- `<think>...</think>` parsed into `Turn.Thinking` via `splitThinking`;
+  tags inside markdown code (inline spans, fenced blocks) are literal
+  mentions, not reasoning, so an answer discussing think tags is not
+  cropped at the first mention.
 - Shown by default, dim + indented. Ctrl+O / `/think` toggles the display.
 - `/effort [level]` (`/thinking` alias) sets the reasoning level sent to the
   provider for the current model — not the display. Levels come from

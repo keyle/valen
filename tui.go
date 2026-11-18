@@ -194,7 +194,7 @@ type askState struct {
 	picks    []map[int]bool // per-question selected option indexes (multi-select)
 	ownText  []string       // per-question free text when "type your own" chosen
 	reply    chan askReply
-	thinking string // condensed thinking highlights snapshotted when asked
+	thinking string // overall thoughts (reasoning + visible text) snapshotted when asked
 	// rowTop/rowBottom are the selected option's line span in the last
 	// render, so key handling can scroll it into view on short terminals.
 	rowTop, rowBottom int
