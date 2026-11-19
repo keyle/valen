@@ -81,11 +81,14 @@ type Turn struct {
 }
 
 // SessionMeta is the sidecar alongside the append-only JSONL: title from the
-// first prompt plus the model/thinking level in use at the time.
+// first prompt plus the model/thinking level in use at the time. Turns is
+// the deduped turn count, kept here so the sessions list never has to parse
+// the JSONL itself.
 type SessionMeta struct {
 	Title  string `json:"title,omitempty"`
 	Model  string `json:"model,omitempty"`
 	Effort string `json:"effort,omitempty"`
+	Turns  int    `json:"turns,omitempty"`
 }
 
 // Session accumulates turns and appends them to a JSONL log on disk.
@@ -247,7 +250,7 @@ func (s *Session) ensureMeta(model, effort string) {
 	if s.Effort == "" {
 		s.Effort = effort
 	}
-	_ = saveSessionMeta(metaPath(s.Path), SessionMeta{Title: s.Title, Model: s.Model, Effort: s.Effort})
+	_ = saveSessionMeta(metaPath(s.Path), SessionMeta{Title: s.Title, Model: s.Model, Effort: s.Effort, Turns: len(s.Turns)})
 }
 
 // nameSession titles an unnamed session from its first submitted prompt so the
@@ -262,7 +265,7 @@ func (s *Session) nameSession(prompt string) {
 		return
 	}
 	s.Title = title
-	_ = saveSessionMeta(metaPath(s.Path), SessionMeta{Title: s.Title, Model: s.Model, Effort: s.Effort})
+	_ = saveSessionMeta(metaPath(s.Path), SessionMeta{Title: s.Title, Model: s.Model, Effort: s.Effort, Turns: len(s.Turns)})
 }
 
 func (s *Session) append(t Turn) error {
@@ -377,6 +380,63 @@ func loadSession(path string) ([]Turn, error) {
 		}
 	}
 	return turns, nil
+}
+
+// sessionSummary is the listing-only view of a session: the first prompt,
+// model/effort and deduped turn count. It decodes only those fields, so
+// listing stays cheap even when the JSONL carries large tool output and
+// history snapshots.
+type sessionSummary struct {
+	prompt string
+	model  string
+	effort string
+	turns  int
+}
+
+// scanSessionSummary reads the deduped turn count and first turn's prompt,
+// model and effort from a JSONL without unmarshalling full turns. The
+// newest checkpoint of the first turn wins, mirroring loadSession.
+func scanSessionSummary(path string) (sessionSummary, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return sessionSummary{}, err
+	}
+	defer f.Close()
+	dec := json.NewDecoder(f)
+	var summary sessionSummary
+	seen := map[string]bool{}
+	firstID := ""
+	for {
+		var rec struct {
+			ID     string `json:"id,omitempty"`
+			Prompt string `json:"prompt"`
+			Model  string `json:"model,omitempty"`
+			Effort string `json:"effort,omitempty"`
+		}
+		if err := dec.Decode(&rec); err == io.EOF {
+			break
+		} else if err != nil {
+			return sessionSummary{}, err
+		}
+		if rec.ID == "" {
+			summary.turns++
+			if summary.turns == 1 {
+				summary.prompt, summary.model, summary.effort = rec.Prompt, rec.Model, rec.Effort
+			}
+			continue
+		}
+		if !seen[rec.ID] {
+			seen[rec.ID] = true
+			summary.turns++
+			if summary.turns == 1 {
+				firstID = rec.ID
+				summary.prompt, summary.model, summary.effort = rec.Prompt, rec.Model, rec.Effort
+			}
+		} else if rec.ID == firstID {
+			summary.prompt, summary.model, summary.effort = rec.Prompt, rec.Model, rec.Effort
+		}
+	}
+	return summary, nil
 }
 
 // historyFromTurns rebuilds the wire history for a resumed session: the newest

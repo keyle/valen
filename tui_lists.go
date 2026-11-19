@@ -158,9 +158,10 @@ func (m *tuiModel) filteredSessionItems() []sessionItem {
 	return out
 }
 
-// loadSessionItems rescans the project's session folder, reading each JSONL
-// for its title and turn count. It runs when the view opens and after deletes,
-// never on cursor moves.
+// loadSessionItems rescans the project's session folder from the metadata
+// sidecars alone: title, model, effort and turn count are kept there so
+// opening the sessions view never parses the JSONLs. It runs when the view
+// opens and after deletes, never on cursor moves.
 func (m *tuiModel) loadSessionItems() []sessionItem {
 	paths, _ := listSessions()
 	items := []sessionItem{}
@@ -170,25 +171,29 @@ func (m *tuiModel) loadSessionItems() []sessionItem {
 			continue
 		}
 		it := sessionItem{path: p, when: info.ModTime()}
-		if meta, err := loadSessionMeta(metaPath(p)); err == nil {
+		meta, metaErr := loadSessionMeta(metaPath(p))
+		if metaErr == nil {
 			it.title, it.model, it.effort = meta.Title, meta.Model, meta.Effort
+			it.turns = meta.Turns
 		}
-		if turns, err := loadSession(p); err == nil && len(turns) > 0 {
-			it.turns = len(turns)
-			if it.title == "" {
-				it.title = sessionTitle(turns[0].Prompt)
-			}
-			// Backfill titles on first listing so old JSONLs show names.
-			if it.title != "" {
-				if meta, err := loadSessionMeta(metaPath(p)); err != nil || meta.Title == "" {
+		// Legacy JSONLs predate the sidecar (or the turn count in it): scan
+		// for the missing fields only, then write them back so later
+		// listings read metadata alone.
+		if metaErr != nil || it.title == "" || it.turns == 0 {
+			if summary, err := scanSessionSummary(p); err == nil && summary.turns > 0 {
+				it.turns = summary.turns
+				if it.title == "" {
+					it.title = sessionTitle(summary.prompt)
+				}
+				if it.title != "" && (metaErr != nil || meta.Title == "" || meta.Turns == 0) {
 					model, effort := it.model, it.effort
 					if model == "" {
-						model = turns[0].Model
+						model = summary.model
 					}
 					if effort == "" {
-						effort = turns[0].Effort
+						effort = summary.effort
 					}
-					_ = saveSessionMeta(metaPath(p), SessionMeta{Title: it.title, Model: model, Effort: effort})
+					_ = saveSessionMeta(metaPath(p), SessionMeta{Title: it.title, Model: model, Effort: effort, Turns: it.turns})
 					it.model, it.effort = model, effort
 				}
 			}
