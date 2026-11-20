@@ -50,7 +50,7 @@ func shouldRetryRound(ctx context.Context, err error) bool {
 	if errors.Is(err, context.Canceled) {
 		return false
 	}
-	if strings.Contains(strings.ToLower(err.Error()), "is not set") {
+	if strings.Contains(strings.ToLower(err.Error()), "is not set") || strings.Contains(err.Error(), "local model") {
 		return false
 	}
 	// Context overflow is recovered by compaction, and content filters

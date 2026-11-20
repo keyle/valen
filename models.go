@@ -45,15 +45,18 @@ var fallbackGoModels = []string{
 
 // Providers. Go models are stored bare ("glm-5.3-flash"); other providers
 // carry a prefix ("openrouter/moonshotai/kimi-k3", "zen/claude-haiku-5-5",
-// "openai/gpt-6") so the stored model ID is self-describing: requests,
-// thinking levels and the picker all derive the provider from it, with no
-// extra state to keep in sync. Bare IDs always mean Go, so existing configs
-// load unchanged.
+// "openai/gpt-6", "local/<name>") so the stored model ID is self-describing:
+// requests, thinking levels and the picker all derive the provider from it,
+// with no extra state to keep in sync. Bare IDs always mean Go, so existing
+// configs load unchanged. Local models ("local/lfm3-1.7b") are served by a
+// local OpenAI-compatible server (mlx-vlm by default) described in
+// ~/.config/valen/local.toml; see local.go.
 const (
 	ProviderGo         = "go"
 	ProviderOpenRouter = "openrouter"
 	ProviderZen        = "zen"
 	ProviderOpenAI     = "openai"
+	ProviderLocal      = "local"
 )
 
 // zenBaseURL is OpenCode Zen's gateway (same OpenCode key as Go). A var so
@@ -202,6 +205,9 @@ func modelProvider(id string) string {
 	if strings.HasPrefix(n, ProviderOpenAI+"/") {
 		return ProviderOpenAI
 	}
+	if strings.HasPrefix(n, ProviderLocal+"/") {
+		return ProviderLocal
+	}
 	return ProviderGo
 }
 
@@ -234,6 +240,8 @@ func wireModelID(id string, routing ...string) string {
 		base = base[len(ProviderZen)+1:]
 	case ProviderOpenAI:
 		base = base[len(ProviderOpenAI)+1:]
+	case ProviderLocal:
+		base = base[len(ProviderLocal)+1:]
 	}
 	return base
 }
@@ -271,6 +279,8 @@ func modelTransport(id string) string {
 		return zenTransport(wireModelID(id))
 	case ProviderOpenAI:
 		return "responses"
+	case ProviderLocal:
+		return "chat"
 	}
 	l := strings.ToLower(strings.TrimSpace(id))
 	switch {
@@ -334,7 +344,17 @@ var knownContextWindows = []struct {
 // modelContextWindow reports the input-token window for a stored model ID,
 // matching on the family key (provider and vendor segments stripped). 0
 // means unknown — contextBudget falls back to defaultMaxContextTokens.
+// Local models take their window from local.toml when set.
 func modelContextWindow(id string) int {
+	if modelProvider(id) == ProviderLocal {
+		if m, ok := resolveLocalModel(id); ok && m.MaxContextTokens > 0 {
+			return m.MaxContextTokens
+		}
+		if m, ok := localModelForID(id); ok && m.MaxContextTokens > 0 {
+			return m.MaxContextTokens
+		}
+		return 0
+	}
 	l := modelBaseID(id)
 	for _, w := range knownContextWindows {
 		if strings.HasPrefix(l, w.prefix) {
@@ -347,7 +367,14 @@ func modelContextWindow(id string) int {
 // thinkingFamily groups models by how their thinking level is expressed
 // outbound: "effort" models take reasoning_effort, "toggle" models take
 // enable_thinking in chat template kwargs, "" means no thinking param.
+// Local models follow local.toml (toggle for LFM-style reasoning).
 func thinkingFamily(model string) string {
+	if modelProvider(model) == ProviderLocal {
+		if m, ok := resolveLocalModel(model); ok {
+			return localThinkingFamily(m, model)
+		}
+		return "toggle"
+	}
 	l := modelBaseID(model)
 	if levels, ok := lookupKnownLevels(l); ok {
 		if len(levels) == 0 {
@@ -460,7 +487,14 @@ func lookupKnownLevels(l string) ([]string, bool) {
 // Empty thinking (provider default) is always allowed on top of these.
 // Order is low to high for ctrl+t cycling. Disk-cached probe results win,
 // then the fixed well-known table, then the full standard vocabulary.
+// Local models read levels from local.toml (toggle none/high by default).
 func AvailableThinkingLevels(model string) []string {
+	if modelProvider(model) == ProviderLocal {
+		if m, ok := resolveLocalModel(model); ok {
+			return localThinkingLevels(m)
+		}
+		return []string{"none", "high"}
+	}
 	if lv, ok := cachedThinkingLevels(model); ok {
 		return append([]string(nil), lv...)
 	}
@@ -541,9 +575,33 @@ func cycleRouting(r string) string {
 
 // applyThinkingToRequest stamps the thinking level onto an outbound request.
 // No-op when level is empty (provider default), mirroring the temperature
-// pointer semantics: unset omits the field.
+// pointer semantics: unset omits the field. Local models are the exception:
+// empty means the local.toml default (thinking on), so an explicit lenient
+// default is stamped to keep programming runs reasoning.
 func applyThinkingToRequest(req *openai.ChatCompletionRequest, model, level string) {
 	level = strings.ToLower(strings.TrimSpace(level))
+	if modelProvider(model) == ProviderLocal {
+		if thinkingFamily(model) == "" {
+			return
+		}
+		if thinkingFamily(model) == "toggle" {
+			if req.ChatTemplateKwargs == nil {
+				req.ChatTemplateKwargs = map[string]any{}
+			}
+			if level == "" {
+				m, _ := resolveLocalModel(model)
+				req.ChatTemplateKwargs["enable_thinking"] = localEnableThinking(m, "")
+			} else {
+				req.ChatTemplateKwargs["enable_thinking"] = level != "none"
+			}
+			return
+		}
+		if level == "" {
+			return
+		}
+		req.ReasoningEffort = level
+		return
+	}
 	if level == "" {
 		return
 	}

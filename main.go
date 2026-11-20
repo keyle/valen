@@ -296,6 +296,7 @@ func start() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), interruptSignals()...)
 	defer stop()
+	defer stopLocalServers()
 
 	warn := func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) }
 	set := toolSet{noQuestion: *noQuestionFlag, noTask: *noTaskFlag, noTodo: *noTodoFlag}
@@ -482,10 +483,10 @@ func newHTTPClient(cfg Config) *http.Client {
 var upstreamHTTPClient = &http.Client{Transport: sharedTransport}
 
 // providerHTTPClient picks the client for cfg's provider. Go and Zen keep the
-// Go identity transport; OpenAI and OpenRouter get the sessionless pool.
+// Go identity transport; OpenAI, OpenRouter and local get the sessionless pool.
 func providerHTTPClient(cfg Config, hc *http.Client) *http.Client {
 	switch modelProvider(cfg.Model) {
-	case ProviderOpenAI, ProviderOpenRouter:
+	case ProviderOpenAI, ProviderOpenRouter, ProviderLocal:
 		return upstreamHTTPClient
 	}
 	return hc

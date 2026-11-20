@@ -345,6 +345,12 @@ func validateModelReply(msg openai.ChatCompletionMessage) error {
 }
 
 func outputTokens(cfg Config) int {
+	if modelProvider(cfg.Model) == ProviderLocal {
+		if m, ok := resolveLocalModel(cfg.Model); ok && m.MaxTokens > 0 {
+			return m.MaxTokens
+		}
+		return 4096
+	}
 	if cfg.MaxTokens > 0 {
 		return cfg.MaxTokens
 	}

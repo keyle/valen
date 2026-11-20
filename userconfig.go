@@ -18,6 +18,12 @@ import (
 //go:embed config.toml
 var defaultConfigTOML string
 
+// defaultLocalTOML is the local.toml template shipped in the binary, seeded
+// once beside valen.toml so `local/` models have a discoverable home.
+//
+//go:embed local.toml
+var defaultLocalTOML string
+
 const (
 	userConfigName      = "valen.toml"
 	legacyConfigName    = "config.toml"
@@ -127,6 +133,14 @@ func ensureUserConfig(dir string) (string, error) {
 	if err := seedAccessFile(dir); err != nil {
 		return "", err
 	}
+	localPath := filepath.Join(dir, localConfigName)
+	if _, err := os.Stat(localPath); errors.Is(err, os.ErrNotExist) {
+		if err := os.WriteFile(localPath, []byte(defaultLocalTOML), 0o644); err != nil {
+			return "", err
+		}
+	} else if err != nil {
+		return "", err
+	}
 	return cfgPath, nil
 }
 
@@ -224,15 +238,17 @@ func applyUserState(cfg Config, statePath string) Config {
 
 // validateModelID rejects IDs with an unknown provider prefix. Bare IDs
 // ride Go; "zen/…" rides OpenCode Zen; "openrouter/…" rides OpenRouter;
-// "openai/…" rides the official OpenAI API. Anything else with a slash is
-// almost certainly a pasted OpenRouter ID missing its prefix.
+// "openai/…" rides the official OpenAI API; "local/…" rides a local
+// mlx-vlm/openai-compatible server from local.toml. Anything else with a
+// slash is almost certainly a pasted OpenRouter ID missing its prefix.
 func validateModelID(model string) error {
 	n := normalizeModelID(model)
 	if strings.Contains(model, "/") &&
 		!strings.HasPrefix(n, ProviderOpenRouter+"/") &&
 		!strings.HasPrefix(n, ProviderZen+"/") &&
-		!strings.HasPrefix(n, ProviderOpenAI+"/") {
-		return fmt.Errorf("model %q has an unknown provider prefix (OpenRouter models need %q, Zen models %q, OpenAI models %q)", model, ProviderOpenRouter+"/vendor/model", ProviderZen+"/model", ProviderOpenAI+"/model")
+		!strings.HasPrefix(n, ProviderOpenAI+"/") &&
+		!strings.HasPrefix(n, ProviderLocal+"/") {
+		return fmt.Errorf("model %q has an unknown provider prefix (OpenRouter models need %q, Zen models %q, OpenAI models %q, local models %q)", model, ProviderOpenRouter+"/vendor/model", ProviderZen+"/model", ProviderOpenAI+"/model", ProviderLocal+"/name")
 	}
 	return nil
 }

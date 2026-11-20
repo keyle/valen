@@ -1,7 +1,17 @@
 # valen harness config. See SPEC.md for the full schema.
 # Lives at ~/.config/valen/valen.toml; config-ori.toml beside it is the pristine default.
+# Local models live in ~/.config/valen/local.toml (same dir, seeded once):
+# works like valen.toml but for `local/` models. Each [[models]] entry is
+# one picker ID: local/<name>, with path, backend (mlx-vlm by default), sampling
+# and thinking. Set local_models_dir below to where model folders live, so any
+# subdir with config.json is also discoverable as local/<dirname> without an
+# explicit entry. Thinking is on by default (programming harness): toggle
+# models use none/high, mlx-vlm is spawned with --enable-thinking.
 
 model = "openrouter/anthropic/claude-sonnet-5.5"
+# local_models_dir = "~/Code/models" # where local model folders live; each subdir
+                                  # with config.json appears in /models as local/<dirname>.
+                                  # Explicit [[models]] entries in local.toml override these.
 # thinking = "high"            # optional reasoning level; omit for provider default.
                                # Per-model (/effort picker, ctrl+t cycles low→high, wraps):
                                # muse-spark: minimal, low, medium, high, xhigh.

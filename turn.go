@@ -268,13 +268,15 @@ func effectiveOpenAIKey(cfg Config) string {
 }
 
 // effectiveAPIKey resolves the credential for the model's provider: OpenRouter
-// and OpenAI use their own keys, Go/Zen share the OpenCode key.
+// and OpenAI use their own keys, Go/Zen share the OpenCode key, local needs none.
 func effectiveAPIKey(cfg Config, apiKey string) string {
 	switch modelProvider(cfg.Model) {
 	case ProviderOpenRouter:
 		return effectiveOpenRouterKey(cfg)
 	case ProviderOpenAI:
 		return effectiveOpenAIKey(cfg)
+	case ProviderLocal:
+		return ""
 	default:
 		return effectiveOpenCodeKey(cfg, apiKey)
 	}
@@ -294,6 +296,8 @@ func missingKeyError(cfg Config, apiKey string) error {
 		if effectiveOpenAIKey(cfg) == "" {
 			return fmt.Errorf("%s is not set (required by model %q)", openAIKeyEnv, cfg.Model)
 		}
+	case ProviderLocal:
+		return nil
 	default:
 		if effectiveOpenCodeKey(cfg, apiKey) == "" {
 			return fmt.Errorf("%s is not set (required by model %q)", openCodeKeyEnv, cfg.Model)

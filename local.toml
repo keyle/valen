@@ -1,0 +1,32 @@
+# valen local models — ~/.config/valen/local.toml
+# Local MLX backends, works like valen.toml but for `local/` models.
+# Each [[models]] entry is one picker ID: local/<name>.
+# Set local_models_dir in valen.toml to where model folders live
+# (e.g. "~/Code/models"); each subdir with config.json is also
+# discoverable as local/<dirname> even without an entry here.
+# Explicit entries override path/sampling/thinking for that model.
+# Unset sampling fields are omitted, letting mlx-vlm resolve the model's
+# generation_config.json. Thinking is on by default (programming harness):
+# enable_thinking = true, toggle levels none/high.
+
+[[models]]
+# name = "lfm3-1.7b"
+# path = "~/Code/models/LFM3-1.7B-MLX-4bit"
+# backend = "mlx-vlm"         # or "openai-compatible" (no spawn; set base_url)
+# port = 8080                  # mlx-vlm server port; 0 picks a free port
+# base_url = ""                # openai-compatible only; empty = http://127.0.0.1:<port>/v1
+# enable_thinking = true       # default true
+# thinking_budget = 0          # 0 = server default / no cap
+# max_tokens = 16384           # server default output cap
+# temperature = 1.0            # main-turn sampling; omit for server defaults
+# top_p = 0.95
+# top_k = 20
+# repetition_penalty = 1.0
+# compaction_temperature = 0.1 # summarizer sampling (separate, cooler)
+# compaction_top_p = 0.95
+# compaction_top_k = 50
+# compaction_repetition_penalty = 1.1
+# thinking_family = "toggle"   # toggle (on/off) or effort; LFM = toggle
+# thinking_levels = ["none", "high"]
+# max_context_tokens = 262144
+# extra_args = []              # extra flags appended to mlx_vlm.server

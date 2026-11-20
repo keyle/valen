@@ -81,6 +81,10 @@ func (m *tuiModel) fetchModelsCmd(filter string, refresh bool) tea.Cmd {
 			orPrices = nil
 		}
 		ids = append(ids, orIDs...)
+		// Local models are always listed (keyless, disk-local).
+		if lcfg, lerr := loadLocalConfig(localConfigPath()); lerr == nil {
+			ids = append(ids, localModelIDs(lcfg, cfg)...)
+		}
 		if err == nil {
 			_ = saveModelsCache(cachePath, ids)
 		}

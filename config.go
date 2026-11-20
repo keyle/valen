@@ -101,14 +101,19 @@ type Config struct {
 	// (write/edit/mutating shell blocked, task explore-only) with the plan
 	// overlay appended to the system prompt. The TUI /plan command toggles
 	// the same flag at runtime without persisting it.
-	Plan        bool             `toml:"plan"`
-	Temperature *float32         `toml:"temperature"`
-	Tools       []string         `toml:"tools"`
-	MCPServers  []MCPServer      `toml:"mcp"`
-	Compaction  CompactionConfig `toml:"compaction"`
-	TUI         TUIConfig        `toml:"tui"`
-	Sandbox     SandboxConfig    `toml:"sandbox"`
-	Input       InputConfig      `toml:"input"`
+	Plan        bool     `toml:"plan"`
+	Temperature *float32 `toml:"temperature"`
+	// LocalModelsDir is where local models live on disk (e.g. "~/Code/models").
+	// Each subdir containing config.json is discoverable as local/<dirname>
+	// even without a local.toml entry; explicit [[models]] entries in
+	// ~/.config/valen/local.toml override path/sampling/thinking per model.
+	LocalModelsDir string           `toml:"local_models_dir"`
+	Tools          []string         `toml:"tools"`
+	MCPServers     []MCPServer      `toml:"mcp"`
+	Compaction     CompactionConfig `toml:"compaction"`
+	TUI            TUIConfig        `toml:"tui"`
+	Sandbox        SandboxConfig    `toml:"sandbox"`
+	Input          InputConfig      `toml:"input"`
 	// Attachments caps what one attached file may carry; every key has a
 	// built-in default (see attach.go).
 	Attachments AttachmentConfig `toml:"attachments"`

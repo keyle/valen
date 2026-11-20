@@ -101,6 +101,11 @@ func compactionThinking(cfg Config) string {
 	if validThinkingLevel(model, defaultCompactionThinking) {
 		return defaultCompactionThinking
 	}
+	// Local toggle models (LFM) only offer none/high: summaries keep
+	// reasoning on, matching the harness default.
+	if modelProvider(model) == ProviderLocal && validThinkingLevel(model, "high") {
+		return "high"
+	}
 	return cheapestThinking(model)
 }
 
@@ -141,6 +146,31 @@ func compactionModel(cfg Config) string {
 // exactly like the top-level affinity.
 func compactionRouting(cfg Config) string {
 	return effectiveRouting(compactionModel(cfg), cfg.Compaction.Routing)
+}
+
+// mergeCompactionSampling folds a local model's compaction sampling into
+// extra_body, letting explicit extra_body win.
+func mergeCompactionSampling(extra map[string]any, m LocalModel) map[string]any {
+	out := make(map[string]any, len(extra))
+	for k, v := range extra {
+		out[k] = v
+	}
+	if m.CompactionTopP != nil {
+		if _, ok := out["top_p"]; !ok {
+			out["top_p"] = *m.CompactionTopP
+		}
+	}
+	if m.CompactionTopK != nil {
+		if _, ok := out["top_k"]; !ok {
+			out["top_k"] = *m.CompactionTopK
+		}
+	}
+	if m.CompactionRepetitionPenalty != nil {
+		if _, ok := out["repetition_penalty"]; !ok {
+			out["repetition_penalty"] = *m.CompactionRepetitionPenalty
+		}
+	}
+	return out
 }
 
 // cheapestThinking picks the lowest-cost reasoning level a model accepts so
@@ -409,6 +439,8 @@ func overflowStatusMessage(status int, msg string) bool {
 // summarizeHead runs one cheap-model turn over headText with no tools and
 // returns the summary text. Auto-compaction is off inside so it cannot
 // recurse; thinking is the explicit [compaction] effort (medium default).
+// Local summarizers use their local.toml compaction sampling (cooler than
+// main turns); non-local summarizers nil the temperature as before.
 func summarizeHead(ctx context.Context, cfg Config, client *openai.Client, apiKey string, hc *http.Client, headText, previous string) (string, error) {
 	model := compactionModel(cfg)
 	sumCfg := cfg
@@ -417,6 +449,12 @@ func summarizeHead(ctx context.Context, cfg Config, client *openai.Client, apiKe
 	sumCfg.Thinking = compactionThinking(cfg)
 	sumCfg.MaxRounds = 2
 	sumCfg.Temperature = nil
+	if modelProvider(model) == ProviderLocal {
+		if m, ok := resolveLocalModel(model); ok {
+			sumCfg.Temperature = m.CompactionTemperature
+			sumCfg.ExtraBody = mergeCompactionSampling(cfg.ExtraBody, m)
+		}
+	}
 	sumCfg.Plan = false // the summarizer answers, never plans: no overlay, no gates.
 	f := false
 	sumCfg.Compaction.Auto = &f

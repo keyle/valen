@@ -146,6 +146,12 @@ func maybeLearnThinkingLevels(model, errMsg string) bool {
 // network. It returns an error when the provider ignores the probe (200) or
 // the message carries no level list.
 func probeThinkingLevels(ctx context.Context, cfg Config, apiKey string, hc *http.Client) ([]string, error) {
+	if modelProvider(cfg.Model) == ProviderLocal {
+		if m, ok := resolveLocalModel(cfg.Model); ok {
+			return localThinkingLevels(m), nil
+		}
+		return []string{"none", "high"}, nil
+	}
 	l := normalizeModelID(cfg.Model)
 	if lv, ok := cachedThinkingLevels(l); ok {
 		return lv, nil

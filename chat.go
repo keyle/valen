@@ -29,19 +29,53 @@ var openRouterHTTPClient = &http.Client{Transport: sharedTransport}
 // chatTarget resolves where a chat turn is sent. Go models ride cfg.BaseURL
 // with the Go key and session affinity; OpenRouter models ride OpenRouter's
 // OpenAI-compatible chat endpoint with the OpenRouter key and no Go session
-// header. It returns the endpoint URL, headers, send config and client.
-func chatTarget(cfg Config, apiKey string, hc *http.Client) (string, map[string]string, Config, *http.Client) {
+// header; local models ride the spawned/user-managed mlx-vlm server with no
+// key. It returns the endpoint URL, headers, send config and client.
+func chatTarget(cfg Config, apiKey string, hc *http.Client) (string, map[string]string, Config, *http.Client, error) {
 	switch modelProvider(cfg.Model) {
 	case ProviderOpenRouter:
 		sendCfg := cfg
 		sendCfg.SessionID = ""
-		return openRouterBaseURL + "/chat/completions", openRouterHeaders(cfg.OpenRouterKey), sendCfg, openRouterHTTPClient
+		return openRouterBaseURL + "/chat/completions", openRouterHeaders(cfg.OpenRouterKey), sendCfg, openRouterHTTPClient, nil
 	case ProviderOpenAI:
 		sendCfg := cfg
 		sendCfg.SessionID = ""
-		return chatEndpoint(openAIBaseURL), chatHeaders(cfg.OpenAIKey), sendCfg, upstreamHTTPClient
+		return chatEndpoint(openAIBaseURL), chatHeaders(cfg.OpenAIKey), sendCfg, upstreamHTTPClient, nil
+	case ProviderLocal:
+		sendCfg := cfg
+		sendCfg.SessionID = ""
+		base, err := localChatBase(cfg)
+		if err != nil {
+			dvlog.Logf("local %s: %v", cfg.Model, err)
+			return "", nil, sendCfg, upstreamHTTPClient, err
+		}
+		return chatEndpoint(base), nil, sendCfg, upstreamHTTPClient, nil
 	}
-	return chatEndpoint(providerBaseURL(cfg)), chatHeaders(apiKey), cfg, hc
+	return chatEndpoint(providerBaseURL(cfg)), chatHeaders(apiKey), cfg, hc, nil
+}
+
+// localChatBase resolves a local model's OpenAI base URL, spawning the
+// mlx-vlm server for backend=mlx-vlm entries.
+func localChatBase(cfg Config) (string, error) {
+	m, ok := resolveLocalModel(cfg.Model)
+	if !ok {
+		return "", fmt.Errorf("local model %q not found in local.toml or %s", cfg.Model, localConfigPath())
+	}
+	// Explicit local.toml entries carry their own backend; implicit
+	// local_models_dir entries already resolve via ensureLocalModel.
+	if _, ok := localModelForID(cfg.Model); ok {
+		base, err := localBaseURL(m)
+		if err != nil {
+			return "", err
+		}
+		return base, nil
+	}
+	// Implicit entry: use localBaseURL on the synthesised model.
+	base, err := localBaseURL(m)
+	if err != nil {
+		return "", err
+	}
+	return base, nil
 }
 
 // chatTransportLabel names the failing side for error mapping: OpenRouter
@@ -53,6 +87,8 @@ func chatTransportLabel(cfg Config) string {
 		return "openrouter"
 	case ProviderOpenAI:
 		return "openai"
+	case ProviderLocal:
+		return "local"
 	}
 	return "chat"
 }
@@ -173,13 +209,17 @@ func jsonString(raw json.RawMessage) string {
 // every assistant tool-call message carries reasoning_content, and go-openai
 // omits empty strings, so those get an explicit "". Captured native state
 // (reasoning_details, tool-call extra_content) is reattached by call ID.
-// extra_body keys are merged first, so valen's own fields win. Everything else
-// is sent untouched.
+// extra_body keys are merged first, so valen's own fields win. Local models
+// additionally get top-level enable_thinking/thinking_budget plus the
+// local.toml sampling (top_p/top_k/repetition_penalty, and temperature when
+// valen.toml does not set one) since go-openai does not model those fields.
+// Everything else is sent untouched.
 func chatWireBody(cfg Config, req openai.ChatCompletionRequest, native map[string]chatNative) any {
 	mirror := modelProvider(cfg.Model) == ProviderOpenRouter
 	pad := strings.HasPrefix(modelBaseID(cfg.Model), "deepseek") && strings.ToLower(strings.TrimSpace(cfg.Thinking)) != "none"
 	provider := openRouterProvider(cfg)
-	need := provider != nil || len(cfg.ExtraBody) > 0 || len(native) > 0
+	isLocal := modelProvider(cfg.Model) == ProviderLocal
+	need := provider != nil || len(cfg.ExtraBody) > 0 || len(native) > 0 || isLocal
 	for _, m := range req.Messages {
 		if m.Role == openai.ChatMessageRoleAssistant && ((mirror && m.ReasoningContent != "") || (pad && len(m.ToolCalls) > 0 && m.ReasoningContent == "")) {
 			need = true
@@ -206,6 +246,9 @@ func chatWireBody(cfg Config, req openai.ChatCompletionRequest, native map[strin
 		if pb, err := json.Marshal(provider); err == nil {
 			body["provider"] = pb
 		}
+	}
+	if isLocal {
+		patchLocalWireBody(cfg, body)
 	}
 	if mirror || pad || len(native) > 0 {
 		var msgs []map[string]json.RawMessage
@@ -256,6 +299,60 @@ func chatWireBody(cfg Config, req openai.ChatCompletionRequest, native map[strin
 	return body
 }
 
+// patchLocalWireBody stamps local.toml sampling and thinking onto a chat body.
+// valen.toml wins: cfg temperature and extra_body are already merged, so
+// only fill fields those left unset, and never clobber cfg-owned values.
+func patchLocalWireBody(cfg Config, body map[string]json.RawMessage) {
+	m, ok := resolveLocalModel(cfg.Model)
+	if !ok {
+		m, _ = localModelForID(cfg.Model)
+	}
+	// mlx_vlm.server loads per-request `model` as a HF repo or local path:
+	// send the server's path, never valen's short name, or it downloads.
+	if m.Backend != "openai-compatible" {
+		if p := expandHome(m.Path); p != "" {
+			if enc, err := json.Marshal(p); err == nil {
+				body["model"] = enc
+			}
+		}
+	}
+	set := func(key string, v any) {
+		if _, exists := body[key]; exists {
+			return
+		}
+		if enc, err := json.Marshal(v); err == nil {
+			body[key] = enc
+		}
+	}
+	// Temperature: cfg owns req.Temperature when set; otherwise local default.
+	if cfg.Temperature == nil && m.Temperature != nil {
+		set("temperature", *m.Temperature)
+	}
+	if m.TopP != nil {
+		set("top_p", *m.TopP)
+	}
+	if m.TopK != nil {
+		set("top_k", *m.TopK)
+	}
+	if m.RepetitionPenalty != nil {
+		set("repetition_penalty", *m.RepetitionPenalty)
+	}
+	// Thinking is top-level on mlx-vlm (extra allow), not chat_template_kwargs
+	// alone: stamp both so servers that read either field agree.
+	fam := localThinkingFamily(m, cfg.Model)
+	if fam == "toggle" {
+		enable := localEnableThinking(m, cfg.Thinking)
+		if _, exists := body["enable_thinking"]; !exists {
+			if enc, err := json.Marshal(enable); err == nil {
+				body["enable_thinking"] = enc
+			}
+		}
+		if m.ThinkingBudget > 0 {
+			set("thinking_budget", m.ThinkingBudget)
+		}
+	}
+}
+
 // chatRoundOnce is the non-streaming round, kept as the fallback when a
 // provider rejects `stream: true`.
 func chatRoundOnce(ctx context.Context, cfg Config, apiKey string, hc *http.Client, req openai.ChatCompletionRequest) (openai.ChatCompletionMessage, openai.Usage, error) {
@@ -265,7 +362,10 @@ func chatRoundOnce(ctx context.Context, cfg Config, apiKey string, hc *http.Clie
 
 func chatRoundOnceDetailed(ctx context.Context, cfg Config, apiKey string, hc *http.Client, req openai.ChatCompletionRequest, native map[string]chatNative) (openai.ChatCompletionMessage, openai.Usage, map[string]chatNative, error) {
 	var usage openai.Usage
-	endpoint, headers, sendCfg, httpClient := chatTarget(cfg, apiKey, hc)
+	endpoint, headers, sendCfg, httpClient, terr := chatTarget(cfg, apiKey, hc)
+	if terr != nil {
+		return openai.ChatCompletionMessage{}, usage, nil, terr
+	}
 	resp, err := postAPI(ctx, httpClient, sendCfg, endpoint, chatWireBody(cfg, req, native), headers)
 	if err != nil {
 		return openai.ChatCompletionMessage{}, usage, nil, err
@@ -600,7 +700,10 @@ func chatRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string, hc 
 	var usage openai.Usage
 	req.Stream = true
 	req.StreamOptions = &openai.StreamOptions{IncludeUsage: true}
-	endpoint, headers, sendCfg, httpClient := chatTarget(cfg, apiKey, hc)
+	endpoint, headers, sendCfg, httpClient, terr := chatTarget(cfg, apiKey, hc)
+	if terr != nil {
+		return openai.ChatCompletionMessage{}, usage, nil, terr
+	}
 	start := time.Now()
 	resp, err := postAPI(ctx, httpClient, sendCfg, endpoint, chatWireBody(cfg, req, native), headers)
 	if err != nil {
