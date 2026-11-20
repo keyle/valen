@@ -279,7 +279,8 @@ Rules:
 - At most one in-flight run. Enter while working **steers**: the text is
   appended to the running turn as a user message at the next round boundary
   (never mid-stream, so a half-streamed tool batch is never retracted) and
-  renders as a dim "steer" bubble. Attachments cannot ride a running turn, so
+  renders as a dim "steer" bubble. The pending-steer notice clears when the
+  steer lands. Attachments cannot ride a running turn, so
   those queue instead.
 - Ctrl+Enter while working **queues** the message for a later turn. The queue
   is memory only (a restart drops it, like a chatbox draft) and bounded at 32.

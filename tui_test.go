@@ -781,6 +781,39 @@ func TestTUIQueuedPromptAutoRunsAfterTurn(t *testing.T) {
 	}
 }
 
+func TestTUISteeringNoticeClearsWhenSteerLands(t *testing.T) {
+	land := func(m *tuiModel) {
+		t.Helper()
+		drained := m.steer.drain()
+		if len(drained) != 1 {
+			t.Fatalf("drained %d steers, want 1", len(drained))
+		}
+		_, _ = m.Update(toolEventMsg{kind: "user_steer", text: drained[0].text})
+	}
+	m := newTestModel(t, testConfig("https://unused"))
+	m.busy = true
+	m.steerInput("use tabs")
+	if m.notice != "Steering — lands after the current step." {
+		t.Fatalf("steer notice=%q", m.notice)
+	}
+	land(m)
+	if m.notice != "" {
+		t.Fatalf("steering notice should clear once it lands, got %q", m.notice)
+	}
+	if len(m.pendingSteers) != 1 || m.pendingSteers[0].Text != "use tabs" {
+		t.Fatalf("pendingSteers=%+v", m.pendingSteers)
+	}
+	// A notice that replaced the steering one is left alone.
+	m2 := newTestModel(t, testConfig("https://unused"))
+	m2.busy = true
+	m2.steerInput("use tabs")
+	m2.notice = "Working… press esc twice to cancel."
+	land(m2)
+	if m2.notice != "Working… press esc twice to cancel." {
+		t.Fatalf("replaced notice must survive landing, got %q", m2.notice)
+	}
+}
+
 func TestTUIEnterCSINoModifierSubmitsLikeEnter(t *testing.T) {
 	// Bare CSI 13u is unmodified enter: empty input is a no-op (same as the
 	// enter key), and it must never insert a newline.

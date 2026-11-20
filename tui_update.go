@@ -573,6 +573,9 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "user_steer":
 			m.pendingSteers = append(m.pendingSteers, Steer{Text: msg.text, Plan: m.pendingPlan})
 			m.toolStatus = "steering…"
+			if m.notice == "Steering — lands after the current step." && !m.noticeErr {
+				m.notice = ""
+			}
 		case "tool_start":
 			m.pendingTools = append(m.pendingTools, pendingTool{name: msg.text, args: msg.args, id: msg.id})
 			if n := m.runningToolCount(); n > 1 {
