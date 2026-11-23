@@ -70,7 +70,7 @@ func (v *headlessVerbose) event(ev Event) {
 			return
 		}
 		v.closeLine()
-		fmt.Fprintf(v.w, "[result] %s %dms\n", ev.Text, ev.DurMs)
+		fmt.Fprintf(v.w, "[result] %s %dms\n", toolDisplayName(ev.Text, ev.Backend), ev.DurMs)
 		if ev.Output != "" {
 			io.WriteString(v.w, ev.Output)
 			if !strings.HasSuffix(ev.Output, "\n") {

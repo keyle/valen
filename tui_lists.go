@@ -115,7 +115,7 @@ func (m *tuiModel) renderToolsList() string {
 		if strings.HasPrefix(strings.TrimSpace(it.record.Output), "error:") {
 			status = "error"
 		}
-		line := fmt.Sprintf("%2d  %s  %s  [%s]", i+1, it.record.Name, truncateRunes(it.record.Args, 48), status)
+		line := fmt.Sprintf("%2d  %s  %s  [%s]", i+1, toolDisplayName(it.record.Name, it.record.Backend), truncateRunes(it.record.Args, 48), status)
 		line = truncateRunes(line, cw)
 		if i == m.cursor {
 			b.WriteString(selectedStyle.Width(cw).Render(" "+line) + "\n")

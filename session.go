@@ -17,11 +17,14 @@ import (
 
 // ToolRecord is one tool invocation within a turn, as the model saw it.
 type ToolRecord struct {
-	ID     string `json:"id,omitempty"`
-	Name   string `json:"name"`
-	Args   string `json:"args"`
-	Output string `json:"output"`
-	Err    string `json:"err,omitempty"`
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name"`
+	// Backend names the program that served a grep/glob call (rg/fd), shown
+	// as the scrollback label; empty means the Go fallback ran.
+	Backend string `json:"backend,omitempty"`
+	Args    string `json:"args"`
+	Output  string `json:"output"`
+	Err     string `json:"err,omitempty"`
 	// DurMs is wall execution time of this call, shown as e.g. "shell (1.2s)".
 	DurMs int64 `json:"dur_ms,omitempty"`
 }

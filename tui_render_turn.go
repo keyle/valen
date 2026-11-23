@@ -326,7 +326,7 @@ func (m *tuiModel) renderTurnFull(t *Turn) string {
 		b.WriteString(m.wrapPlain("✦ thinking"+thinkDurSuffix(t.DurMs)+"\n"+t.Thinking) + "\n\n")
 	}
 	for _, tr := range t.Tools {
-		head := fmt.Sprintf("%s  %s%s", tr.Name, toolSummary(tr.Name, tr.Args, 300), toolDurSuffix(tr.DurMs))
+		head := fmt.Sprintf("%s  %s%s", toolDisplayName(tr.Name, tr.Backend), toolSummary(tr.Name, tr.Args, 300), toolDurSuffix(tr.DurMs))
 		var body strings.Builder
 		body.WriteString(head)
 		if tr.Name == "edit" {

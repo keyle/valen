@@ -99,6 +99,39 @@ func (r *Registry) Run(ctx context.Context, name, args string) string {
 	return truncate(out, maxToolOutput)
 }
 
+// backendKey carries one call's private slot for the program that served it.
+// grep/glob may run rg/fd fast paths; the branch that served the call marks
+// the backend here so scrollback can name the program that ran. A fresh
+// holder per call keeps parallel calls from sharing it.
+type backendKey struct{}
+
+type backendHolder struct{ backend string }
+
+func withBackendHolder(ctx context.Context) (context.Context, *backendHolder) {
+	h := &backendHolder{}
+	return context.WithValue(ctx, backendKey{}, h), h
+}
+
+// setBackend records the serving program (rg/fd) when the caller gave the
+// call a slot. Direct calls without a slot just skip the record.
+func setBackend(ctx context.Context, backend string) {
+	if ctx == nil {
+		return
+	}
+	if h, ok := ctx.Value(backendKey{}).(*backendHolder); ok && h != nil {
+		h.backend = backend
+	}
+}
+
+// toolDisplayName is the scrollback label: the program that ran when known
+// (rg/fd), otherwise the tool the model asked for.
+func toolDisplayName(name, backend string) string {
+	if backend != "" {
+		return backend
+	}
+	return name
+}
+
 // LoadBuiltins registers the named builtin tools and returns unknown names.
 func (r *Registry) LoadBuiltins(names []string) []string {
 	builtins := map[string]func() Tool{"shell": ShellTool, "web_search": WebSearchTool, "web_fetch": WebFetchTool, "AskUserQuestion": AskUserQuestionTool, "read": ReadTool, "write": WriteTool, "edit": EditTool, "glob": GlobTool, "grep": GrepTool, "todowrite": TodoWriteTool, "todoread": TodoReadTool}

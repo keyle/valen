@@ -235,7 +235,7 @@ args, errors-as-output (never crash the loop), 16k truncate.
 | --- | --- |
 | `shell` | `sh -c` in workdir root, 5m (`shell_timeout_seconds`), stdout+stderr combined; `[exit N]` is content. Foreground-only (background deferred, TODO D3). |
 | `read`/`write`/`edit` | Workdir sandbox; escapes ask via the active `AskUserQuestion` frontend (remembered per path), denied headless. `read` on dirs errors (use `glob`). `edit` needs exact `oldString`, refuses ambiguity without `replaceAll`. |
-| `glob`/`grep` | 8-worker fan-out, sorted deterministic output, skips `.git` + dependency/build dirs. `grep` = Go regexp (not ripgrep syntax — a real behavioral difference from opencode). |
+| `glob`/`grep` | `fd`/`rg` fast paths when on PATH (Go 8-worker walk fallback), sorted deterministic output, skips `.git` + dependency/build dirs. Fast paths keep the Go filters/caps; a missing or failing binary falls back transparently. |
 | `web_search`/`web_fetch` | DuckDuckGo HTML + HTML→text; non-200s are errors the model sees, not pages. |
 | `AskUserQuestion` | Options + type-your-own + confirmation; formatted answers return as one tool result on all transports. |
 | `todowrite`/`todoread` | §8. |

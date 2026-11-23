@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -41,6 +43,9 @@ var (
 	approvedRead     = map[string]bool{}
 	approvedWritable = map[string]bool{}
 	deniedAccess     = map[string]bool{} // "r:"+folder / "w:"+folder
+
+	rgBin = "rg"
+	fdBin = "fd"
 )
 
 func ReadTool() Tool {
@@ -300,6 +305,13 @@ func GlobTool() Tool {
 				}
 				pattern = filepath.ToSlash(rel)
 			}
+			if files, ok := globWithFd(ctx, baseAbs, pattern); ok {
+				setBackend(ctx, "fd")
+				if len(files) == 0 {
+					return "no matches", nil
+				}
+				return truncate(strings.Join(files, "\n"), maxToolOutput), nil
+			}
 			var out []string
 			// Top-level subtrees walk in parallel (syscall-bound); matches merge
 			// and sort for deterministic output.
@@ -374,8 +386,8 @@ func GlobTool() Tool {
 func GrepTool() Tool {
 	return Tool{
 		Name:        "grep",
-		Description: "Search file contents in the workdir with a Go regexp. Returns file:line matches.",
-		Schema:      json.RawMessage(`{"type":"object","properties":{"pattern":{"type":"string","description":"Go regexp to search for"},"path":{"type":"string","description":"file or directory to search (default .)"},"include":{"type":"string","description":"optional glob filter, e.g. *.go"}},"required":["pattern"]}`),
+		Description: "Search file contents in the workdir with a regexp. Returns file:line matches.",
+		Schema:      json.RawMessage(`{"type":"object","properties":{"pattern":{"type":"string","description":"regexp to search for"},"path":{"type":"string","description":"file or directory to search (default .)"},"include":{"type":"string","description":"optional glob filter, e.g. *.go"}},"required":["pattern"]}`),
 		Fn: func(ctx context.Context, args string) (string, error) {
 			var a struct {
 				Pattern string `json:"pattern"`
@@ -402,6 +414,17 @@ func GrepTool() Tool {
 			}
 			if err := checkFileAccess(ctx, "search", targetAbs); err != nil {
 				return "", err
+			}
+			if matches, capped, ok := grepWithRg(ctx, a.Pattern, targetAbs, a.Include); ok {
+				setBackend(ctx, "rg")
+				if len(matches) == 0 {
+					return "no matches", nil
+				}
+				out := strings.Join(matches, "\n")
+				if capped {
+					out += fmt.Sprintf("\n...[showing first %d matches]", maxGrepMatches)
+				}
+				return truncate(out, maxToolOutput), nil
 			}
 			roots := []string{targetAbs}
 			if fi, err := os.Stat(targetAbs); err != nil {
@@ -564,6 +587,144 @@ func grepFilesParallel(ctx context.Context, re *regexp.Regexp, files []string) (
 		out = append(out, fmt.Sprintf("%s:%d: %s", gm.file, gm.line, gm.text))
 	}
 	return out, capped
+}
+
+// hasSkippedDir reports whether any directory segment of slash is skipped.
+func hasSkippedDir(slash string) bool {
+	for _, seg := range strings.Split(path.Dir(slash), "/") {
+		if skippedDir(seg) {
+			return true
+		}
+	}
+	return false
+}
+
+// globWithFd lists files under baseAbs with fd when available, filtered by
+// pattern and sorted. The third return is false when fd is missing or fails,
+// so the caller falls back to the Go walk with identical results.
+func globWithFd(ctx context.Context, baseAbs, pattern string) ([]string, bool) {
+	bin, err := exec.LookPath(fdBin)
+	if err != nil {
+		return nil, false
+	}
+	cmd := exec.CommandContext(ctx, bin, "--hidden", "--no-ignore", "--type", "f", "--type", "l", ".", baseAbs)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, false
+	}
+	root := getFileRoot()
+	var files []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if line == "" {
+			continue
+		}
+		abs := line
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(baseAbs, line)
+		}
+		abs = filepath.Clean(abs)
+		rel, err := filepath.Rel(root, abs)
+		if err != nil {
+			continue
+		}
+		slash := filepath.ToSlash(rel)
+		if hasSkippedDir(slash) {
+			continue
+		}
+		if matchGlob(pattern, slash) {
+			files = append(files, slash)
+		}
+	}
+	sort.Strings(files)
+	return files, true
+}
+
+// grepWithRg searches targetAbs with rg when available, applying the same
+// secret, access, skipped-dir and include filters and per-file/total caps as
+// the Go walk, sorted by file then line. The third return is false when rg
+// is missing or fails (exit 2+), so the caller falls back to the Go search.
+func grepWithRg(ctx context.Context, pattern, targetAbs, include string) ([]string, bool, bool) {
+	bin, err := exec.LookPath(rgBin)
+	if err != nil {
+		return nil, false, false
+	}
+	args := []string{"-n", "--no-heading", "--color=never", "--hidden", "--no-ignore", "--max-filesize", strconv.Itoa(maxGrepFileBytes), "--", pattern, targetAbs}
+	out, err := exec.CommandContext(ctx, bin, args...).Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
+			return []string{}, false, true
+		}
+		return nil, false, false
+	}
+	root := getFileRoot()
+	var parsed []grepMatch
+	for _, line := range strings.Split(string(out), "\n") {
+		if line == "" {
+			continue
+		}
+		file, rest, ok := strings.Cut(line, ":")
+		if !ok {
+			return nil, false, false
+		}
+		lnoStr, text, ok := strings.Cut(rest, ":")
+		if !ok {
+			return nil, false, false
+		}
+		lno, err := strconv.Atoi(lnoStr)
+		if err != nil {
+			return nil, false, false
+		}
+		abs := file
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(root, file)
+		}
+		abs = filepath.Clean(abs)
+		if blocksSecret(abs) {
+			continue
+		}
+		if canon := canonicalAccessPath(abs); !allowedWithoutPrompt(root, canon) {
+			continue
+		}
+		rel, err := filepath.Rel(root, abs)
+		if err != nil {
+			continue
+		}
+		slash := filepath.ToSlash(rel)
+		if hasSkippedDir(slash) {
+			continue
+		}
+		if include != "" && !matchGlob(filepath.ToSlash(include), slash) && !matchGlob(filepath.ToSlash(include), path.Base(slash)) {
+			continue
+		}
+		text = strings.TrimSpace(text)
+		if len(text) > 200 {
+			text = text[:200] + "…"
+		}
+		parsed = append(parsed, grepMatch{file: slash, line: lno, text: text})
+	}
+	sort.Slice(parsed, func(i, j int) bool {
+		if parsed[i].file != parsed[j].file {
+			return parsed[i].file < parsed[j].file
+		}
+		return parsed[i].line < parsed[j].line
+	})
+	counts := map[string]int{}
+	outMatches := make([]string, 0, len(parsed))
+	capped := false
+	for _, gm := range parsed {
+		if counts[gm.file] >= maxGrepPerFile {
+			capped = true
+			continue
+		}
+		if len(outMatches) >= maxGrepMatches {
+			capped = true
+			break
+		}
+		outMatches = append(outMatches, fmt.Sprintf("%s:%d: %s", gm.file, gm.line, gm.text))
+		counts[gm.file]++
+	}
+	return outMatches, capped, true
 }
 
 // skippedDir reports dependency/build output directories that grep and glob

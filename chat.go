@@ -1014,6 +1014,7 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 				if tools[i].ID == ev.ID && tools[i].Name == ev.Text {
 					tools[i].Output = ev.Output
 					tools[i].DurMs = ev.DurMs
+					tools[i].Backend = ev.Backend
 					break
 				}
 			}

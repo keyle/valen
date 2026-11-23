@@ -250,7 +250,7 @@ func (m *tuiModel) renderToolLine(tr ToolRecord) string {
 		}
 	}
 	summary := toolSummary(tr.Name, tr.Args, maxText)
-	label := fmt.Sprintf("%s  %s%s", tr.Name, summary, toolDurSuffix(tr.DurMs))
+	label := fmt.Sprintf("%s  %s%s", toolDisplayName(tr.Name, tr.Backend), summary, toolDurSuffix(tr.DurMs))
 	// Tool styles carry PaddingLeft(2), so break two short of cw.
 	if tr.Err != "" || strings.HasPrefix(strings.TrimSpace(tr.Output), "error:") {
 		return toolErrStyle.Width(cw).Render(breakLongWords("✗ "+label, cw-2))
@@ -304,7 +304,7 @@ func (m *tuiModel) renderPendingTool(t *pendingTool) string {
 
 func (m *tuiModel) renderPendingToolRow(t pendingTool, cw int) string {
 	if t.done {
-		return m.renderToolLine(ToolRecord{Name: t.name, Args: t.args, Output: t.output, DurMs: t.durMs})
+		return m.renderToolLine(ToolRecord{Name: t.name, Backend: t.backend, Args: t.args, Output: t.output, DurMs: t.durMs})
 	}
 	maxText := cw - 4
 	if maxText < 20 {
@@ -325,7 +325,7 @@ func (m *tuiModel) renderPendingToolRow(t pendingTool, cw int) string {
 	// A running edit already carries old/new strings — show the diff live.
 	if t.name == "edit" {
 		if del, add, ok := editDiffLines(t.args, maxText); ok {
-			out := toolRunStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("now: %s  %s", t.name, summary), cw-2))
+			out := toolRunStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("now: %s  %s", toolDisplayName(t.name, t.backend), summary), cw-2))
 			for _, ln := range highlightDiffRowsCached(diffPath(t.args), del, cw) {
 				out += "\n" + ln
 			}
@@ -337,14 +337,14 @@ func (m *tuiModel) renderPendingToolRow(t pendingTool, cw int) string {
 	}
 	if t.name == "write" {
 		if lines, ok := writeDiffLines(t.args, maxText); ok {
-			out := toolRunStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("now: %s  %s", t.name, summary), cw-2))
+			out := toolRunStyle.Width(cw).Render(breakLongWords(fmt.Sprintf("now: %s  %s", toolDisplayName(t.name, t.backend), summary), cw-2))
 			for _, ln := range highlightDiffRowsCached(diffPath(t.args), lines, cw) {
 				out += "\n" + ln
 			}
 			return out
 		}
 	}
-	label := fmt.Sprintf("now: %s  %s", t.name, summary)
+	label := fmt.Sprintf("now: %s  %s", toolDisplayName(t.name, t.backend), summary)
 	// Tool styles carry PaddingLeft(2), so break two short of cw.
 	return toolRunStyle.Width(cw).Render(breakLongWords(label, cw-2))
 }

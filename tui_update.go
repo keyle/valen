@@ -28,13 +28,14 @@ func (m *tuiModel) runningToolCount() int {
 // finishPendingTool marks the in-flight tool call done, matched by call ID
 // so parallel same-name calls keep their own outputs. Empty IDs fall back to
 // the latest name match (older event sources).
-func (m *tuiModel) finishPendingTool(id, name, output string, durMs int64) {
+func (m *tuiModel) finishPendingTool(id, name, output string, durMs int64, backend string) {
 	if id != "" {
 		for i := range m.pendingTools {
 			if m.pendingTools[i].id == id && !m.pendingTools[i].done {
 				m.pendingTools[i].done = true
 				m.pendingTools[i].output = output
 				m.pendingTools[i].durMs = durMs
+				m.pendingTools[i].backend = backend
 				m.pendingTools[i].renderOK = false
 				return
 			}
@@ -45,11 +46,12 @@ func (m *tuiModel) finishPendingTool(id, name, output string, durMs int64) {
 			m.pendingTools[i].done = true
 			m.pendingTools[i].output = output
 			m.pendingTools[i].durMs = durMs
+			m.pendingTools[i].backend = backend
 			m.pendingTools[i].renderOK = false
 			return
 		}
 	}
-	m.pendingTools = append(m.pendingTools, pendingTool{name: name, output: output, done: true, durMs: durMs})
+	m.pendingTools = append(m.pendingTools, pendingTool{name: name, output: output, done: true, durMs: durMs, backend: backend})
 }
 
 // flushStream re-renders the live transcript, throttled so a flood of deltas
@@ -200,6 +202,7 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 					if tools[i].ID == ev.ID && tools[i].Name == ev.Text {
 						tools[i].Output = ev.Output
 						tools[i].DurMs = ev.DurMs
+						tools[i].Backend = ev.Backend
 						break
 					}
 				}
@@ -215,7 +218,7 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 				}
 			}
 			if prog != nil {
-				prog.Send(toolEventMsg{kind: ev.Kind, text: ev.Text, args: ev.Args, output: ev.Output, id: ev.ID, durMs: ev.DurMs, idx: ev.Index, orMeta: ev.ORMeta})
+				prog.Send(toolEventMsg{kind: ev.Kind, text: ev.Text, args: ev.Args, output: ev.Output, id: ev.ID, durMs: ev.DurMs, backend: ev.Backend, idx: ev.Index, orMeta: ev.ORMeta})
 			}
 		}
 		reply, usage, err := runTurn(ctx, cfg, client, apiKey, httpClient, registry, &h, onEvent)
@@ -584,11 +587,12 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.toolStatus = msg.text + "…"
 			}
 		case "tool_result":
-			m.finishPendingTool(msg.id, msg.text, msg.output, msg.durMs)
+			m.finishPendingTool(msg.id, msg.text, msg.output, msg.durMs, msg.backend)
+			done := toolDisplayName(msg.text, msg.backend)
 			if n := m.runningToolCount(); n > 0 {
-				m.toolStatus = fmt.Sprintf("✓ %s · %d still running", msg.text, n)
+				m.toolStatus = fmt.Sprintf("✓ %s · %d still running", done, n)
 			} else {
-				m.toolStatus = "✓ " + msg.text
+				m.toolStatus = "✓ " + done
 			}
 		case "text_delta":
 			m.pendingText = appendStreamLine(m.pendingText, msg.text)

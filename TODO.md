@@ -7,8 +7,9 @@
 - [ ] D1 `Retry-After` aware backoff: honor the header on 429 instead of
   fixed 300/800ms; provider-aware retry policy like opencode's
   `SessionRetry.policy`.
-- [ ] D2 full `.gitignore` parsing in grep/glob (current fixed skip list is
-  the 80% baseline) + `rg` fast path when on PATH.
+- [x] D2 full `.gitignore` parsing in grep/glob (current fixed skip list is
+  the 80% baseline) + `rg` fast path when on PATH. (Done: `rg`/`fd` fast paths
+  with Go fallback; full `.gitignore` parsing stays open.)
 - [ ] D3 background shell: `run_in_background` + poll/kill tools so dev
   servers and long builds don't park the loop.
 - [ ] D5 B1 follow-up: messages-only mid-stream execution at

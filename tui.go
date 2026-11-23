@@ -202,14 +202,15 @@ type askState struct {
 
 // toolEventMsg streams tool progress from the background turn into the UI.
 type toolEventMsg struct {
-	kind   string
-	text   string
-	args   string
-	output string
-	id     string // tool call ID: matches rows by call, not by name
-	durMs  int64  // wall execution time on tool_result
-	idx    int    // reasoning part index on thinking_delta (see Event.Index)
-	orMeta *ORMeta
+	kind    string
+	text    string
+	args    string
+	output  string
+	id      string // tool call ID: matches rows by call, not by name
+	durMs   int64  // wall execution time on tool_result
+	backend string // serving program on tool_result (rg/fd), empty for fallback
+	idx     int    // reasoning part index on thinking_delta (see Event.Index)
+	orMeta  *ORMeta
 }
 
 // pendingTool is one in-flight or finished tool call in the live transcript.
@@ -224,6 +225,7 @@ type pendingTool struct {
 	done      bool
 	id        string
 	durMs     int64
+	backend   string // serving program (rg/fd) once tool_result lands
 	rendered  string
 	renderedW int
 	renderOK  bool

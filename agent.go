@@ -165,9 +165,10 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 	}
 	batch0 := time.Now()
 	type result struct {
-		index  int
-		output string
-		durMs  int64
+		index   int
+		output  string
+		durMs   int64
+		backend string
 	}
 	results := make(chan result, len(calls))
 	out := make([]openai.ChatCompletionMessage, len(calls))
@@ -183,20 +184,21 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 			select {
 			case s <- struct{}{}:
 			case <-ctx.Done():
-				results <- result{i, "error: " + ctx.Err().Error(), 0}
+				results <- result{i, "error: " + ctx.Err().Error(), 0, ""}
 				return
 			}
 			defer func() { <-s }()
 			t0 := time.Now()
 			var output string
+			callCtx, holder := withBackendHolder(ctx)
 			if err := ctx.Err(); err != nil {
 				output = "error: " + err.Error()
 			} else {
-				output = registry.Run(ctx, tc.Function.Name, tc.Function.Arguments)
+				output = registry.Run(callCtx, tc.Function.Name, tc.Function.Arguments)
 			}
 			durMs := time.Since(t0).Milliseconds()
 			dvlog.Logf("tool %s args=%dB dur=%s out=%dB %q", tc.Function.Name, len(tc.Function.Arguments), dvlog.Dur(time.Since(t0)), len(output), dvlog.Preview(tc.Function.Arguments, 160))
-			results <- result{i, output, durMs}
+			results <- result{i, output, durMs, holder.backend}
 		}(i, tc)
 	}
 	for range calls {
@@ -204,7 +206,7 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 		tc := calls[res.index]
 		out[res.index] = openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: tc.ID, Content: res.output}
 		if onEvent != nil {
-			ev := Event{Kind: "tool_result", Text: tc.Function.Name, Output: res.output, ID: tc.ID, DurMs: res.durMs}
+			ev := Event{Kind: "tool_result", Text: tc.Function.Name, Output: res.output, ID: tc.ID, DurMs: res.durMs, Backend: res.backend}
 			ev.Denied = parseSandboxDenial(res.output)
 			onEvent(ev)
 		}
@@ -223,15 +225,16 @@ func runToolCallsSerial(ctx context.Context, registry *Registry, calls []openai.
 		}
 		t0 := time.Now()
 		var res string
+		callCtx, holder := withBackendHolder(ctx)
 		if err := ctx.Err(); err != nil {
 			res = "error: " + err.Error()
 		} else {
-			res = registry.Run(ctx, tc.Function.Name, tc.Function.Arguments)
+			res = registry.Run(callCtx, tc.Function.Name, tc.Function.Arguments)
 		}
 		durMs := time.Since(t0).Milliseconds()
 		dvlog.Logf("tool %s args=%dB dur=%s out=%dB serial %q", tc.Function.Name, len(tc.Function.Arguments), dvlog.Dur(time.Since(t0)), len(res), dvlog.Preview(tc.Function.Arguments, 160))
 		if onEvent != nil {
-			ev := Event{Kind: "tool_result", Text: tc.Function.Name, Output: res, ID: tc.ID, DurMs: durMs}
+			ev := Event{Kind: "tool_result", Text: tc.Function.Name, Output: res, ID: tc.ID, DurMs: durMs, Backend: holder.backend}
 			ev.Denied = parseSandboxDenial(res)
 			onEvent(ev)
 		}

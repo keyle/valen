@@ -114,7 +114,7 @@ func (m *tuiModel) exportTranscript() (string, bool) {
 			fmt.Fprintf(&b, "<details><summary>thinking%s</summary>\n\n%s\n\n</details>\n\n", thinkDurSuffix(t.DurMs), t.Thinking)
 		}
 		for _, tr := range t.Tools {
-			fmt.Fprintf(&b, "> tool `%s` `%s`%s\n>\n> %s\n\n", tr.Name, truncatePlain(tr.Args, 120), toolDurSuffix(tr.DurMs), truncatePlain(tr.Output, 2000))
+			fmt.Fprintf(&b, "> tool `%s` `%s`%s\n>\n> %s\n\n", toolDisplayName(tr.Name, tr.Backend), truncatePlain(tr.Args, 120), toolDurSuffix(tr.DurMs), truncatePlain(tr.Output, 2000))
 		}
 		for _, st := range t.Steers {
 			fmt.Fprintf(&b, "> steer: %s\n\n", st.Text)

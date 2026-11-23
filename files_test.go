@@ -210,6 +210,28 @@ func TestGlobFindsFiles(t *testing.T) {
 	}
 }
 
+func TestGrepGlobFallbackWhenToolsMissing(t *testing.T) {
+	useTempRoot(t)
+	oldRg, oldFd := rgBin, fdBin
+	rgBin, fdBin = "rg-missing-valen-test", "fd-missing-valen-test"
+	t.Cleanup(func() { rgBin, fdBin = oldRg, oldFd })
+	ctx := context.Background()
+	if _, err := WriteTool().Fn(ctx, `{"path":"a/b.go","content":"needle"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteTool().Fn(ctx, `{"path":"a/c.txt","content":"x"}`); err != nil {
+		t.Fatal(err)
+	}
+	out, err := GrepTool().Fn(ctx, `{"pattern":"needle"}`)
+	if err != nil || !strings.Contains(out, "a/b.go:1:") {
+		t.Fatalf("fallback grep out=%q err=%v", out, err)
+	}
+	out, err = GlobTool().Fn(ctx, `{"pattern":"**/*.go"}`)
+	if err != nil || !strings.Contains(out, "a/b.go") || strings.Contains(out, "c.txt") {
+		t.Fatalf("fallback glob out=%q err=%v", out, err)
+	}
+}
+
 func TestGrepFindsPattern(t *testing.T) {
 	useTempRoot(t)
 	ctx := context.Background()
