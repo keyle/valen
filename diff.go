@@ -189,9 +189,9 @@ func terminalTokenColor(tt chroma.TokenType) lipgloss.TerminalColor {
 	return mkFg
 }
 
-// highlightLines lexes src by the language implied by path and returns the
-// styled runs per source line. Unknown languages come back as plain runs.
-func highlightLines(path, src string) [][]styledText {
+// highlightWithLexer lexes src with lx and returns the styled runs per
+// source line. A nil lexer comes back as plain runs.
+func highlightWithLexer(lx chroma.Lexer, src string) [][]styledText {
 	lines := [][]styledText{{}}
 	add := func(text string, fg lipgloss.TerminalColor, bold, italic bool) {
 		parts := strings.Split(text, "\n")
@@ -205,7 +205,6 @@ func highlightLines(path, src string) [][]styledText {
 			}
 		}
 	}
-	lx := diffLexer(path)
 	if lx == nil {
 		add(src, mkFg, false, false)
 		return lines
@@ -228,4 +227,43 @@ func highlightLines(path, src string) [][]styledText {
 		add(tok.Value, fg, e.Bold == chroma.Yes, e.Italic == chroma.Yes)
 	}
 	return lines
+}
+
+// highlightLines lexes src by the language implied by path and returns the
+// styled runs per source line. Unknown languages come back as plain runs.
+func highlightLines(path, src string) [][]styledText {
+	return highlightWithLexer(diffLexer(path), src)
+}
+
+// langLexer resolves a markdown fence language (go, py, js, ...) to a chroma
+// lexer. Unknown and empty languages return nil (plain rendering).
+var (
+	langLexerMu sync.Mutex
+	langLexers  = map[string]chroma.Lexer{}
+)
+
+func langLexer(lang string) chroma.Lexer {
+	if fields := strings.Fields(lang); len(fields) > 0 {
+		lang = fields[0]
+	} else {
+		lang = ""
+	}
+	lang, _, _ = strings.Cut(lang, ",")
+	lang = strings.ToLower(strings.TrimSpace(lang))
+	if lang == "" || lang == "text" {
+		return nil
+	}
+	langLexerMu.Lock()
+	defer langLexerMu.Unlock()
+	if lx, ok := langLexers[lang]; ok {
+		return lx
+	}
+	lx := lexers.Get(lang)
+	langLexers[lang] = lx
+	return lx
+}
+
+// highlightLinesByLang lexes src as the markdown fence language lang.
+func highlightLinesByLang(lang, src string) [][]styledText {
+	return highlightWithLexer(langLexer(lang), src)
 }

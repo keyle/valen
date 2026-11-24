@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/charmbracelet/glamour"
@@ -192,6 +194,9 @@ func (m *tuiModel) renderMarkdown(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return ""
 	}
+	if currentTheme == "terminal" {
+		return m.renderMarkdownTerminal(s)
+	}
 	r := m.markdownRenderer()
 	if r == nil {
 		return s
@@ -199,6 +204,195 @@ func (m *tuiModel) renderMarkdown(s string) string {
 	out, err := r.Render(s)
 	if err != nil {
 		return s
+	}
+	return strings.TrimSpace(out)
+}
+
+// fencedBlock is one ``` fenced code block extracted before glamour runs.
+type fencedBlock struct {
+	lang string
+	code string
+}
+
+// fencePlaceholder is the paragraph token glamour renders in place of a
+// fenced block so the highlighted code can be spliced back afterwards.
+func fencePlaceholder(i int) string {
+	return fmt.Sprintf("VALENCODEBLOCK%dXQZ", i)
+}
+
+// extractFencedBlocks pulls ``` / ~~~ fenced blocks out of markdown and
+// returns the source with each replaced by a placeholder paragraph, so
+// glamour never sees the code (its chroma style only accepts fixed hex
+// colours, which would ignore the terminal theme). A source that already
+// contains a placeholder token is returned untouched (blocks nil) so the
+// splice cannot ever mistake user text for a placeholder.
+func extractFencedBlocks(src string) (string, []fencedBlock) {
+	if strings.Contains(src, "VALENCODEBLOCK") {
+		return src, nil
+	}
+	lines := strings.Split(src, "\n")
+	var out []string
+	var blocks []fencedBlock
+	for i := 0; i < len(lines); {
+		line := lines[i]
+		trim := strings.TrimSpace(line)
+		fence := ""
+		for _, f := range []string{"```", "~~~"} {
+			if strings.HasPrefix(trim, f) {
+				fence = f
+				break
+			}
+		}
+		if fence == "" {
+			out = append(out, line)
+			i++
+			continue
+		}
+		lang := strings.TrimSpace(strings.TrimPrefix(trim, fence))
+		// An info string with extra words (e.g. "go title=x") keeps
+		// only its first word as the language.
+		if fields := strings.Fields(lang); len(fields) > 0 {
+			lang = fields[0]
+		}
+		var code []string
+		i++
+		for i < len(lines) {
+			if strings.HasPrefix(strings.TrimSpace(lines[i]), fence) {
+				i++
+				break
+			}
+			code = append(code, lines[i])
+			i++
+		}
+		out = append(out, "", fencePlaceholder(len(blocks)), "")
+		blocks = append(blocks, fencedBlock{lang: lang, code: strings.Join(code, "\n")})
+	}
+	if len(blocks) == 0 {
+		return src, nil
+	}
+	return strings.Join(out, "\n"), blocks
+}
+
+// codeBlockKey identifies one highlighted code block for the memo cache;
+// the darkness flag is part of the key because the ANSI colours are
+// adaptive (bright on dark, normal on light).
+type codeBlockKey struct {
+	lang  string
+	code  string
+	dark  bool
+	theme string
+}
+
+// codeBlockCacheMax bounds the memo so long sessions cannot grow it
+// without end. Entries are one block's rendered lines, evicted oldest-first.
+const codeBlockCacheMax = 64
+
+var (
+	codeBlockMu    sync.Mutex
+	codeBlocks     = map[codeBlockKey]string{}
+	codeBlockOrder []codeBlockKey
+)
+
+// renderCodeBlock highlights one fenced block through the same ANSI token
+// mapping as diffs, so syntax hues come from the terminal theme in
+// terminal mode (no fixed hex like the glamour chroma style required).
+func renderCodeBlock(lang, code string) string {
+	key := codeBlockKey{lang: lang, code: code, dark: lipgloss.HasDarkBackground(), theme: currentTheme}
+	codeBlockMu.Lock()
+	if s, ok := codeBlocks[key]; ok {
+		codeBlockMu.Unlock()
+		return s
+	}
+	codeBlockMu.Unlock()
+
+	segs := highlightLinesByLang(lang, code)
+	var b strings.Builder
+	for i, line := range segs {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		for _, s := range line {
+			text := strings.ReplaceAll(s.text, "\t", "    ")
+			st := lipgloss.NewStyle().Foreground(s.fg).Bold(s.bold).Italic(s.italic)
+			b.WriteString(st.Render(text))
+		}
+	}
+	rendered := b.String()
+
+	codeBlockMu.Lock()
+	defer codeBlockMu.Unlock()
+	if _, ok := codeBlocks[key]; !ok {
+		codeBlocks[key] = rendered
+		codeBlockOrder = append(codeBlockOrder, key)
+		if len(codeBlockOrder) > codeBlockCacheMax {
+			delete(codeBlocks, codeBlockOrder[0])
+			codeBlockOrder = codeBlockOrder[1:]
+		}
+	}
+	return rendered
+}
+
+// spliceCodeBlocks replaces each placeholder line in the glamour output
+// with the highlighted code, keeping the placeholder's indent (and the
+// blockquote marker, when present) on every code line.
+func spliceCodeBlocks(rendered string, blocks []fencedBlock) string {
+	lines := strings.Split(rendered, "\n")
+	var out []string
+	for _, line := range lines {
+		idx := -1
+		var block fencedBlock
+		for i, b := range blocks {
+			if j := strings.Index(line, fencePlaceholder(i)); j >= 0 {
+				idx = j
+				block = b
+				break
+			}
+		}
+		if idx < 0 {
+			out = append(out, line)
+			continue
+		}
+		prefix := ""
+		for _, r := range line[:idx] {
+			if r == ' ' || r == '\t' {
+				prefix += string(r)
+			} else {
+				break
+			}
+		}
+		if strings.Contains(line[:idx], "│") {
+			prefix += "│ "
+		}
+		code := renderCodeBlock(block.lang, block.code)
+		for _, cl := range strings.Split(code, "\n") {
+			if cl == "" {
+				out = append(out, "")
+			} else {
+				out = append(out, prefix+"  "+cl)
+			}
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// renderMarkdownTerminal renders markdown for the terminal palette:
+// fenced code blocks bypass glamour's fixed-hex chroma style entirely and
+// are highlighted with real ANSI colours, so the terminal theme supplies
+// every hue. Anything that is not a fenced block (including indented
+// blocks, whose glamour style carries no colours) renders as before.
+func (m *tuiModel) renderMarkdownTerminal(s string) string {
+	stripped, blocks := extractFencedBlocks(s)
+	r := m.markdownRenderer()
+	if r == nil {
+		return s
+	}
+	out, err := r.Render(stripped)
+	if err != nil {
+		return s
+	}
+	out = strings.TrimSpace(out)
+	if len(blocks) > 0 {
+		out = spliceCodeBlocks(out, blocks)
 	}
 	return strings.TrimSpace(out)
 }

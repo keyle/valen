@@ -148,7 +148,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   `[.]` in progress / `[ ]` pending / `[-]` cancelled line per item instead of
   raw JSON (every item is listed, no cap), live from the call args while running and from the stored result on
   commit — so todo progress reads in the scrollback next to thinking.
-- Replies render as markdown via glamour (palette style — Monokai by default, ANSI-only for `terminal` — wrapped to viewport).
+- Replies render as markdown via glamour (palette style — `terminal` by default, ANSI-only, fixed Monokai for `monokai` — wrapped to viewport). In `terminal` mode fenced code blocks bypass glamour's fixed-hex chroma and are highlighted with real ANSI colours through the same token mapping as diffs, so the terminal theme supplies every hue.
 - The committed scrollback is bounded by `[tui] max_lines` (default `1000`;
   `0` disables). Past the budget, the newest turn stays full while it fits;
   older turns collapse their reasoning to a `N chars trimmed` header, then
