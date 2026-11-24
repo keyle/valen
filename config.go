@@ -145,10 +145,10 @@ type CompactionConfig struct {
 // turns collapse their reasoning (prompts, tool lines and replies stay
 // whole) and, if needed, the oldest turns drop from scrollback. History on
 // disk stays lossless and the recall views still expand everything.
-// Theme selects the colour palette: "monokai" (default, the historic
-// fixed dark Monokai chrome/markdown) or "terminal" (the terminal's own
-// default fg + ANSI 16 colours, so a Ghostty/terminal theme file drives
-// the hues; bright variants on a dark background, normal on a light one).
+// Theme selects the colour palette: "terminal" (default, the terminal's
+// own default fg + ANSI 16 colours, so a Ghostty/terminal theme file
+// drives the hues; bright variants on a dark background, normal on a
+// light one) or "monokai" (the historic fixed dark Monokai chrome/markdown).
 type TUIConfig struct {
 	Theme    string `toml:"theme"`
 	MaxLines *int   `toml:"max_lines"`
@@ -163,13 +163,13 @@ type TUIConfig struct {
 	SelectScrollMs int `toml:"select_scroll_ms"`
 }
 
-// tuiTheme is the canonical [tui] theme: empty means the default monokai.
+// tuiTheme is the canonical [tui] theme: empty means the default terminal.
 func tuiTheme(cfg Config) string {
 	switch strings.ToLower(strings.TrimSpace(cfg.TUI.Theme)) {
-	case "terminal":
-		return "terminal"
+	case "monokai":
+		return "monokai"
 	}
-	return "monokai"
+	return "terminal"
 }
 
 func validTUITheme(theme string) bool {

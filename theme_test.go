@@ -13,23 +13,23 @@ func TestLoadConfigTUITheme(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := tuiTheme(cfg); got != "monokai" {
-		t.Fatalf("default theme = %q, want monokai", got)
+	if got := tuiTheme(cfg); got != "terminal" {
+		t.Fatalf("default theme = %q, want terminal", got)
 	}
-	cfg, err = loadConfig(writeConfig(t, "model = \"m\"\n[tui]\ntheme = \"terminal\"\n"))
+	cfg, err = loadConfig(writeConfig(t, "model = \"m\"\n[tui]\ntheme = \"monokai\"\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := tuiTheme(cfg); got != "terminal" {
-		t.Fatalf("theme = %q, want terminal", got)
+	if got := tuiTheme(cfg); got != "monokai" {
+		t.Fatalf("theme = %q, want monokai", got)
 	}
 	if _, err := loadConfig(writeConfig(t, "model = \"m\"\n[tui]\ntheme = \"solarized\"\n")); err == nil {
 		t.Fatal("unknown theme accepted, want error")
 	}
 }
 
-func TestApplyThemeMonokaiIsDefault(t *testing.T) {
-	defer applyTheme("monokai")
+func TestApplyThemeMonokai(t *testing.T) {
+	defer applyTheme("terminal")
 	applyTheme("monokai")
 	if currentTheme != "monokai" {
 		t.Fatalf("currentTheme = %q, want monokai", currentTheme)
@@ -52,7 +52,7 @@ func TestApplyThemeMonokaiIsDefault(t *testing.T) {
 }
 
 func TestApplyThemeTerminalUsesANSI(t *testing.T) {
-	defer applyTheme("monokai")
+	defer applyTheme("terminal")
 	applyTheme("terminal")
 	if currentTheme != "terminal" {
 		t.Fatalf("currentTheme = %q, want terminal", currentTheme)
@@ -82,7 +82,7 @@ func TestApplyThemeTerminalUsesANSI(t *testing.T) {
 }
 
 func TestTerminalTokenColor(t *testing.T) {
-	defer applyTheme("monokai")
+	defer applyTheme("terminal")
 	applyTheme("terminal")
 	for tt, want := range map[chroma.TokenType]lipgloss.TerminalColor{
 		chroma.Keyword:       mkPink,
@@ -98,7 +98,7 @@ func TestTerminalTokenColor(t *testing.T) {
 }
 
 func TestTerminalMarkdownRenders(t *testing.T) {
-	defer applyTheme("monokai")
+	defer applyTheme("terminal")
 	cfg := Config{Model: "m"}
 	cfg.TUI.Theme = "terminal"
 	m := newTUIModel(cfg, nil, nil, nil)
@@ -114,15 +114,15 @@ func TestTerminalMarkdownRenders(t *testing.T) {
 }
 
 func TestNewTUIModelAppliesTheme(t *testing.T) {
-	defer applyTheme("monokai")
+	defer applyTheme("terminal")
 	cfg := Config{Model: "m"}
-	cfg.TUI.Theme = "terminal"
+	cfg.TUI.Theme = "monokai"
 	_ = newTUIModel(cfg, nil, nil, nil)
-	if currentTheme != "terminal" || mkFg != (lipgloss.NoColor{}) {
-		t.Fatalf("model did not install terminal palette: theme=%q fg=%v", currentTheme, mkFg)
+	if currentTheme != "monokai" || mkFg != lipgloss.Color("#F8F8F2") {
+		t.Fatalf("model did not install monokai palette: theme=%q fg=%v", currentTheme, mkFg)
 	}
 	_ = newTUIModel(Config{Model: "m"}, nil, nil, nil)
-	if currentTheme != "monokai" || mkFg != lipgloss.Color("#F8F8F2") {
-		t.Fatalf("default model did not restore monokai: theme=%q fg=%v", currentTheme, mkFg)
+	if currentTheme != "terminal" || mkFg != (lipgloss.NoColor{}) {
+		t.Fatalf("default model did not restore terminal: theme=%q fg=%v", currentTheme, mkFg)
 	}
 }

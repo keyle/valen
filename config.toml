@@ -99,12 +99,12 @@ thinking = "high"
 # buffer = 30000                  # headroom below max_context_tokens; default 10% of the budget.
 
 [tui]                           # transcript rendering (TUI only).
-# theme = "monokai"             # colour palette: "monokai" (default, fixed dark
-                                # Monokai chrome/markdown) or "terminal" (the
+# theme = "terminal"            # colour palette: "terminal" (default, the
                                 # terminal's own default fg + ANSI 16 colours,
                                 # so a Ghostty/terminal theme file drives the
                                 # hues; bright on a dark background, normal on
-                                # a light one).
+                                # a light one) or "monokai" (the historic fixed
+                                # dark Monokai chrome/markdown).
 # max_lines = 1000              # rendered committed-transcript line budget.
                                 # Long sessions otherwise rebuild an ever-
                                 # growing scrollback every ~60ms and slow the

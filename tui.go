@@ -50,7 +50,7 @@ var terminalPalette = tuiPalette{
 }
 
 // Palette globals: rebuilt by applyTheme (called from newTUIModel, so
-// package-init values are the default monokai palette).
+// package-init values are the default terminal palette).
 var (
 	mkBg        lipgloss.TerminalColor = lipgloss.Color("#272822")
 	mkFg        lipgloss.TerminalColor = lipgloss.Color("#F8F8F2")
@@ -68,17 +68,17 @@ var (
 
 // currentTheme is the active palette name ("monokai" or "terminal"),
 // consulted by the markdown/diff renderers to pick their styles.
-var currentTheme = "monokai"
+var currentTheme = "terminal"
 
 // applyTheme installs the palette for theme and rebuilds every chrome
 // style from it. It runs before any widget captures the palette in
 // newTUIModel; headless mode never calls it.
 func applyTheme(theme string) {
-	p := monokaiPalette
-	if theme == "terminal" {
-		p = terminalPalette
+	p := terminalPalette
+	if theme == "monokai" {
+		p = monokaiPalette
 	} else {
-		theme = "monokai"
+		theme = "terminal"
 	}
 	currentTheme = theme
 	mkBg, mkFg, mkComment, mkPink, mkGreen, mkGreenDark = p.bg, p.fg, p.comment, p.pink, p.green, p.greenDark
@@ -186,7 +186,7 @@ var (
 	emptyStyle          lipgloss.Style
 )
 
-func init() { applyTheme("monokai") }
+func init() { applyTheme("terminal") }
 
 // monokaiGlamour is a glamour JSON style approximating Monokai Pro.
 const monokaiGlamour = `{

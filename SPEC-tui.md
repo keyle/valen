@@ -20,7 +20,7 @@ in force. Everything below is additive to it.
 - In-flight requests cancelable without quitting the app.
 - Recall older turns and tool-call results, across the session and runs.
 - Friendly error presentation: one-line friendly message plus details view.
-- Theme across chrome and markdown: `monokai` (default) is the fixed dark Monokai palette; `[tui] theme = "terminal"` defers to the terminal's own default fg + ANSI 16 colours (bright on a dark background, normal on a light one, detected via OSC 11), so a Ghostty/terminal theme file drives the hues.
+- Theme across chrome and markdown: `terminal` (default) defers to the terminal's own default fg + ANSI 16 colours (bright on a dark background, normal on a light one, detected via OSC 11), so a Ghostty/terminal theme file drives the hues; `[tui] theme = "monokai"` is the fixed dark Monokai palette.
 - Headless one-shot mode preserved for scripts (`-p` / non-TTY stdin).
 
 ## Non-goals
@@ -37,7 +37,7 @@ in force. Everything below is additive to it.
 - `bubbles/viewport` — scrollable transcript + recall views.
 - `bubbles/textarea` — multiline prompt input.
 - `bubbles/spinner` — working indicator while the turn runs.
-- `lipgloss` — chrome (borders, padding, status) in the selected `[tui] theme` palette (`monokai` by default, `terminal` for the terminal's ANSI palette).
+- `lipgloss` — chrome (borders, padding, status) in the selected `[tui] theme` palette (`terminal` by default, `monokai` for the fixed dark Monokai palette).
 - `glamour` — markdown replies with a JSON style matching the palette (Monokai, or ANSI-only terminal styles) + word wrap.
 
 Rationale: the old tview Borland UI felt dated and its role-prefix transcript
