@@ -160,7 +160,7 @@ func runToolCalls(ctx context.Context, registry *Registry, calls []openai.ToolCa
 	}
 	if onEvent != nil {
 		for _, tc := range calls {
-			onEvent(Event{Kind: "tool_start", Text: tc.Function.Name, Args: tc.Function.Arguments, ID: tc.ID})
+			onEvent(Event{Kind: "tool_start", Text: tc.Function.Name, Args: tc.Function.Arguments, ID: tc.ID, Backend: backendForTool(tc.Function.Name)})
 		}
 	}
 	batch0 := time.Now()
@@ -221,7 +221,7 @@ func runToolCallsSerial(ctx context.Context, registry *Registry, calls []openai.
 	out := make([]openai.ChatCompletionMessage, 0, len(calls))
 	for _, tc := range calls {
 		if onEvent != nil {
-			onEvent(Event{Kind: "tool_start", Text: tc.Function.Name, Args: tc.Function.Arguments, ID: tc.ID})
+			onEvent(Event{Kind: "tool_start", Text: tc.Function.Name, Args: tc.Function.Arguments, ID: tc.ID, Backend: backendForTool(tc.Function.Name)})
 		}
 		t0 := time.Now()
 		var res string

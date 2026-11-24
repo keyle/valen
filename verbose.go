@@ -60,10 +60,11 @@ func (v *headlessVerbose) event(ev Event) {
 		v.answerDelta(ev.Text)
 	case "tool_start":
 		v.closeLine()
+		running := toolDisplayName(ev.Text, ev.Backend)
 		if v.full {
-			fmt.Fprintf(v.w, "[tool] %s %s\n", ev.Text, ev.Args)
+			fmt.Fprintf(v.w, "[tool] %s %s\n", running, ev.Args)
 		} else {
-			fmt.Fprintf(v.w, "[tool] %s\n", summarizeToolCall(ev.Text, ev.Args))
+			fmt.Fprintf(v.w, "[tool] %s\n", summarizeToolCall(running, ev.Args))
 		}
 	case "tool_result":
 		if !v.full {

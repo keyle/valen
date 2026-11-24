@@ -132,6 +132,25 @@ func toolDisplayName(name, backend string) string {
 	return name
 }
 
+// backendForTool predicts the fast-path program a grep/glob call will use
+// (rg/fd when on PATH), so the live "now:" row and status can name it before
+// the call finishes. Empty means the Go fallback will run. It mirrors the
+// LookPath check used in grepWithRg/globWithFd; the actual backend on
+// tool_result still wins if the fast path fails and falls back.
+func backendForTool(name string) string {
+	switch name {
+	case "grep":
+		if _, err := exec.LookPath(rgBin); err == nil {
+			return "rg"
+		}
+	case "glob":
+		if _, err := exec.LookPath(fdBin); err == nil {
+			return "fd"
+		}
+	}
+	return ""
+}
+
 // LoadBuiltins registers the named builtin tools and returns unknown names.
 func (r *Registry) LoadBuiltins(names []string) []string {
 	builtins := map[string]func() Tool{"shell": ShellTool, "web_search": WebSearchTool, "web_fetch": WebFetchTool, "AskUserQuestion": AskUserQuestionTool, "read": ReadTool, "write": WriteTool, "edit": EditTool, "glob": GlobTool, "grep": GrepTool, "todowrite": TodoWriteTool, "todoread": TodoReadTool}

@@ -208,7 +208,7 @@ type toolEventMsg struct {
 	output  string
 	id      string // tool call ID: matches rows by call, not by name
 	durMs   int64  // wall execution time on tool_result
-	backend string // serving program on tool_result (rg/fd), empty for fallback
+	backend string // predicted program on tool_start, actual on tool_result (rg/fd), empty for fallback
 	idx     int    // reasoning part index on thinking_delta (see Event.Index)
 	orMeta  *ORMeta
 }
@@ -217,7 +217,7 @@ type toolEventMsg struct {
 // rendered caches the row for renderedW: a long turn keeps every finished row
 // on screen, and re-parsing args (then re-lexing edit diffs through chroma) on
 // each stream flush would stall the UI thread once the block outgrows the
-// diff memo. The cache is dropped whenever done/output/durMs change.
+// diff memo. The cache is dropped whenever done/output/durMs/backend change.
 type pendingTool struct {
 	name      string
 	args      string
@@ -225,7 +225,7 @@ type pendingTool struct {
 	done      bool
 	id        string
 	durMs     int64
-	backend   string // serving program (rg/fd) once tool_result lands
+	backend   string // predicted serving program (rg/fd) on start, actual once tool_result lands
 	rendered  string
 	renderedW int
 	renderOK  bool

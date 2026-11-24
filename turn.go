@@ -29,8 +29,9 @@ type Event struct {
 	ID string `json:"id,omitempty"`
 	// DurMs carries wall execution time on tool_result.
 	DurMs int64 `json:"dur_ms,omitempty"`
-	// Backend carries the program that served a grep/glob call (rg/fd) on
-	// tool_result so scrollback names it; empty means the Go fallback ran.
+	// Backend carries the program behind a grep/glob call (rg/fd): on
+	// tool_start the predicted program (empty = Go fallback), on tool_result
+	// the program that actually served it, so scrollback names it.
 	Backend string `json:"backend,omitempty"`
 	// Index carries the reasoning part index on thinking_delta (Responses
 	// summary_index, messages content-block index). Fragments that share an

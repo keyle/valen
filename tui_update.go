@@ -196,7 +196,7 @@ func (m *tuiModel) submit(text string) tea.Cmd {
 			case "user_steer":
 				steers = append(steers, Steer{Text: ev.Text, Plan: cfg.Plan})
 			case "tool_start":
-				tools = append(tools, ToolRecord{ID: ev.ID, Name: ev.Text, Args: ev.Args})
+				tools = append(tools, ToolRecord{ID: ev.ID, Name: ev.Text, Args: ev.Args, Backend: ev.Backend})
 			case "tool_result":
 				for i := len(tools) - 1; i >= 0; i-- {
 					if tools[i].ID == ev.ID && tools[i].Name == ev.Text {
@@ -580,11 +580,12 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.notice = ""
 			}
 		case "tool_start":
-			m.pendingTools = append(m.pendingTools, pendingTool{name: msg.text, args: msg.args, id: msg.id})
+			m.pendingTools = append(m.pendingTools, pendingTool{name: msg.text, args: msg.args, id: msg.id, backend: msg.backend})
+			running := toolDisplayName(msg.text, msg.backend)
 			if n := m.runningToolCount(); n > 1 {
-				m.toolStatus = fmt.Sprintf("%s… · %d running", msg.text, n)
+				m.toolStatus = fmt.Sprintf("%s… · %d running", running, n)
 			} else {
-				m.toolStatus = msg.text + "…"
+				m.toolStatus = running + "…"
 			}
 		case "tool_result":
 			m.finishPendingTool(msg.id, msg.text, msg.output, msg.durMs, msg.backend)

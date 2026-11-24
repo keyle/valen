@@ -1008,7 +1008,7 @@ func chatWithAttachments(ctx context.Context, cfg Config, client *openai.Client,
 		case "thinking_delta":
 			liveThinking, liveThinkIdx = appendThinkingDelta(liveThinking, ev.Text, ev.Index, liveThinkIdx)
 		case "tool_start":
-			tools = append(tools, ToolRecord{ID: ev.ID, Name: ev.Text, Args: ev.Args})
+			tools = append(tools, ToolRecord{ID: ev.ID, Name: ev.Text, Args: ev.Args, Backend: ev.Backend})
 		case "tool_result":
 			for i := len(tools) - 1; i >= 0; i-- {
 				if tools[i].ID == ev.ID && tools[i].Name == ev.Text {
