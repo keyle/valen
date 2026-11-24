@@ -220,7 +220,11 @@ func (m *tuiModel) statusView() string {
 		if n := len(m.queued); n > 0 {
 			prog += fmt.Sprintf(" · %d queued", n)
 		}
-		left = statusBusyStyle.Render(fmt.Sprintf("%s working  %s%s  %s", m.spinner.View(), tool, prog, elapsed))
+		state := "working"
+		if m.cfg.Plan {
+			state = "planning..."
+		}
+		left = statusBusyStyle.Render(fmt.Sprintf("%s %s  %s%s  %s", m.spinner.View(), state, tool, prog, elapsed))
 	} else {
 		left = "● ready"
 		if m.lastTurnDur > 0 {
