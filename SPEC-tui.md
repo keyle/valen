@@ -20,7 +20,7 @@ in force. Everything below is additive to it.
 - In-flight requests cancelable without quitting the app.
 - Recall older turns and tool-call results, across the session and runs.
 - Friendly error presentation: one-line friendly message plus details view.
-- Monokai-dark theme across chrome and markdown.
+- Theme across chrome and markdown: `monokai` (default) is the fixed dark Monokai palette; `[tui] theme = "terminal"` defers to the terminal's own default fg + ANSI 16 colours (bright on a dark background, normal on a light one, detected via OSC 11), so a Ghostty/terminal theme file drives the hues.
 - Headless one-shot mode preserved for scripts (`-p` / non-TTY stdin).
 
 ## Non-goals
@@ -37,8 +37,8 @@ in force. Everything below is additive to it.
 - `bubbles/viewport` — scrollable transcript + recall views.
 - `bubbles/textarea` — multiline prompt input.
 - `bubbles/spinner` — working indicator while the turn runs.
-- `lipgloss` — Monokai-dark chrome (borders, padding, status).
-- `glamour` — markdown replies with a Monokai JSON style + word wrap.
+- `lipgloss` — chrome (borders, padding, status) in the selected `[tui] theme` palette (`monokai` by default, `terminal` for the terminal's ANSI palette).
+- `glamour` — markdown replies with a JSON style matching the palette (Monokai, or ANSI-only terminal styles) + word wrap.
 
 Rationale: the old tview Borland UI felt dated and its role-prefix transcript
 (`user:` / `assistant:`) read like a log, not a conversation. Bubble Tea maps
@@ -148,7 +148,7 @@ tool activity, overlay recall views — all in one `tuiModel` with async
   `[.]` in progress / `[ ]` pending / `[-]` cancelled line per item instead of
   raw JSON (every item is listed, no cap), live from the call args while running and from the stored result on
   commit — so todo progress reads in the scrollback next to thinking.
-- Replies render as markdown via glamour (Monokai style, wrapped to viewport).
+- Replies render as markdown via glamour (palette style — Monokai by default, ANSI-only for `terminal` — wrapped to viewport).
 - The committed scrollback is bounded by `[tui] max_lines` (default `1000`;
   `0` disables). Past the budget, the newest turn stays full while it fits;
   older turns collapse their reasoning to a `N chars trimmed` header, then

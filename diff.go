@@ -12,9 +12,11 @@ import (
 )
 
 // Row tints behind the syntax colors, close to Monokai's diff palette.
+// Installed from the active palette by applyTheme (terminal: no tint,
+// the terminal background shows through).
 var (
-	diffDelBg = lipgloss.Color("#3B2030")
-	diffAddBg = lipgloss.Color("#26361C")
+	diffDelBg lipgloss.TerminalColor = lipgloss.Color("#3B2030")
+	diffAddBg lipgloss.TerminalColor = lipgloss.Color("#26361C")
 )
 
 // diffStyle and the per-path lexer are hot on every live render, so resolve
@@ -52,12 +54,13 @@ func diffPath(args string) string {
 // prefix (the "… +N more" tail) render dim. The whole block is lexed at
 // once so multi-line strings and comments keep their context.
 func highlightDiffRows(path string, lines []string, w int) []string {
+	isDel := len(lines) > 0 && strings.HasPrefix(lines[0], "- ")
 	bg := diffAddBg
-	if len(lines) > 0 && strings.HasPrefix(lines[0], "- ") {
+	if isDel {
 		bg = diffDelBg
 	}
 	signFg := mkGreen
-	if bg == diffDelBg {
+	if isDel {
 		signFg = mkPink
 	}
 	var code []string
@@ -109,9 +112,10 @@ func highlightDiffRows(path string, lines []string, w int) []string {
 
 // diffRowKey identifies one highlighted diff block for the memo cache.
 type diffRowKey struct {
-	path string
-	w    int
-	body string
+	path  string
+	w     int
+	body  string
+	theme string
 }
 
 // diffRowCacheMax bounds the memo so a long session cannot grow it without
@@ -128,7 +132,7 @@ var (
 // The live transcript re-renders running edits/writes on every stream flush,
 // so without this each frame re-lexes the same diff through chroma.
 func highlightDiffRowsCached(path string, lines []string, w int) []string {
-	key := diffRowKey{path: path, w: w, body: strings.Join(lines, "\n")}
+	key := diffRowKey{path: path, w: w, body: strings.Join(lines, "\n"), theme: currentTheme}
 	diffRowMu.Lock()
 	if rows, ok := diffRows[key]; ok {
 		diffRowMu.Unlock()
@@ -152,15 +156,44 @@ func highlightDiffRowsCached(path string, lines []string, w int) []string {
 
 type styledText struct {
 	text         string
-	fg           lipgloss.Color
+	fg           lipgloss.TerminalColor
 	bold, italic bool
+}
+
+// terminalTokenColor maps a chroma token to the terminal palette's ANSI
+// colours (via the mk* palette globals, which are ANSI in terminal mode),
+// so syntax hues come from the terminal theme.
+func terminalTokenColor(tt chroma.TokenType) lipgloss.TerminalColor {
+	switch {
+	case tt.InCategory(chroma.Comment):
+		return mkComment
+	case tt.InSubCategory(chroma.NameFunction), tt.InSubCategory(chroma.NameClass), tt.InSubCategory(chroma.NameAttribute):
+		return mkGreen
+	case tt.InSubCategory(chroma.NameBuiltin), tt == chroma.KeywordType, tt.InSubCategory(chroma.NameConstant):
+		return mkCyan
+	case tt.InSubCategory(chroma.NameTag), tt == chroma.GenericDeleted:
+		return mkPink
+	case tt.InCategory(chroma.Keyword):
+		return mkPink
+	case tt.InSubCategory(chroma.LiteralString):
+		return mkYellow
+	case tt.InCategory(chroma.Literal):
+		return mkPurple
+	case tt.InCategory(chroma.Operator):
+		return mkPink
+	case tt == chroma.GenericInserted:
+		return mkGreen
+	case tt.InCategory(chroma.Generic):
+		return mkComment
+	}
+	return mkFg
 }
 
 // highlightLines lexes src by the language implied by path and returns the
 // styled runs per source line. Unknown languages come back as plain runs.
 func highlightLines(path, src string) [][]styledText {
 	lines := [][]styledText{{}}
-	add := func(text string, fg lipgloss.Color, bold, italic bool) {
+	add := func(text string, fg lipgloss.TerminalColor, bold, italic bool) {
 		parts := strings.Split(text, "\n")
 		for k, p := range parts {
 			if k > 0 {
@@ -187,7 +220,9 @@ func highlightLines(path, src string) [][]styledText {
 	for tok := it(); tok != chroma.EOF; tok = it() {
 		e := style.Get(tok.Type)
 		fg := mkFg
-		if e.Colour.IsSet() {
+		if currentTheme == "terminal" {
+			fg = terminalTokenColor(tok.Type)
+		} else if e.Colour.IsSet() {
 			fg = lipgloss.Color(e.Colour.String())
 		}
 		add(tok.Value, fg, e.Bold == chroma.Yes, e.Italic == chroma.Yes)

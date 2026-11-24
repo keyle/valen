@@ -18,78 +18,175 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
-// Monokai dark palette.
+// tuiPalette is one chrome palette. The monokai palette is the historic
+// fixed dark Monokai hex set; the terminal palette defers to the
+// terminal's own colours (default fg + ANSI 16), so a Ghostty/terminal
+// theme file drives the hues, with bright ANSI variants on a dark
+// background and normal variants on a light one (lipgloss picks via
+// HasDarkBackground, which queries the terminal with OSC 11).
+type tuiPalette struct {
+	bg, fg, comment, pink, green, greenDark, yellow, orange, purple, cyan, blueDark, border lipgloss.TerminalColor
+	diffDelBg, diffAddBg                                                                    lipgloss.TerminalColor
+}
+
+func ansiAdaptive(light, dark string) lipgloss.AdaptiveColor {
+	return lipgloss.AdaptiveColor{Light: light, Dark: dark}
+}
+
+var monokaiPalette = tuiPalette{
+	bg: lipgloss.Color("#272822"), fg: lipgloss.Color("#F8F8F2"), comment: lipgloss.Color("#75715E"),
+	pink: lipgloss.Color("#F92672"), green: lipgloss.Color("#A6E22E"), greenDark: lipgloss.Color("#4F6F0F"),
+	yellow: lipgloss.Color("#E6DB74"), orange: lipgloss.Color("#FD971F"), purple: lipgloss.Color("#AE81FF"),
+	cyan: lipgloss.Color("#66D9EF"), blueDark: lipgloss.Color("#3F6DA8"), border: lipgloss.Color("#49483E"),
+	diffDelBg: lipgloss.Color("#3B2030"), diffAddBg: lipgloss.Color("#26361C"),
+}
+
+var terminalPalette = tuiPalette{
+	bg: lipgloss.NoColor{}, fg: lipgloss.NoColor{}, comment: lipgloss.Color("8"),
+	pink: ansiAdaptive("1", "9"), green: ansiAdaptive("2", "10"), greenDark: lipgloss.Color("2"),
+	yellow: ansiAdaptive("3", "11"), orange: ansiAdaptive("3", "11"), purple: ansiAdaptive("5", "13"),
+	cyan: ansiAdaptive("6", "14"), blueDark: ansiAdaptive("4", "12"), border: lipgloss.Color("8"),
+	diffDelBg: lipgloss.NoColor{}, diffAddBg: lipgloss.NoColor{},
+}
+
+// Palette globals: rebuilt by applyTheme (called from newTUIModel, so
+// package-init values are the default monokai palette).
 var (
-	mkBg        = lipgloss.Color("#272822")
-	mkFg        = lipgloss.Color("#F8F8F2")
-	mkComment   = lipgloss.Color("#75715E")
-	mkPink      = lipgloss.Color("#F92672")
-	mkGreen     = lipgloss.Color("#A6E22E")
-	mkGreenDark = lipgloss.Color("#4F6F0F")
-	mkYellow    = lipgloss.Color("#E6DB74")
-	mkOrange    = lipgloss.Color("#FD971F")
-	mkPurple    = lipgloss.Color("#AE81FF")
-	mkCyan      = lipgloss.Color("#66D9EF")
-	mkBlueDark  = lipgloss.Color("#3F6DA8")
-	mkBorder    = lipgloss.Color("#49483E")
+	mkBg        lipgloss.TerminalColor = lipgloss.Color("#272822")
+	mkFg        lipgloss.TerminalColor = lipgloss.Color("#F8F8F2")
+	mkComment   lipgloss.TerminalColor = lipgloss.Color("#75715E")
+	mkPink      lipgloss.TerminalColor = lipgloss.Color("#F92672")
+	mkGreen     lipgloss.TerminalColor = lipgloss.Color("#A6E22E")
+	mkGreenDark lipgloss.TerminalColor = lipgloss.Color("#4F6F0F")
+	mkYellow    lipgloss.TerminalColor = lipgloss.Color("#E6DB74")
+	mkOrange    lipgloss.TerminalColor = lipgloss.Color("#FD971F")
+	mkPurple    lipgloss.TerminalColor = lipgloss.Color("#AE81FF")
+	mkCyan      lipgloss.TerminalColor = lipgloss.Color("#66D9EF")
+	mkBlueDark  lipgloss.TerminalColor = lipgloss.Color("#3F6DA8")
+	mkBorder    lipgloss.TerminalColor = lipgloss.Color("#49483E")
 )
 
-var (
+// currentTheme is the active palette name ("monokai" or "terminal"),
+// consulted by the markdown/diff renderers to pick their styles.
+var currentTheme = "monokai"
+
+// applyTheme installs the palette for theme and rebuilds every chrome
+// style from it. It runs before any widget captures the palette in
+// newTUIModel; headless mode never calls it.
+func applyTheme(theme string) {
+	p := monokaiPalette
+	if theme == "terminal" {
+		p = terminalPalette
+	} else {
+		theme = "monokai"
+	}
+	currentTheme = theme
+	mkBg, mkFg, mkComment, mkPink, mkGreen, mkGreenDark = p.bg, p.fg, p.comment, p.pink, p.green, p.greenDark
+	mkYellow, mkOrange, mkPurple, mkCyan, mkBlueDark, mkBorder = p.yellow, p.orange, p.purple, p.cyan, p.blueDark, p.border
+	diffDelBg, diffAddBg = p.diffDelBg, p.diffAddBg
+	buildStyles()
+}
+
+func buildStyles() {
 	headerTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(mkPink)
-	headerDimStyle   = lipgloss.NewStyle().Foreground(mkComment)
-	userHeaderStyle  = lipgloss.NewStyle().Bold(true).Foreground(mkOrange)
-	userBodyStyle    = lipgloss.NewStyle().Foreground(mkFg).
-				BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderForeground(mkOrange).
-				PaddingLeft(1)
-	// Plan-mode prompts wear the chatbox's cyan: header gains "(PLAN)" so a
-	// scrollback of mixed turns reads which mode each message was sent in.
+	headerDimStyle = lipgloss.NewStyle().Foreground(mkComment)
+	userHeaderStyle = lipgloss.NewStyle().Bold(true).Foreground(mkOrange)
+	userBodyStyle = lipgloss.NewStyle().Foreground(mkFg).
+		BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderForeground(mkOrange).
+		PaddingLeft(1)
 	userHeaderPlanStyle = lipgloss.NewStyle().Bold(true).Foreground(mkCyan)
-	userBodyPlanStyle   = lipgloss.NewStyle().Foreground(mkFg).
-				BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderForeground(mkCyan).
-				PaddingLeft(1)
-	// Steered and queued messages are dim: they belong to the thread but were
-	// not the turn's opening prompt.
+	userBodyPlanStyle = lipgloss.NewStyle().Foreground(mkFg).
+		BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderForeground(mkCyan).
+		PaddingLeft(1)
 	queuedHeadStyle = lipgloss.NewStyle().Italic(true).Foreground(mkComment)
 	queuedBodyStyle = lipgloss.NewStyle().Foreground(mkComment).
-			BorderStyle(lipgloss.NormalBorder()).BorderLeft(true).BorderForeground(mkBorder).
-			PaddingLeft(1)
+		BorderStyle(lipgloss.NormalBorder()).BorderLeft(true).BorderForeground(mkBorder).
+		PaddingLeft(1)
 	thinkHeaderStyle = lipgloss.NewStyle().Italic(true).Foreground(mkComment)
-	thinkBodyStyle   = lipgloss.NewStyle().Italic(true).Foreground(mkComment).
-				BorderStyle(lipgloss.NormalBorder()).BorderLeft(true).BorderForeground(mkBorder).
-				PaddingLeft(1)
+	thinkBodyStyle = lipgloss.NewStyle().Italic(true).Foreground(mkComment).
+		BorderStyle(lipgloss.NormalBorder()).BorderLeft(true).BorderForeground(mkBorder).
+		PaddingLeft(1)
 	toolLineStyle = lipgloss.NewStyle().Foreground(mkCyan).PaddingLeft(2)
-	toolRunStyle  = lipgloss.NewStyle().Foreground(mkYellow).PaddingLeft(2)
-	toolErrStyle  = lipgloss.NewStyle().Foreground(mkPink).PaddingLeft(2).Bold(true)
-	toolDimStyle  = lipgloss.NewStyle().Foreground(mkComment).PaddingLeft(2)
+	toolRunStyle = lipgloss.NewStyle().Foreground(mkYellow).PaddingLeft(2)
+	toolErrStyle = lipgloss.NewStyle().Foreground(mkPink).PaddingLeft(2).Bold(true)
+	toolDimStyle = lipgloss.NewStyle().Foreground(mkComment).PaddingLeft(2)
 	asstHeadStyle = lipgloss.NewStyle().Bold(true).Foreground(mkGreen)
 	asstBodyStyle = lipgloss.NewStyle().Foreground(mkFg).PaddingLeft(2)
 	errorTitleSty = lipgloss.NewStyle().Bold(true).Foreground(mkPink).
-			BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderForeground(mkPink).
-			PaddingLeft(1)
-	metaStyle       = lipgloss.NewStyle().Foreground(mkComment)
+		BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderForeground(mkPink).
+		PaddingLeft(1)
+	metaStyle = lipgloss.NewStyle().Foreground(mkComment)
 	statusIdleStyle = lipgloss.NewStyle().Foreground(mkGreen)
 	statusBusyStyle = lipgloss.NewStyle().Foreground(mkOrange)
-	noticeStyle     = lipgloss.NewStyle().Foreground(mkYellow)
-	errNoticeStyle  = lipgloss.NewStyle().Foreground(mkPink)
-	footerStyle     = lipgloss.NewStyle().Foreground(mkComment)
-	// Question overlay selection: light text on a darker green — the old
-	// dark-on-bright-green block glared at small sizes.
-	selectedStyle = lipgloss.NewStyle().Foreground(mkFg).Background(mkGreenDark).Bold(true).Padding(0, 1)
+	noticeStyle = lipgloss.NewStyle().Foreground(mkYellow)
+	errNoticeStyle = lipgloss.NewStyle().Foreground(mkPink)
+	footerStyle = lipgloss.NewStyle().Foreground(mkComment)
+	if currentTheme == "terminal" {
+		// Reverse swaps the terminal's own fg/bg, so the selection
+		// always contrasts with the surrounding background.
+		selectedStyle = lipgloss.NewStyle().Reverse(true).Bold(true).Padding(0, 1)
+	} else {
+		selectedStyle = lipgloss.NewStyle().Foreground(mkFg).Background(mkGreenDark).Bold(true).Padding(0, 1)
+	}
 	// Confirmation hint: bold green like the ready status, so the waiting
 	// state is obvious at a glance.
 	confirmHintStyle = lipgloss.NewStyle().Foreground(mkGreen).Bold(true)
-	// Thinking highlights above the question overlay: bright white, readable
+	// Thinking highlights above the question overlay: bright, readable
 	// at a glance (unlike the dim italic transcript thinking).
 	askThinkStyle = lipgloss.NewStyle().Foreground(mkFg).Bold(true)
 	// Favourite marker in the model picker: warm yellow, like a lit star.
 	favStyle = lipgloss.NewStyle().Foreground(mkYellow).Bold(true)
 	// Subject of an access prompt (folder / command): bold yellow.
 	accessSubjectStyle = lipgloss.NewStyle().Foreground(mkYellow).Bold(true)
-	// Model name in picker rows: bright and bold so it reads first while the
-	// provider prefix stays dim.
+	// Model name in picker rows: bright and bold so it reads first while
+	// the provider prefix stays dim.
 	modelNameStyle = lipgloss.NewStyle().Foreground(mkFg).Bold(true)
-	emptyStyle     = lipgloss.NewStyle().Foreground(mkComment).Padding(1, 2)
+	emptyStyle = lipgloss.NewStyle().Foreground(mkComment).Padding(1, 2)
+	helpKeyStyle = lipgloss.NewStyle().Foreground(mkCyan).Bold(true)
+	copyStyle = lipgloss.NewStyle().Foreground(mkComment).Underline(true)
+}
+
+// Chrome styles, rebuilt by buildStyles from the active palette.
+// Plan-mode prompts wear the chatbox's cyan: header gains "(PLAN)" so a
+// scrollback of mixed turns reads which mode each message was sent in.
+// Steered and queued messages are dim: they belong to the thread but were
+// not the turn's opening prompt. Question overlay selection is light
+// text on a darker green in monokai (the old dark-on-bright-green block
+// glared at small sizes), reversed terminal fg/bg in terminal.
+var (
+	headerTitleStyle    lipgloss.Style
+	headerDimStyle      lipgloss.Style
+	userHeaderStyle     lipgloss.Style
+	userBodyStyle       lipgloss.Style
+	userHeaderPlanStyle lipgloss.Style
+	userBodyPlanStyle   lipgloss.Style
+	queuedHeadStyle     lipgloss.Style
+	queuedBodyStyle     lipgloss.Style
+	thinkHeaderStyle    lipgloss.Style
+	thinkBodyStyle      lipgloss.Style
+	toolLineStyle       lipgloss.Style
+	toolRunStyle        lipgloss.Style
+	toolErrStyle        lipgloss.Style
+	toolDimStyle        lipgloss.Style
+	asstHeadStyle       lipgloss.Style
+	asstBodyStyle       lipgloss.Style
+	errorTitleSty       lipgloss.Style
+	metaStyle           lipgloss.Style
+	statusIdleStyle     lipgloss.Style
+	statusBusyStyle     lipgloss.Style
+	noticeStyle         lipgloss.Style
+	errNoticeStyle      lipgloss.Style
+	footerStyle         lipgloss.Style
+	selectedStyle       lipgloss.Style
+	confirmHintStyle    lipgloss.Style
+	askThinkStyle       lipgloss.Style
+	favStyle            lipgloss.Style
+	accessSubjectStyle  lipgloss.Style
+	modelNameStyle      lipgloss.Style
+	emptyStyle          lipgloss.Style
 )
+
+func init() { applyTheme("monokai") }
 
 // monokaiGlamour is a glamour JSON style approximating Monokai Pro.
 const monokaiGlamour = `{
@@ -145,6 +242,138 @@ const monokaiGlamour = `{
       "generic_strong": {"bold": true},
       "generic_subheading": {"color": "#75715E"},
       "background": {"background_color": "#272822"}
+    }
+  },
+  "table": {},
+  "definition_list": {},
+  "definition_term": {},
+  "definition_description": {"block_prefix": "\n🠶 "},
+  "html_block": {},
+  "html_span": {}
+}`
+
+// terminalDarkGlamour / terminalLightGlamour are glamour styles for the
+// terminal palette: no fixed fg/bg (the terminal's own fg/bg show
+// through) and only ANSI 16 colours, bright on dark / normal on light,
+// so a terminal theme file supplies the actual hues. Chroma only accepts
+// hex colours, so code-block tokens use the xterm hex equivalents of
+// those ANSI colours (bright on dark, dark on light).
+const terminalDarkGlamour = `{
+  "document": {"block_prefix": "\n", "block_suffix": "\n", "margin": 2},
+  "block_quote": {"indent": 1, "indent_token": "│ "},
+  "paragraph": {},
+  "list": {"level_indent": 2},
+  "heading": {"block_suffix": "\n", "color": "10", "bold": true},
+  "h1": {"prefix": " ", "suffix": " ", "color": "10", "bold": true},
+  "h2": {"prefix": "## ", "color": "9"},
+  "h3": {"prefix": "### ", "color": "14"},
+  "h4": {"prefix": "#### ", "color": "13"},
+  "h5": {"prefix": "##### ", "color": "11"},
+  "h6": {"prefix": "###### ", "color": "8", "bold": false},
+  "text": {},
+  "strikethrough": {"crossed_out": true},
+  "emph": {"italic": true},
+  "strong": {"bold": true},
+  "hr": {"color": "8", "format": "\n--------\n"},
+  "item": {"block_prefix": "• "},
+  "enumeration": {"block_prefix": ". "},
+  "task": {"ticked": "[✓] ", "unticked": "[ ] "},
+  "link": {"color": "14", "underline": true},
+  "link_text": {"color": "14", "bold": true},
+  "image": {"color": "13", "underline": true},
+  "image_text": {"color": "8", "format": "Image: {{.text}} →"},
+  "code": {"prefix": " ", "suffix": " ", "color": "11"},
+  "code_block": {
+    "margin": 2,
+    "chroma": {
+      "text": {},
+      "error": {"color": "#ff0000"},
+      "comment": {"color": "#808080"},
+      "comment_preproc": {"color": "#ffff00"},
+      "keyword": {"color": "#ff0000"},
+      "keyword_reserved": {"color": "#ff0000"},
+      "keyword_namespace": {"color": "#ff0000"},
+      "keyword_type": {"color": "#00ffff"},
+      "operator": {"color": "#ff0000"},
+      "punctuation": {},
+      "name": {},
+      "name_builtin": {"color": "#00ffff"},
+      "name_tag": {"color": "#ff0000"},
+      "name_attribute": {"color": "#00ff00"},
+      "name_class": {"color": "#00ff00", "underline": true, "bold": true},
+      "name_function": {"color": "#00ff00"},
+      "literal_number": {"color": "#ff00ff"},
+      "literal_string": {"color": "#ffff00"},
+      "literal_string_escape": {"color": "#ffff00"},
+      "generic_deleted": {"color": "#ff0000"},
+      "generic_emph": {"italic": true},
+      "generic_inserted": {"color": "#00ff00"},
+      "generic_strong": {"bold": true},
+      "generic_subheading": {"color": "#808080"},
+      "background": {}
+    }
+  },
+  "table": {},
+  "definition_list": {},
+  "definition_term": {},
+  "definition_description": {"block_prefix": "\n🠶 "},
+  "html_block": {},
+  "html_span": {}
+}`
+
+const terminalLightGlamour = `{
+  "document": {"block_prefix": "\n", "block_suffix": "\n", "margin": 2},
+  "block_quote": {"indent": 1, "indent_token": "│ "},
+  "paragraph": {},
+  "list": {"level_indent": 2},
+  "heading": {"block_suffix": "\n", "color": "2", "bold": true},
+  "h1": {"prefix": " ", "suffix": " ", "color": "2", "bold": true},
+  "h2": {"prefix": "## ", "color": "1"},
+  "h3": {"prefix": "### ", "color": "6"},
+  "h4": {"prefix": "#### ", "color": "5"},
+  "h5": {"prefix": "##### ", "color": "3"},
+  "h6": {"prefix": "###### ", "color": "8", "bold": false},
+  "text": {},
+  "strikethrough": {"crossed_out": true},
+  "emph": {"italic": true},
+  "strong": {"bold": true},
+  "hr": {"color": "8", "format": "\n--------\n"},
+  "item": {"block_prefix": "• "},
+  "enumeration": {"block_prefix": ". "},
+  "task": {"ticked": "[✓] ", "unticked": "[ ] "},
+  "link": {"color": "6", "underline": true},
+  "link_text": {"color": "6", "bold": true},
+  "image": {"color": "5", "underline": true},
+  "image_text": {"color": "8", "format": "Image: {{.text}} →"},
+  "code": {"prefix": " ", "suffix": " ", "color": "3"},
+  "code_block": {
+    "margin": 2,
+    "chroma": {
+      "text": {},
+      "error": {"color": "#800000"},
+      "comment": {"color": "#808080"},
+      "comment_preproc": {"color": "#808000"},
+      "keyword": {"color": "#800000"},
+      "keyword_reserved": {"color": "#800000"},
+      "keyword_namespace": {"color": "#800000"},
+      "keyword_type": {"color": "#008080"},
+      "operator": {"color": "#800000"},
+      "punctuation": {},
+      "name": {},
+      "name_builtin": {"color": "#008080"},
+      "name_tag": {"color": "#800000"},
+      "name_attribute": {"color": "#008000"},
+      "name_class": {"color": "#008000", "underline": true, "bold": true},
+      "name_function": {"color": "#008000"},
+      "literal_number": {"color": "#800080"},
+      "literal_string": {"color": "#808000"},
+      "literal_string_escape": {"color": "#808000"},
+      "generic_deleted": {"color": "#800000"},
+      "generic_emph": {"italic": true},
+      "generic_inserted": {"color": "#008000"},
+      "generic_strong": {"bold": true},
+      "generic_subheading": {"color": "#808080"},
+      "background": {}
     }
   },
   "table": {},
@@ -529,6 +758,7 @@ type tuiModel struct {
 
 	glam      *glamour.TermRenderer
 	glamWidth int
+	glamTheme string // theme+darkness the cached glam renderer was built for
 	done      chan struct{}
 }
 
@@ -546,6 +776,8 @@ func inputPlaceholder(plan, busy bool) string {
 }
 
 func newTUIModel(cfg Config, client *openai.Client, registry *Registry, session *Session) *tuiModel {
+	// Install the palette before any input/spinner style captures it.
+	applyTheme(tuiTheme(cfg))
 	ta := textarea.New()
 	ta.Placeholder = inputPlaceholder(cfg.Plan, false)
 	ta.ShowLineNumbers = false

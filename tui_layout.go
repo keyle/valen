@@ -150,20 +150,41 @@ func (m *tuiModel) viewWidth() int {
 	return 80
 }
 
+// glamourStyle picks the markdown style for the active theme: monokai
+// is fixed; terminal defers to the terminal's fg/bg and ANSI colours,
+// bright on a dark background, normal on a light one.
+func glamourStyle() string {
+	if currentTheme != "terminal" {
+		return monokaiGlamour
+	}
+	if lipgloss.HasDarkBackground() {
+		return terminalDarkGlamour
+	}
+	return terminalLightGlamour
+}
+
 func (m *tuiModel) markdownRenderer() *glamour.TermRenderer {
 	w := m.viewWidth() - 6
 	if w < 40 {
 		w = 40
 	}
-	if m.glam != nil && m.glamWidth == w {
+	theme := currentTheme
+	if theme == "terminal" {
+		theme += "/dark"
+		if !lipgloss.HasDarkBackground() {
+			theme = "terminal/light"
+		}
+	}
+	if m.glam != nil && m.glamWidth == w && m.glamTheme == theme {
 		return m.glam
 	}
-	r, err := glamour.NewTermRenderer(glamour.WithStylesFromJSONBytes([]byte(monokaiGlamour)), glamour.WithWordWrap(w))
+	r, err := glamour.NewTermRenderer(glamour.WithStylesFromJSONBytes([]byte(glamourStyle())), glamour.WithWordWrap(w))
 	if err != nil {
 		return nil
 	}
 	m.glam = r
 	m.glamWidth = w
+	m.glamTheme = theme
 	return r
 }
 

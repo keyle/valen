@@ -145,9 +145,14 @@ type CompactionConfig struct {
 // turns collapse their reasoning (prompts, tool lines and replies stay
 // whole) and, if needed, the oldest turns drop from scrollback. History on
 // disk stays lossless and the recall views still expand everything.
+// Theme selects the colour palette: "monokai" (default, the historic
+// fixed dark Monokai chrome/markdown) or "terminal" (the terminal's own
+// default fg + ANSI 16 colours, so a Ghostty/terminal theme file drives
+// the hues; bright variants on a dark background, normal on a light one).
 type TUIConfig struct {
-	MaxLines *int  `toml:"max_lines"`
-	Sound    *bool `toml:"sound"`
+	Theme    string `toml:"theme"`
+	MaxLines *int   `toml:"max_lines"`
+	Sound    *bool  `toml:"sound"`
 	// BellLimitSeconds bounds the unattended repeat window, default 600.
 	// BellSpacingSeconds is the gap between repeats, default 20. <= 0 keeps
 	// the default.
@@ -156,6 +161,23 @@ type TUIConfig struct {
 	// SelectScrollMs paces the drag auto-scroll: one viewport line per
 	// interval. <= 0 means the 50ms default.
 	SelectScrollMs int `toml:"select_scroll_ms"`
+}
+
+// tuiTheme is the canonical [tui] theme: empty means the default monokai.
+func tuiTheme(cfg Config) string {
+	switch strings.ToLower(strings.TrimSpace(cfg.TUI.Theme)) {
+	case "terminal":
+		return "terminal"
+	}
+	return "monokai"
+}
+
+func validTUITheme(theme string) bool {
+	switch strings.ToLower(strings.TrimSpace(theme)) {
+	case "", "monokai", "terminal":
+		return true
+	}
+	return false
 }
 
 // savedSessions is the saved-session budget per project folder, default 250.
@@ -300,6 +322,10 @@ func loadConfig(path string) (Config, error) {
 	if err := validateModelID(cfg.Model); err != nil {
 		return cfg, err
 	}
+	if !validTUITheme(cfg.TUI.Theme) {
+		return cfg, fmt.Errorf("tui theme %q is not valid (try: monokai, terminal)", cfg.TUI.Theme)
+	}
+	cfg.TUI.Theme = tuiTheme(cfg)
 	cfg.Thinking = strings.ToLower(strings.TrimSpace(cfg.Thinking))
 	if !validThinkingLevel(cfg.Model, cfg.Thinking) {
 		return cfg, fmt.Errorf("thinking %q is not available for model %q (try: %s)", cfg.Thinking, cfg.Model, strings.Join(AvailableThinkingLevels(cfg.Model), ", "))
