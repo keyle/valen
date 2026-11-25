@@ -35,6 +35,10 @@ func (m *tuiModel) isPickerMode() bool {
 // maxInputHeight caps how far the chatbox grows with its content.
 const maxInputHeight = 10
 
+// inputTailRows is the number of blank rows kept below the text, so the box
+// starts growing two lines before the bottom instead of at the last line.
+const inputTailRows = 2
+
 // inputRows counts the visual rows the chatbox text occupies at the current
 // textarea width, soft wraps included (minimum 1).
 func (m *tuiModel) inputRows() int {
@@ -93,9 +97,10 @@ func wrapInputLine(runes []rune, width int) [][]rune {
 }
 
 // syncInputHeight grows the chatbox with its content, from the configured
-// height up to maxInputHeight, and resizes the scrollback to match.
+// height up to maxInputHeight, keeping inputTailRows blank rows below the
+// text, and resizes the scrollback to match.
 func (m *tuiModel) syncInputHeight() {
-	h := m.inputRows()
+	h := m.inputRows() + inputTailRows
 	if h > maxInputHeight {
 		h = maxInputHeight
 	}

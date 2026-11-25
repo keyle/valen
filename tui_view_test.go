@@ -305,6 +305,11 @@ func TestTUIChatboxGrowsWithContent(t *testing.T) {
 	if m.input.Height() != base || m.viewport.Height != vp {
 		t.Fatalf("clearing must restore: input=%d vp=%d", m.input.Height(), m.viewport.Height)
 	}
+	m.input.SetValue("one\ntwo")
+	_, _ = m.Update(nil)
+	if got, want := m.input.Height(), m.inputRows()+inputTailRows; got != want {
+		t.Fatalf("height=%d want rows+tail %d (2 blank rows below text)", got, want)
+	}
 	m.input.SetValue(strings.Repeat("word ", 100))
 	_, _ = m.Update(nil)
 	if h := m.input.Height(); h <= base || h > maxInputHeight {
