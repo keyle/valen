@@ -211,7 +211,7 @@ func (m *tuiModel) statusView() string {
 		elapsed := m.turnElapsed().Round(time.Second)
 		tool := m.toolStatus
 		if tool == "" {
-			tool = "Working…"
+			tool = "working:"
 		}
 		prog := ""
 		if m.roundCur > 0 && m.roundMax > 0 {
@@ -220,9 +220,9 @@ func (m *tuiModel) statusView() string {
 		if n := len(m.queued); n > 0 {
 			prog += fmt.Sprintf(" · %d queued", n)
 		}
-		state := "working"
+		state := "working:"
 		if m.cfg.Plan {
-			state = "planning..."
+			state = "planning:"
 		}
 		left = statusBusyStyle.Render(fmt.Sprintf("%s %s  %s%s  %s", m.spinner.View(), state, tool, prog, elapsed))
 	} else {

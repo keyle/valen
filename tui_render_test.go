@@ -425,7 +425,7 @@ func TestPendingThinkingHeaderBeforeText(t *testing.T) {
 		t.Fatalf("scrollback must not repeat the live status or cancel hint:\n%s", out)
 	}
 	status := m.statusView()
-	if !strings.Contains(status, "Working…") {
+	if !strings.Contains(status, "working:") {
 		t.Fatalf("spinner row must carry the live status:\n%s", status)
 	}
 	if !strings.Contains(status, "esc to stop") {
