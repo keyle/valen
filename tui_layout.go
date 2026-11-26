@@ -171,7 +171,7 @@ func glamourStyle() string {
 }
 
 func (m *tuiModel) markdownRenderer() *glamour.TermRenderer {
-	w := m.viewWidth() - 6
+	w := m.contentWidth() - 2
 	if w < 40 {
 		w = 40
 	}
@@ -206,11 +206,12 @@ func (m *tuiModel) renderMarkdown(s string) string {
 	if r == nil {
 		return s
 	}
-	out, err := r.Render(s)
+	out, err := r.Render(renderMath(normalizeLiteralBullets(s)))
 	if err != nil {
 		return s
 	}
-	return strings.TrimSpace(out)
+	out = strings.Trim(out, "\n")
+	return indentListContinuations(out, m.glamWidth)
 }
 
 // fencedBlock is one ``` fenced code block extracted before glamour runs.
@@ -387,6 +388,7 @@ func spliceCodeBlocks(rendered string, blocks []fencedBlock) string {
 // blocks, whose glamour style carries no colours) renders as before.
 func (m *tuiModel) renderMarkdownTerminal(s string) string {
 	stripped, blocks := extractFencedBlocks(s)
+	stripped = renderMath(normalizeLiteralBullets(stripped))
 	r := m.markdownRenderer()
 	if r == nil {
 		return s
@@ -395,11 +397,145 @@ func (m *tuiModel) renderMarkdownTerminal(s string) string {
 	if err != nil {
 		return s
 	}
-	out = strings.TrimSpace(out)
+	out = strings.Trim(out, "\n")
 	if len(blocks) > 0 {
 		out = spliceCodeBlocks(out, blocks)
 	}
-	return strings.TrimSpace(out)
+	out = indentListContinuations(out, m.glamWidth)
+	return strings.Trim(out, "\n")
+}
+
+// listItemCtx is one glamour list item still accepting wrapped continuation
+// lines: its base indent (spaces before the marker) and marker display width.
+type listItemCtx struct {
+	indent int
+	marker int
+}
+
+// parseListMarker reports whether a stripped glamour line starts a list item
+// ("• ", "[✓] "/"[ ] ", or "N. ") and its base indent / marker width.
+func parseListMarker(plain string) (listItemCtx, bool) {
+	indent := 0
+	for indent < len(plain) && plain[indent] == ' ' {
+		indent++
+	}
+	rest := plain[indent:]
+	switch {
+	case strings.HasPrefix(rest, "• "):
+		return listItemCtx{indent, 2}, true
+	case strings.HasPrefix(rest, "[✓] ") || strings.HasPrefix(rest, "[ ] "):
+		return listItemCtx{indent, 4}, true
+	case len(rest) > 2 && rest[0] >= '0' && rest[0] <= '9':
+		i := 0
+		for i < len(rest) && rest[i] >= '0' && rest[i] <= '9' {
+			i++
+		}
+		if i+1 < len(rest) && rest[i] == '.' && rest[i+1] == ' ' {
+			return listItemCtx{indent, i + 2}, true
+		}
+	}
+	return listItemCtx{}, false
+}
+
+// indentListContinuations gives glamour list items a hanging indent: wrapped
+// continuation lines get markerWidth extra spaces so they align under the
+// item text instead of the bullet. Lines that would overflow width are
+// re-wrapped within it. Blank lines end the item; code blocks (which glamour
+// and spliceCodeBlocks set off with blank lines) are never inside a context.
+func indentListContinuations(rendered string, width int) string {
+	lines := strings.Split(rendered, "\n")
+	out := make([]string, 0, len(lines))
+	var cur *listItemCtx
+	for _, line := range lines {
+		plain := ansi.Strip(line)
+		if strings.TrimSpace(plain) == "" {
+			out = append(out, line)
+			cur = nil
+			continue
+		}
+		if ctx, ok := parseListMarker(plain); ok {
+			c := ctx
+			cur = &c
+			out = append(out, line)
+			continue
+		}
+		if cur == nil {
+			out = append(out, line)
+			continue
+		}
+		// Continuation belongs to cur: a block quote, rule or heading
+		// interrupts the item.
+		if strings.Contains(plain, "│") || strings.HasPrefix(strings.TrimSpace(plain), "--------") {
+			cur = nil
+			out = append(out, line)
+			continue
+		}
+		gutter := strings.Repeat(" ", cur.marker)
+		newLine := gutter + line
+		if width > 0 && ansi.StringWidth(newLine) > width {
+			limit := width - cur.indent - cur.marker
+			content := strings.TrimLeft(newLine, " ")
+			if limit > 0 && content != "" {
+				wrapped := ansi.Wrap(content, limit, " ")
+				parts := strings.Split(wrapped, "\n")
+				for i, p := range parts {
+					parts[i] = gutter + strings.Repeat(" ", cur.indent) + p
+				}
+				out = append(out, strings.Join(parts, "\n"))
+				continue
+			}
+		}
+		out = append(out, newLine)
+	}
+	return strings.Join(out, "\n")
+}
+
+// normalizeLiteralBullets rewrites line-leading literal bullet characters
+// ("• ", "◦ ", "▪ ") to markdown list markers ("- "). Models often emit
+// literal bullets, which goldmark reads as one flowing paragraph (the next
+// bullet lands mid-line at the wrap point); a real list lets glamour give
+// every item its own line and the hanging indent below its wrapped text.
+// Fenced code and indented code (4+ spaces) are left untouched.
+func normalizeLiteralBullets(src string) string {
+	if !strings.ContainsAny(src, "•◦▪") {
+		return src
+	}
+	lines := strings.Split(src, "\n")
+	inFence := ""
+	for i, line := range lines {
+		trim := strings.TrimSpace(line)
+		if inFence != "" {
+			if strings.HasPrefix(trim, inFence) {
+				inFence = ""
+			}
+			continue
+		}
+		if strings.HasPrefix(trim, "```") || strings.HasPrefix(trim, "~~~") {
+			inFence = trim[:3]
+			continue
+		}
+		lines[i] = bulletLine(line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// bulletLine converts one line's leading literal bullet to "- ", preserving
+// up to three columns of indent (CommonMark list indentation).
+func bulletLine(line string) string {
+	j := 0
+	for j < len(line) && line[j] == ' ' {
+		j++
+	}
+	if j > 3 {
+		return line
+	}
+	rest := line[j:]
+	for _, bullet := range []string{"• ", "◦ ", "▪ "} {
+		if strings.HasPrefix(rest, bullet) {
+			return line[:j] + "- " + rest[len(bullet):]
+		}
+	}
+	return line
 }
 
 func truncatePlain(s string, n int) string {

@@ -301,7 +301,7 @@ func (m *tuiModel) renderTurnMode(t *Turn, w int, compact bool) string {
 
 	if t.Reply != "" {
 		aHead := asstHeadStyle.Render(" ✦ " + m.cfg.Model)
-		aBody := asstBodyStyle.Width(bodyW).Render(breakLongWords(m.renderMarkdown(t.Reply), bodyW-1))
+		aBody := asstBodyStyle.Width(bodyW).Render(breakLongWords(m.renderMarkdown(t.Reply), bodyW-2))
 		parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, aHead, "", aBody))
 	}
 
