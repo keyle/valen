@@ -225,6 +225,7 @@ func splitResponsesInputNative(history []openai.ChatCompletionMessage, native ma
 
 func parseResponsesError(status int, body []byte) *transportError {
 	te := responsesErrorDetail(status, body)
+	fillRateLimitFromBody(te, body)
 	if responsesOutputLimited(body) {
 		te.Cause = errOutputLimit
 	}
@@ -334,7 +335,7 @@ func callResponsesOnce(ctx context.Context, hc *http.Client, cfg Config, apiKey 
 		return out, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return out, parseResponsesError(resp.StatusCode, raw)
+		return out, withRateLimit(parseResponsesError(resp.StatusCode, raw), resp.Header)
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return out, fmt.Errorf("api: responses: decode: %w", err)
@@ -483,7 +484,7 @@ func responsesRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string
 		if err != nil {
 			return openai.ChatCompletionMessage{}, usage, nil, err
 		}
-		return openai.ChatCompletionMessage{}, usage, nil, parseResponsesError(resp.StatusCode, raw)
+		return openai.ChatCompletionMessage{}, usage, nil, withRateLimit(parseResponsesError(resp.StatusCode, raw), resp.Header)
 	}
 	sse, raw, err := splitBodyMode(br)
 	if err != nil {

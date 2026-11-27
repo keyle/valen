@@ -60,7 +60,7 @@ func fetchOpenRouterCatalog(ctx context.Context, hc *http.Client, baseURL, apiKe
 		return nil, nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, parseTransportError("openrouter", resp.StatusCode, raw)
+		return nil, nil, withRateLimit(parseTransportError("openrouter", resp.StatusCode, raw), resp.Header)
 	}
 	var list struct {
 		Data []struct {
@@ -124,7 +124,7 @@ func fetchZenModels(ctx context.Context, hc *http.Client, baseURL, apiKey string
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, parseTransportError("zen", resp.StatusCode, raw)
+		return nil, withRateLimit(parseTransportError("zen", resp.StatusCode, raw), resp.Header)
 	}
 	var list struct {
 		Data []struct {
@@ -172,7 +172,7 @@ func fetchOpenAIModels(ctx context.Context, hc *http.Client, baseURL, apiKey str
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, parseTransportError("openai", resp.StatusCode, raw)
+		return nil, withRateLimit(parseTransportError("openai", resp.StatusCode, raw), resp.Header)
 	}
 	var list struct {
 		Data []struct {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -198,5 +200,46 @@ func TestEmptyToolOutputSentAsText(t *testing.T) {
 	out := chatSendMessages([]openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleTool, ToolCallID: "x", Content: ""}})
 	if out[0].Content == "" {
 		t.Fatal("empty tool output must be non-empty on the wire")
+	}
+}
+
+func TestRateLimitBodyHonoured(t *testing.T) {
+	body := []byte(`{"error":{"message":"Provider returned error","code":429,"metadata":{"provider_name":"BaseTen","limit_source":"upstream_provider_shared_pool","retry_after_seconds":5}}}`)
+	te := parseTransportError("openrouter", 429, body)
+	if te.RetryAfter != 5*time.Second || te.Provider != "BaseTen" || te.Upstream != "upstream_provider_shared_pool" {
+		t.Fatalf("te=%+v", te)
+	}
+	if got := roundRetryDelayFor(0, te); got != 5*time.Second {
+		t.Fatalf("delay=%s, want 5s hint", got)
+	}
+	fe := friendlyError(te)
+	if !strings.Contains(fe.Title, "BaseTen") || !strings.Contains(fe.Title, "5s") {
+		t.Fatalf("title=%q", fe.Title)
+	}
+	if !strings.Contains(fe.Details, "BaseTen upstream") || !strings.Contains(fe.Details, "upstream_provider_shared_pool") {
+		t.Fatalf("details=%q", fe.Details)
+	}
+}
+
+func TestRateLimitHeadersHonoured(t *testing.T) {
+	h := http.Header{}
+	h.Set("Retry-After", "7")
+	h.Set("X-RateLimit-Limit", "20")
+	h.Set("X-RateLimit-Remaining", "0")
+	h.Set("X-RateLimit-Reset", fmt.Sprintf("%d", time.Now().Add(10*time.Second).UnixMilli()))
+	te := withRateLimit(&transportError{Transport: "openrouter", Status: 429, Message: "slow down"}, h)
+	if te.RateLimitLimit != 20 || te.RateLimitRemaining != 0 || te.RateLimitResetMs == 0 {
+		t.Fatalf("te=%+v", te)
+	}
+	if te.RetryAfter != 7*time.Second {
+		t.Fatalf("retryAfter=%s, want 7s", te.RetryAfter)
+	}
+	noteRateLimit(h, "example.test")
+	rateMu.Lock()
+	st := rateStates["example.test"]
+	delete(rateStates, "example.test")
+	rateMu.Unlock()
+	if st.blockedUntil.IsZero() {
+		t.Fatal("pacing should block after a 429 hint")
 	}
 }

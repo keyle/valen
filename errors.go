@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -73,8 +75,28 @@ func friendlyError(err error) FriendlyError {
 		// provider body follows so ctrl+x shows the full JSON, not just
 		// the extracted message.
 		fe.Details = fmt.Sprintf("%s HTTP %d: %s", te.Transport, te.Status, te.Message)
+		if te.Provider != "" {
+			fe.Details += fmt.Sprintf(" (%s upstream)", te.Provider)
+		}
+		if te.Upstream != "" {
+			fe.Details += fmt.Sprintf(" [%s]", te.Upstream)
+		}
+		if te.RetryAfter > 0 {
+			fe.Details += fmt.Sprintf(" Retry after %s.", te.RetryAfter.Round(100*time.Millisecond))
+		}
 		if raw := strings.TrimSpace(te.Raw); raw != "" {
 			fe.Details += "\n\nRaw response:\n" + raw
+		}
+		if te.Status == http.StatusTooManyRequests {
+			wait := ""
+			if te.RetryAfter > 0 {
+				wait = fmt.Sprintf(" (retry after %s)", te.RetryAfter.Round(100*time.Millisecond))
+			}
+			if te.Provider != "" {
+				fe.Title = fmt.Sprintf("Rate limited by %s%s. Waiting and retrying — your prompt is kept.", te.Provider, wait)
+			} else {
+				fe.Title = "Rate limited" + wait + ". Waiting and retrying — your prompt is kept."
+			}
 		}
 		if te.Transport == "openrouter" {
 			switch te.Status {

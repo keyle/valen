@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -36,6 +37,19 @@ type transportError struct {
 	Message   string
 	Raw       string
 	Cause     error // optional sentinel, e.g. errOutputLimit
+	// RetryAfter is the provider's wait hint (HTTP Retry-After or OpenRouter
+	// error.metadata.retry_after_seconds) for 429s. Zero means no hint.
+	RetryAfter time.Duration
+	// Provider names the upstream provider when OpenRouter reports an
+	// upstream limit, e.g. BaseTen for a shared-pool 429.
+	Provider string
+	// Upstream reports the 429 source, e.g. upstream_provider_shared_pool
+	// for a provider-pool limit (as opposed to an OpenRouter platform limit).
+	Upstream string
+	// RateLimit holds the X-RateLimit-* platform headers when present.
+	RateLimitLimit     int
+	RateLimitRemaining int
+	RateLimitResetMs   int64 // epoch milliseconds
 }
 
 func (e *transportError) Error() string {
@@ -351,7 +365,9 @@ func parseMessagesError(status int, body []byte) *transportError {
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(body, &anth); err == nil && anth.Error.Message != "" {
-		return &transportError{Transport: "messages", Status: status, Message: anth.Error.Message, Raw: rawDiff(raw, anth.Error.Message)}
+		te := &transportError{Transport: "messages", Status: status, Message: anth.Error.Message, Raw: rawDiff(raw, anth.Error.Message)}
+		fillRateLimitFromBody(te, body)
+		return te
 	}
 	var oa struct {
 		Error struct {
@@ -360,7 +376,9 @@ func parseMessagesError(status int, body []byte) *transportError {
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(body, &oa); err == nil && oa.Error.Message != "" {
-		return &transportError{Transport: "messages", Status: status, Message: oa.Error.Message, Raw: rawDiff(raw, oa.Error.Message)}
+		te := &transportError{Transport: "messages", Status: status, Message: oa.Error.Message, Raw: rawDiff(raw, oa.Error.Message)}
+		fillRateLimitFromBody(te, body)
+		return te
 	}
 	msg := strings.TrimSpace(string(body))
 	if len(msg) > 500 {
@@ -369,7 +387,9 @@ func parseMessagesError(status int, body []byte) *transportError {
 	if msg == "" {
 		msg = http.StatusText(status)
 	}
-	return &transportError{Transport: "messages", Status: status, Message: msg, Raw: rawDiff(raw, msg)}
+	te := &transportError{Transport: "messages", Status: status, Message: msg, Raw: rawDiff(raw, msg)}
+	fillRateLimitFromBody(te, body)
+	return te
 }
 
 func callMessagesOnce(ctx context.Context, hc *http.Client, cfg Config, apiKey string, req messagesRequest) (messagesResponse, error) {
@@ -406,7 +426,7 @@ func callMessagesOnce(ctx context.Context, hc *http.Client, cfg Config, apiKey s
 		return out, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return out, parseMessagesError(resp.StatusCode, raw)
+		return out, withRateLimit(parseMessagesError(resp.StatusCode, raw), resp.Header)
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return out, fmt.Errorf("api: messages: decode: %w", err)
@@ -554,7 +574,7 @@ func messagesRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string,
 		if err != nil {
 			return openai.ChatCompletionMessage{}, usage, nil, err
 		}
-		return openai.ChatCompletionMessage{}, usage, nil, parseMessagesError(resp.StatusCode, raw)
+		return openai.ChatCompletionMessage{}, usage, nil, withRateLimit(parseMessagesError(resp.StatusCode, raw), resp.Header)
 	}
 	sse, raw, err := splitBodyMode(br)
 	if err != nil {

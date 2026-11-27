@@ -276,7 +276,7 @@ func chatRoundOnceDetailed(ctx context.Context, cfg Config, apiKey string, hc *h
 		return openai.ChatCompletionMessage{}, usage, nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return openai.ChatCompletionMessage{}, usage, nil, parseTransportError(chatTransportLabel(cfg), resp.StatusCode, raw)
+		return openai.ChatCompletionMessage{}, usage, nil, withRateLimit(parseTransportError(chatTransportLabel(cfg), resp.StatusCode, raw), resp.Header)
 	}
 	if te := chatBodyError(chatTransportLabel(cfg), raw); te != nil {
 		return openai.ChatCompletionMessage{}, usage, nil, te
@@ -613,7 +613,7 @@ func chatRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string, hc 
 		if err != nil {
 			return openai.ChatCompletionMessage{}, usage, nil, err
 		}
-		return openai.ChatCompletionMessage{}, usage, nil, parseTransportError(chatTransportLabel(cfg), resp.StatusCode, raw)
+		return openai.ChatCompletionMessage{}, usage, nil, withRateLimit(parseTransportError(chatTransportLabel(cfg), resp.StatusCode, raw), resp.Header)
 	}
 	sse, raw, err := splitBodyMode(br)
 	if err != nil {

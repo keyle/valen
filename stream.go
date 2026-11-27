@@ -7,7 +7,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/keyle/valen/internal/dvlog"
@@ -35,6 +37,199 @@ func retryDelay(attempt int) time.Duration {
 		return retryBackoff[attempt]
 	}
 	return retryBackoff[len(retryBackoff)-1]
+}
+
+// retryDelayFor is the backoff honouring a provider's wait hint: the
+// larger of the fixed backoff and the hint shown.
+func retryDelayFor(attempt int, hint time.Duration) time.Duration {
+	if d := retryDelay(attempt); hint > d {
+		return hint
+	}
+	return retryDelay(attempt)
+}
+
+// parseRetryAfterHeader reads Retry-After: seconds or HTTP date.
+func parseRetryAfterHeader(h http.Header) time.Duration {
+	v := strings.TrimSpace(h.Get("Retry-After"))
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs < 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
+// parseRateLimitHeaders reads OpenRouter's X-RateLimit-* platform headers.
+func parseRateLimitHeaders(h http.Header) (limit, remaining int, resetMs int64) {
+	if v := strings.TrimSpace(h.Get("X-RateLimit-Limit")); v != "" {
+		limit, _ = strconv.Atoi(v)
+	}
+	if v := strings.TrimSpace(h.Get("X-RateLimit-Remaining")); v != "" {
+		remaining, _ = strconv.Atoi(v)
+	}
+	if v := strings.TrimSpace(h.Get("X-RateLimit-Reset")); v != "" {
+		resetMs, _ = strconv.ParseInt(v, 10, 64)
+	}
+	return limit, remaining, resetMs
+}
+
+// rateResetDelay converts X-RateLimit-Reset (OpenRouter: epoch ms) to a wait.
+// Some proxies send epoch seconds; an absurd result falls back to seconds.
+func rateResetDelay(resetMs int64) time.Duration {
+	if resetMs <= 0 {
+		return 0
+	}
+	reset := time.UnixMilli(resetMs)
+	if d := time.Until(reset); d > 0 && d < 24*time.Hour {
+		return d
+	}
+	reset = time.Unix(resetMs, 0)
+	if d := time.Until(reset); d > 0 && d < 24*time.Hour {
+		return d
+	}
+	return 0
+}
+
+// rateHint is the wait the response asks for: Retry-After, else the
+// X-RateLimit reset window when the quota is exhausted.
+func rateHint(h http.Header) time.Duration {
+	if d := parseRetryAfterHeader(h); d > 0 {
+		return d
+	}
+	limit, remaining, resetMs := parseRateLimitHeaders(h)
+	if remaining == 0 && (limit == 0 || remaining <= limit) {
+		return rateResetDelay(resetMs)
+	}
+	return 0
+}
+
+// rateState tracks the last seen quota per host so a fast provider is not
+// hammered: after a 429 (or a 200 reporting remaining=0) the next request
+// waits until the hinted reset instead of firing immediately.
+var (
+	rateMu     sync.Mutex
+	rateStates = map[string]rateState{}
+)
+
+type rateState struct {
+	blockedUntil time.Time
+	remaining    int
+	resetMs      int64
+}
+
+func rateHost(req *http.Request) string {
+	if req == nil || req.URL == nil {
+		return ""
+	}
+	return req.URL.Host
+}
+
+// noteRateLimit records quota headers from any response (200 included) so the
+// next call can pace itself.
+func noteRateLimit(h http.Header, host string) {
+	if host == "" || h == nil {
+		return
+	}
+	_, remaining, resetMs := parseRateLimitHeaders(h)
+	hint := rateHint(h)
+	if remaining == 0 && resetMs == 0 && hint == 0 && h.Get("X-RateLimit-Remaining") == "" {
+		return
+	}
+	rateMu.Lock()
+	defer rateMu.Unlock()
+	st := rateStates[host]
+	if h.Get("X-RateLimit-Remaining") != "" {
+		st.remaining = remaining
+	}
+	if resetMs != 0 {
+		st.resetMs = resetMs
+	}
+	if hint > 0 {
+		if until := time.Now().Add(hint); until.After(st.blockedUntil) {
+			st.blockedUntil = until
+		}
+	}
+	rateStates[host] = st
+}
+
+// rateWait sleeps until the recorded reset when the quota is spent.
+// It is a no-op for hosts that never sent quota headers.
+func rateWait(ctx context.Context, host string) error {
+	rateMu.Lock()
+	st := rateStates[host]
+	rateMu.Unlock()
+	if st.blockedUntil.IsZero() {
+		return nil
+	}
+	d := time.Until(st.blockedUntil)
+	if d <= 0 {
+		return nil
+	}
+	dvlog.Logf("rate limit pacing host=%s sleep=%s", host, dvlog.Dur(d))
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
+
+// withRateLimit attaches quota headers (and the wait hint they encode) to a
+// parsed transport error.
+func withRateLimit(te *transportError, h http.Header) *transportError {
+	if te == nil || h == nil {
+		return te
+	}
+	te.RateLimitLimit, te.RateLimitRemaining, te.RateLimitResetMs = parseRateLimitHeaders(h)
+	if d := rateHint(h); d > te.RetryAfter {
+		te.RetryAfter = d
+	}
+	return te
+}
+
+// fillRateLimitFromBody reads OpenRouter's error.metadata hints (an upstream
+// 429 like BaseTen's shared pool): provider, source and retry_after_seconds.
+func fillRateLimitFromBody(te *transportError, body []byte) {
+	if te == nil || len(body) == 0 {
+		return
+	}
+	var v struct {
+		Error struct {
+			Metadata struct {
+				ProviderName       string `json:"provider_name"`
+				LimitSource        string `json:"limit_source"`
+				RetryAfterSeconds  int    `json:"retry_after_seconds"`
+				RetryAfterSecondsR int    `json:"retry_after_seconds_raw"`
+			} `json:"metadata"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &v); err != nil {
+		return
+	}
+	if te.Provider == "" {
+		te.Provider = v.Error.Metadata.ProviderName
+	}
+	if te.Upstream == "" {
+		te.Upstream = v.Error.Metadata.LimitSource
+	}
+	secs := v.Error.Metadata.RetryAfterSeconds
+	if secs == 0 {
+		secs = v.Error.Metadata.RetryAfterSecondsR
+	}
+	if secs > 0 {
+		if d := time.Duration(secs) * time.Second; d > te.RetryAfter {
+			te.RetryAfter = d
+		}
+	}
 }
 
 func isRetryableStatus(status int) bool {
@@ -67,6 +262,9 @@ func clientDoWithRetryTimeout(ctx context.Context, client *http.Client, req *htt
 		path = req.URL.Path
 	}
 	for attempt := 0; attempt < retryMaxAttempts; attempt++ {
+		if err := rateWait(ctx, rateHost(req)); err != nil {
+			return nil, err
+		}
 		if attempt > 0 && req.GetBody != nil {
 			body, err := req.GetBody()
 			if err != nil {
@@ -91,12 +289,14 @@ func clientDoWithRetryTimeout(ctx context.Context, client *http.Client, req *htt
 			}
 			continue
 		}
+		noteRateLimit(resp.Header, rateHost(req))
 		if !isRetryableStatus(resp.StatusCode) || attempt+1 >= retryMaxAttempts {
 			dvlog.Logf("http POST %s attempt=%d status=%d dur=%s", path, attempt+1, resp.StatusCode, dvlog.Dur(time.Since(t0)))
 			resp.Body = &deadlineBody{ReadCloser: resp.Body, cancel: cancel}
 			return resp, nil
 		}
-		dvlog.Logf("http POST %s attempt=%d status=%d dur=%s sleep=%s", path, attempt+1, resp.StatusCode, dvlog.Dur(time.Since(t0)), retryDelay(attempt))
+		hint := rateHint(resp.Header)
+		dvlog.Logf("http POST %s attempt=%d status=%d dur=%s sleep=%s", path, attempt+1, resp.StatusCode, dvlog.Dur(time.Since(t0)), retryDelayFor(attempt, hint))
 		// An error body may never finish. Sacrifice connection reuse rather than
 		// letting a retry stall while draining even a byte-bounded body.
 		cancel()
@@ -104,7 +304,7 @@ func clientDoWithRetryTimeout(ctx context.Context, client *http.Client, req *htt
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(retryDelay(attempt)):
+		case <-time.After(retryDelayFor(attempt, hint)):
 		}
 	}
 	return nil, errors.New("api: retry exhausted")
@@ -147,7 +347,9 @@ func parseTransportError(transport string, status int, body []byte) *transportEr
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(body, &oa); err == nil && oa.Error.Message != "" {
-		return &transportError{Transport: transport, Status: status, Message: oa.Error.Message, Raw: rawDiff(raw, oa.Error.Message)}
+		te := &transportError{Transport: transport, Status: status, Message: oa.Error.Message, Raw: rawDiff(raw, oa.Error.Message)}
+		fillRateLimitFromBody(te, body)
+		return te
 	}
 	var anth struct {
 		Error struct {
@@ -155,7 +357,9 @@ func parseTransportError(transport string, status int, body []byte) *transportEr
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(body, &anth); err == nil && anth.Error.Message != "" {
-		return &transportError{Transport: transport, Status: status, Message: anth.Error.Message, Raw: rawDiff(raw, anth.Error.Message)}
+		te := &transportError{Transport: transport, Status: status, Message: anth.Error.Message, Raw: rawDiff(raw, anth.Error.Message)}
+		fillRateLimitFromBody(te, body)
+		return te
 	}
 	msg := strings.TrimSpace(string(body))
 	if len(msg) > 500 {
@@ -164,7 +368,9 @@ func parseTransportError(transport string, status int, body []byte) *transportEr
 	if msg == "" {
 		msg = http.StatusText(status)
 	}
-	return &transportError{Transport: transport, Status: status, Message: msg, Raw: rawDiff(raw, msg)}
+	te := &transportError{Transport: transport, Status: status, Message: msg, Raw: rawDiff(raw, msg)}
+	fillRateLimitFromBody(te, body)
+	return te
 }
 
 // isStreamRejected reports a 400 that blames streaming, the signal to retry

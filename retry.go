@@ -39,6 +39,17 @@ func roundRetryDelay(attempt int) time.Duration {
 	return d
 }
 
+// roundRetryDelayFor honours the provider's wait hint for 429s, so a hinted
+// 5s reset is never cut short by the exponential backoff.
+func roundRetryDelayFor(attempt int, err error) time.Duration {
+	d := roundRetryDelay(attempt)
+	var te *transportError
+	if errors.As(err, &te) && te.RetryAfter > d {
+		return te.RetryAfter
+	}
+	return d
+}
+
 // shouldRetryRound reports whether err is worth another attempt. Final:
 // user cancellation, local misconfiguration (missing key), and 4xx
 // refusals (except 408/429). Everything else (5xx, network, stream
@@ -118,7 +129,7 @@ func roundWithRetry(ctx context.Context, onEvent func(Event), history []openai.C
 		if err == nil || attempt+1 >= cap || !shouldRetryRound(ctx, err) {
 			return msg, total, err
 		}
-		delay := roundRetryDelay(attempt)
+		delay := roundRetryDelayFor(attempt, err)
 		dvlog.Logf("round retry attempt=%d/%d sleep=%s err=%v", attempt+1, cap, delay, err)
 		if onEvent != nil {
 			// Args/Output carry the friendly title and raw details so the
