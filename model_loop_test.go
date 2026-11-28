@@ -336,3 +336,243 @@ func TestRunTurnCarriesCurrentConfig(t *testing.T) {
 		t.Fatal("config/timeout fallback changed")
 	}
 }
+
+func resetChatReasoningField(t *testing.T) {
+	t.Helper()
+	clear := func() {
+		chatReasoningMu.Lock()
+		chatAltReasoning = map[chatReasoningKey]bool{}
+		chatReasoningMu.Unlock()
+	}
+	clear()
+	t.Cleanup(clear)
+}
+
+// firstAltUnary is a unary response whose thinking rides `reasoning` only,
+// as Ollama answers. It asks for one read before the final answer.
+func altUnaryFirst(t *testing.T) []byte {
+	t.Helper()
+	msg := map[string]any{
+		"role": "assistant", "content": "", "reasoning": "plan",
+		"tool_calls": []any{map[string]any{"id": "c1", "type": "function", "function": map[string]any{"name": "read", "arguments": "{}"}}},
+	}
+	body, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": msg, "finish_reason": "tool_calls"}}, "usage": map[string]int{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
+	return body
+}
+
+func primaryUnaryFirst(t *testing.T) []byte {
+	t.Helper()
+	msg := map[string]any{
+		"role": "assistant", "content": "", "reasoning_content": "plan",
+		"tool_calls": []any{map[string]any{"id": "c1", "type": "function", "function": map[string]any{"name": "read", "arguments": "{}"}}},
+	}
+	body, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": msg, "finish_reason": "tool_calls"}}, "usage": map[string]int{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
+	return body
+}
+
+func assistantOnWire(t *testing.T, req map[string]any) map[string]any {
+	t.Helper()
+	msgs, _ := req["messages"].([]any)
+	var asst map[string]any
+	for _, m := range msgs {
+		if mm := m.(map[string]any); mm["role"] == "assistant" {
+			asst = mm
+		}
+	}
+	return asst
+}
+
+// A unary server that answers with `reasoning` only (Ollama) must get its
+// thinking mirrored as `reasoning` on the next round, without the field it
+// never named.
+func TestAltReasoningMirroredUnary(t *testing.T) {
+	resetChatReasoningField(t)
+	t.Setenv(openCodeKeyEnv, "test-key")
+	var requests []map[string]any
+	first := altUnaryFirst(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		requests = append(requests, req)
+		body := completion(nil, "done")
+		if len(requests) == 1 {
+			body = first
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+	reg := NewRegistry()
+	_ = reg.Add(Tool{Name: "read", Fn: func(context.Context, string) (string, error) { return "ok", nil }})
+	cfg := newTestConfig(srv.URL)
+	cfg.Model = "muse-ember"
+	history := []openai.ChatCompletionMessage{{Role: "user", Content: "hi"}}
+	msg, _, err := runTurn(context.Background(), cfg, nil, "", srv.Client(), reg, &history, nil)
+	if err != nil || msg.Content != "done" {
+		t.Fatalf("reply=%+v err=%v", msg, err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("requests=%d, want 2", len(requests))
+	}
+	if history[1].ReasoningContent != "plan" {
+		t.Fatalf("alt reasoning not captured: %+v", history[1])
+	}
+	asst := assistantOnWire(t, requests[1])
+	if asst == nil || asst["reasoning"] != "plan" {
+		t.Fatalf("reasoning not mirrored: %v", asst)
+	}
+	if _, ok := asst["reasoning_content"]; ok {
+		t.Fatalf("alt server must not see reasoning_content: %v", asst)
+	}
+}
+
+// The same learning must happen for streamed chunks, where the alt field
+// arrives as delta.reasoning.
+func TestAltReasoningMirroredStreaming(t *testing.T) {
+	resetChatReasoningField(t)
+	t.Setenv(openCodeKeyEnv, "test-key")
+	var second map[string]any
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if n == 1 {
+			_, _ = w.Write([]byte(`data: {"choices":[{"index":0,"delta":{"reasoning":"plan"}}]}` + "\n\n"))
+			_, _ = w.Write([]byte(`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}` + "\n\n"))
+		} else {
+			_ = json.NewDecoder(r.Body).Decode(&second)
+			_, _ = w.Write([]byte(`data: {"choices":[{"index":0,"delta":{"content":"done"},"finish_reason":"stop"}]}` + "\n\n"))
+		}
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+	reg := NewRegistry()
+	_ = reg.Add(Tool{Name: "read", Fn: func(context.Context, string) (string, error) { return "ok", nil }})
+	cfg := newTestConfig(srv.URL)
+	cfg.Model = "muse-ember"
+	history := []openai.ChatCompletionMessage{{Role: "user", Content: "hi"}}
+	msg, _, err := runTurn(context.Background(), cfg, nil, "", srv.Client(), reg, &history, nil)
+	if err != nil || msg.Content != "done" {
+		t.Fatalf("reply=%+v err=%v", msg, err)
+	}
+	if history[1].ReasoningContent != "plan" {
+		t.Fatalf("streamed alt reasoning not captured: %+v", history[1])
+	}
+	asst := assistantOnWire(t, second)
+	if asst == nil || asst["reasoning"] != "plan" {
+		t.Fatalf("streamed reasoning not mirrored: %v", asst)
+	}
+	if _, ok := asst["reasoning_content"]; ok {
+		t.Fatalf("alt server must not see reasoning_content: %v", asst)
+	}
+}
+
+// A server that answers with the primary field keeps the untouched body:
+// no `reasoning` is invented for it.
+func TestPrimaryReasoningNotMirrored(t *testing.T) {
+	resetChatReasoningField(t)
+	t.Setenv(openCodeKeyEnv, "test-key")
+	var requests []map[string]any
+	first := primaryUnaryFirst(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		requests = append(requests, req)
+		body := completion(nil, "done")
+		if len(requests) == 1 {
+			body = first
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+	reg := NewRegistry()
+	_ = reg.Add(Tool{Name: "read", Fn: func(context.Context, string) (string, error) { return "ok", nil }})
+	cfg := newTestConfig(srv.URL)
+	cfg.Model = "muse-ember"
+	history := []openai.ChatCompletionMessage{{Role: "user", Content: "hi"}}
+	msg, _, err := runTurn(context.Background(), cfg, nil, "", srv.Client(), reg, &history, nil)
+	if err != nil || msg.Content != "done" {
+		t.Fatalf("reply=%+v err=%v", msg, err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("requests=%d, want 2", len(requests))
+	}
+	asst := assistantOnWire(t, requests[1])
+	if asst == nil || asst["reasoning_content"] != "plan" {
+		t.Fatalf("primary reasoning lost: %v", asst)
+	}
+	if _, ok := asst["reasoning"]; ok {
+		t.Fatalf("primary server must not get mirrored reasoning: %v", asst)
+	}
+}
+
+// The learned entry is keyed by endpoint and wire model, a primary answer
+// clears it, and DeepSeek padding still wins over the alt drop.
+func TestAltReasoningWireBodyIsolationAndPad(t *testing.T) {
+	resetChatReasoningField(t)
+	cfg := newTestConfig("http://x")
+	cfg.Model = "muse-ember"
+	recordChatReasoningField(cfg, true)
+	if !chatUsesAltReasoning(cfg) {
+		t.Fatal("alt entry not recorded")
+	}
+	other := cfg
+	other.Model = "other-model"
+	if chatUsesAltReasoning(other) {
+		t.Fatal("alt entry leaked across models")
+	}
+	elsewhere := cfg
+	elsewhere.BaseURL = "http://y"
+	if chatUsesAltReasoning(elsewhere) {
+		t.Fatal("alt entry leaked across endpoints")
+	}
+	calls := []openai.ToolCall{{ID: "c1", Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "read", Arguments: "{}"}}}
+	req := openai.ChatCompletionRequest{Model: "m", Messages: []openai.ChatCompletionMessage{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", ReasoningContent: "plan", ToolCalls: calls},
+	}}
+	raw, _ := json.Marshal(chatWireBody(cfg, req, nil))
+	var got struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Messages[1]["reasoning"] != "plan" {
+		t.Fatalf("alt reasoning not mirrored: %v", got.Messages[1])
+	}
+	if _, ok := got.Messages[1]["reasoning_content"]; ok {
+		t.Fatalf("alt server must not see reasoning_content: %v", got.Messages[1])
+	}
+	recordChatReasoningField(cfg, false)
+	if chatUsesAltReasoning(cfg) {
+		t.Fatal("primary answer must clear the alt entry")
+	}
+	if _, ok := chatWireBody(cfg, req, nil).(openai.ChatCompletionRequest); !ok {
+		t.Fatal("cleared entry must leave the request untouched")
+	}
+	cfg.Model, cfg.Thinking = "deepseek-v4.1-flash", "high"
+	recordChatReasoningField(cfg, true)
+	raw, _ = json.Marshal(chatWireBody(cfg, req, nil))
+	var padded struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	if err := json.Unmarshal(raw, &padded); err != nil {
+		t.Fatal(err)
+	}
+	if padded.Messages[1]["reasoning"] != "plan" || padded.Messages[1]["reasoning_content"] != "plan" {
+		t.Fatalf("pad must preserve reasoning_content over the alt drop: %v", padded.Messages[1])
+	}
+	empty := openai.ChatCompletionRequest{Model: "m", Messages: []openai.ChatCompletionMessage{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", ToolCalls: calls},
+	}}
+	raw, _ = json.Marshal(chatWireBody(cfg, empty, nil))
+	if err := json.Unmarshal(raw, &padded); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := padded.Messages[1]["reasoning_content"]; !ok || v != "" {
+		t.Fatalf("pad must still add empty reasoning_content: %v", padded.Messages[1])
+	}
+}

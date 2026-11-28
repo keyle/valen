@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/keyle/valen/internal/dvlog"
@@ -26,6 +27,19 @@ func chatEndpoint(baseURL string) string {
 // the shared keep-alive transport without the Go identity headers.
 var openRouterHTTPClient = &http.Client{Transport: sharedTransport}
 
+// chatTargetEndpoint is the single normalization point for chat URLs: every
+// provider rides the same TrimRight+"(/chat/completions)" shape, so the
+// adaptive reasoning key below never sees base-URL slash variations.
+func chatTargetEndpoint(cfg Config) string {
+	switch modelProvider(cfg.Model) {
+	case ProviderOpenRouter:
+		return chatEndpoint(openRouterBaseURL)
+	case ProviderOpenAI:
+		return chatEndpoint(openAIBaseURL)
+	}
+	return chatEndpoint(providerBaseURL(cfg))
+}
+
 // chatTarget resolves where a chat turn is sent. Go models ride cfg.BaseURL
 // with the Go key and session affinity; OpenRouter models ride OpenRouter's
 // OpenAI-compatible chat endpoint with the OpenRouter key and no Go session
@@ -35,13 +49,13 @@ func chatTarget(cfg Config, apiKey string, hc *http.Client) (string, map[string]
 	case ProviderOpenRouter:
 		sendCfg := cfg
 		sendCfg.SessionID = ""
-		return openRouterBaseURL + "/chat/completions", openRouterHeaders(cfg.OpenRouterKey), sendCfg, openRouterHTTPClient
+		return chatTargetEndpoint(cfg), openRouterHeaders(cfg.OpenRouterKey), sendCfg, openRouterHTTPClient
 	case ProviderOpenAI:
 		sendCfg := cfg
 		sendCfg.SessionID = ""
-		return chatEndpoint(openAIBaseURL), chatHeaders(cfg.OpenAIKey), sendCfg, upstreamHTTPClient
+		return chatTargetEndpoint(cfg), chatHeaders(cfg.OpenAIKey), sendCfg, upstreamHTTPClient
 	}
-	return chatEndpoint(providerBaseURL(cfg)), chatHeaders(apiKey), cfg, hc
+	return chatTargetEndpoint(cfg), chatHeaders(apiKey), cfg, hc
 }
 
 // chatTransportLabel names the failing side for error mapping: OpenRouter
@@ -62,6 +76,53 @@ func chatHeaders(apiKey string) map[string]string {
 		return nil
 	}
 	return map[string]string{"Authorization": "Bearer " + apiKey}
+}
+
+// chatReasoningKey identifies the server that taught us its reasoning field:
+// the normalized endpoint plus the wire model ID. BaseURL alone is never the
+// key, so the same URL serving different models (or a model after a key
+// change) learns independently.
+type chatReasoningKey struct {
+	endpoint string
+	model    string
+}
+
+// chatAltReasoning holds only servers known to answer with `reasoning`
+// instead of `reasoning_content` (Ollama and friends). OpenRouter needs no
+// entry: it mirrors unconditionally. Seeing the primary field deletes an
+// entry, so a server upgrade or model swap self-corrects on the next round.
+var (
+	chatReasoningMu  sync.RWMutex
+	chatAltReasoning = map[chatReasoningKey]bool{}
+)
+
+func chatReasoningKeyFor(cfg Config) chatReasoningKey {
+	return chatReasoningKey{endpoint: chatTargetEndpoint(cfg), model: normalizeModelID(wireModelID(cfg.Model))}
+}
+
+// recordChatReasoningField learns the wire field from a response: alt=true
+// marks the server as a `reasoning` speaker, alt=false clears it. A round
+// with no reasoning never calls this, so the last known answer stands.
+func recordChatReasoningField(cfg Config, alt bool) {
+	if modelProvider(cfg.Model) == ProviderOpenRouter {
+		return
+	}
+	key := chatReasoningKeyFor(cfg)
+	chatReasoningMu.Lock()
+	defer chatReasoningMu.Unlock()
+	if alt {
+		chatAltReasoning[key] = true
+	} else {
+		delete(chatAltReasoning, key)
+	}
+}
+
+// chatUsesAltReasoning reports whether this server previously answered with
+// `reasoning`, so its next request mirrors reasoning_content as `reasoning`.
+func chatUsesAltReasoning(cfg Config) bool {
+	chatReasoningMu.RLock()
+	defer chatReasoningMu.RUnlock()
+	return chatAltReasoning[chatReasoningKeyFor(cfg)]
 }
 
 // OpenRouter names reasoning `reasoning` (not DeepSeek's `reasoning_content`)
@@ -92,10 +153,10 @@ func altStreamReasoning(data string, index int) string {
 }
 
 // fillReasoning recovers `reasoning` from a unary body when reasoning_content
-// was absent.
-func fillReasoning(msg *openai.ChatCompletionMessage, raw []byte) {
+// was absent, reporting whether it actually filled from the alt field.
+func fillReasoning(msg *openai.ChatCompletionMessage, raw []byte) bool {
 	if msg.ReasoningContent != "" || !bytes.Contains(raw, []byte(`"reasoning"`)) {
-		return
+		return false
 	}
 	var c struct {
 		Choices []struct {
@@ -106,6 +167,21 @@ func fillReasoning(msg *openai.ChatCompletionMessage, raw []byte) {
 	}
 	if json.Unmarshal(raw, &c) == nil && len(c.Choices) > 0 {
 		msg.ReasoningContent = c.Choices[0].Message.Reasoning
+		return msg.ReasoningContent != ""
+	}
+	return false
+}
+
+// captureUnaryReasoning folds the alt-field recovery and the learning step
+// into one call: a non-empty primary body clears any alt entry, an alt-only
+// body sets it.
+func captureUnaryReasoning(cfg Config, msg *openai.ChatCompletionMessage, raw []byte) {
+	if msg.ReasoningContent != "" {
+		recordChatReasoningField(cfg, false)
+		return
+	}
+	if fillReasoning(msg, raw) {
+		recordChatReasoningField(cfg, true)
 	}
 }
 
@@ -169,14 +245,19 @@ func jsonString(raw json.RawMessage) string {
 
 // chatWireBody patches the serialized request. OpenRouter gets the provider
 // routing object (ignore/only) plus each assistant reasoning_content mirrored
-// as `reasoning` (its documented field). DeepSeek thinking mode 400s unless
-// every assistant tool-call message carries reasoning_content, and go-openai
-// omits empty strings, so those get an explicit "". Captured native state
-// (reasoning_details, tool-call extra_content) is reattached by call ID.
-// extra_body keys are merged first, so valen's own fields win. Everything else
-// is sent untouched.
+// as `reasoning` (its documented field). A non-OpenRouter server that
+// answered with `reasoning` (Ollama and friends) gets the same mirror, and
+// its `reasoning_content` is dropped so the server only sees the field it
+// names (DeepSeek padding still wins over that drop). DeepSeek thinking
+// mode 400s unless every assistant tool-call message carries
+// reasoning_content, and go-openai omits empty strings, so those get an
+// explicit "". Captured native state (reasoning_details, tool-call
+// extra_content) is reattached by call ID. extra_body keys are merged
+// first, so valen's own fields win. Everything else is sent untouched;
+// servers that never alt-answered take the early return with no patch.
 func chatWireBody(cfg Config, req openai.ChatCompletionRequest, native map[string]chatNative) any {
-	mirror := modelProvider(cfg.Model) == ProviderOpenRouter
+	isOpenRouter := modelProvider(cfg.Model) == ProviderOpenRouter
+	mirror := isOpenRouter || chatUsesAltReasoning(cfg)
 	pad := strings.HasPrefix(modelBaseID(cfg.Model), "deepseek") && strings.ToLower(strings.TrimSpace(cfg.Thinking)) != "none"
 	provider := openRouterProvider(cfg)
 	need := provider != nil || len(cfg.ExtraBody) > 0 || len(native) > 0
@@ -217,6 +298,12 @@ func chatWireBody(cfg Config, req openai.ChatCompletionRequest, native map[strin
 				rc, ok := m["reasoning_content"]
 				if mirror && ok {
 					m["reasoning"] = rc
+					if !isOpenRouter && !pad {
+						// Alt-learned servers name the field `reasoning`;
+						// reasoning_content is dead weight they ignore
+						// (Ollama issue #18534 drops it on replay).
+						delete(m, "reasoning_content")
+					}
 				}
 				if pad && !ok && len(m["tool_calls"]) > 0 {
 					m["reasoning_content"] = json.RawMessage(`""`)
@@ -292,7 +379,7 @@ func chatRoundOnceDetailed(ctx context.Context, cfg Config, apiKey string, hc *h
 	if err := chatFinishError(string(out.Choices[0].FinishReason), chatNativeFinish(raw, 0), ""); err != nil {
 		return openai.ChatCompletionMessage{}, out.Usage, nil, err
 	}
-	fillReasoning(&msg, raw)
+	captureUnaryReasoning(cfg, &msg, raw)
 	return msg, out.Usage, chatNativeFromBody(raw), validateModelReply(msg)
 }
 
@@ -639,7 +726,7 @@ func chatRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string, hc 
 			return openai.ChatCompletionMessage{}, out.Usage, nil, err
 		}
 		msg := out.Choices[0].Message
-		fillReasoning(&msg, raw)
+		captureUnaryReasoning(cfg, &msg, raw)
 		if modelProvider(cfg.Model) == ProviderOpenRouter {
 			var meta ORMeta
 			meta.ID = out.ID
@@ -661,6 +748,7 @@ func chatRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string, hc 
 	sentProvider, sentCost := false, false
 	var firstDelta, lastDelta time.Time
 	streamedReasoning := false
+	sawPrimaryReasoning, sawAltReasoning := false, false
 	markDelta := func() {
 		now := time.Now()
 		if firstDelta.IsZero() {
@@ -758,6 +846,11 @@ func chatRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string, hc 
 				emit("text_delta", d.Content)
 			}
 			if r := d.ReasoningContent; r != "" || altReasoning != "" {
+				if d.ReasoningContent != "" {
+					sawPrimaryReasoning = true
+				} else {
+					sawAltReasoning = true
+				}
 				if r == "" {
 					r = altReasoning
 				}
@@ -796,6 +889,11 @@ func chatRoundStreamDetailed(ctx context.Context, cfg Config, apiKey string, hc 
 		}
 		return true
 	})
+	if sawPrimaryReasoning {
+		recordChatReasoningField(cfg, false)
+	} else if sawAltReasoning {
+		recordChatReasoningField(cfg, true)
+	}
 	if eventErr != nil {
 		return openai.ChatCompletionMessage{}, usage, nil, eventErr
 	}
