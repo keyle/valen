@@ -88,6 +88,42 @@ Config is seeded on first run at `~/.config/valen/valen.toml` (a pre-existing
 [config.toml](config.toml) for options and [SPEC.md](SPEC.md) /
 [SPEC-tui.md](SPEC-tui.md) for the full spec.
 
+### Local model with Ollama (bonsai-2)
+
+Valen speaks OpenAI-compatible chat, so a local server works via `base_url`.
+To run `bonsai-2` locally with Ollama:
+
+1. Start Ollama with a 32k context (keep this running):
+
+```sh
+OLLAMA_CONTEXT_LENGTH=32768 ollama serve
+```
+
+2. Install the model (first time only):
+
+```sh
+ollama run bonsai-2
+```
+
+3. Point valen at it with a separate config, `~/.config/valen/ollama.toml`:
+
+```toml
+base_url = "http://localhost:11434/v1"
+model = "bonsai-2"
+opencode_key = "local"  # dummy: valen requires a key for bare models; Ollama ignores it
+max_context_tokens = 32768
+```
+
+4. Run valen against it:
+
+```sh
+valen -config ~/.config/valen/ollama.toml
+```
+
+`max_context_tokens` must match `OLLAMA_CONTEXT_LENGTH`. `bonsai-2` is a bare
+ID, so valen sends it as-is to `{base_url}/chat/completions` — Ollama's
+OpenAI-compatible endpoint.
+
 ## Limitations
 
 - **Platforms:** macOS and Linux only. 
